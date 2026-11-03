@@ -10,7 +10,7 @@
   <meta name="description" content="ゲームを遊んだ時間だけ休む、2人とSwitch2台の時間管理アプリ">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icon-192.png">
-  <link rel="stylesheet" href="./style.css?v=2.1.0">
+  <link rel="stylesheet" href="./style.css?v=2.2.0">
   <title>あそぶ・やすむ｜ゲームと休憩のじかん</title>
 </head>
 <body>
@@ -35,10 +35,10 @@
     </section>
     <section id="view-history" class="view hidden">
       <div class="intro-row"><div><h2>あそんだきろく</h2><p>いつ、どれだけ遊んだかをふり返ろう。</p></div></div>
-      <section class="panel"><div class="panel-heading"><div><h2>過去7日間のプレイ時間</h2><p>本体の台数にかかわらず、子どもごとに集計</p></div><div class="legend"><span class="legend-item"><i class="legend-color blue"></i><span id="legend-older">上の子</span></span><span class="legend-item"><i class="legend-color green"></i><span id="legend-younger">下の子</span></span></div></div><div id="week-chart" class="week-chart"></div><div id="week-summary" class="week-summary"></div></section>
+      <section class="panel"><div class="panel-heading"><div><h2>過去7日間のプレイ時間</h2><p>本体の台数にかかわらず、子どもごとに集計</p></div><div class="legend"><span class="legend-item"><i class="legend-color green"></i><span id="legend-older">お姉ちゃん</span></span><span class="legend-item"><i class="legend-color blue"></i><span id="legend-younger">弟くん</span></span></div></div><div id="week-chart" class="week-chart"></div><div id="week-summary" class="week-summary"></div></section>
       <section class="panel"><div class="panel-heading"><div><h2>1日のタイムライン</h2><p>ゲームを遊んだ時間帯と、そのあとの休憩</p></div><div class="date-nav"><button class="icon-btn" data-action="prev-day" title="前の日">‹</button><input id="history-date" type="date" aria-label="表示する日付"><button class="icon-btn" data-action="next-day" id="next-day" title="次の日">›</button></div></div><div class="day-timeline" id="day-timeline"></div><div class="history-list" id="history-list"></div></section>
     </section>
-    <footer><div>自動保存：このiPadの中だけに保存します</div><div><span class="version">v2.1</span> · <span id="save-status">保存準備完了</span></div></footer>
+    <footer><div>自動保存：このiPadの中だけに保存します</div><div><span class="version">v2.2</span> · <span id="save-status">保存準備完了</span></div></footer>
   </main>
 
   <dialog id="choose-dialog" aria-labelledby="choose-title"><div class="dialog-content"><div class="dialog-header"><h2 id="choose-title">どのSwitchで遊ぶ？</h2><button class="close-x" data-action="close-dialog" aria-label="閉じる">×</button></div><p class="dialog-lead" id="choose-text"></p><div id="device-choices" class="device-choices"></div><p class="help-text">遊んだ時間は、選んだ本体に関係なく自分の時間として記録されます。</p><button class="button ghost wide" data-action="close-dialog">もどる</button></div></dialog>
@@ -57,6 +57,6 @@
 
   <dialog id="edit-dialog" aria-labelledby="edit-title"><div class="dialog-content"><div class="dialog-header"><h2 id="edit-title">プレイ時間を修正</h2><button class="close-x" data-action="close-dialog" aria-label="閉じる">×</button></div><div class="field-grid one"><label>ゲーム開始日時<input id="edit-start" type="datetime-local" step="60"></label><label id="edit-end-wrap">ゲーム終了日時<input id="edit-end" type="datetime-local" step="60"></label></div><p class="help-text" id="edit-note"></p><div class="dialog-actions"><button class="button ghost" data-action="close-dialog">もどる</button><button class="button blue" data-action="save-edit">修正を保存</button></div><button id="cancel-active" class="button danger-text wide hidden" data-action="cancel-active">誤って開始した記録を取り消す</button></div></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js?v=2.1.0" defer></script>
+  <script src="./app.js?v=2.2.0" defer></script>
 </body>
 </html>

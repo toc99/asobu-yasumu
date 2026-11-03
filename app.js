@@ -18,9 +18,9 @@
   const hash = str => {let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return String(h>>>0)};
   const newSid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
   const base = () => ({version:2,children:[
-    {id:'older',name:'上の子',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0},
-    {id:'younger',name:'下の子',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0}
-  ],devices:[{id:'sw1',name:'Switch ①'},{id:'sw2',name:'Switch ②'}],sessions:[],pinHash:null,reminderMinutes:60});
+    {id:'older',name:'お姉ちゃん',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0},
+    {id:'younger',name:'弟くん',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0}
+  ],devices:[{id:'sw1',name:'Switch'},{id:'sw2',name:'Switch2'}],sessions:[],pinHash:null,reminderMinutes:60});
   function safeState(obj) {
     if(!obj||obj.version!==2||!Array.isArray(obj.children)||obj.children.length!==2||!Array.isArray(obj.devices)||obj.devices.length!==2||!Array.isArray(obj.sessions)||obj.sessions.length>20000) throw Error('invalid data');
     const result=base();
@@ -70,6 +70,12 @@
     catch(err){$('save-status').textContent='保存に失敗しました';toast('保存に失敗しました。空き容量やプライベートモードを確認してください');return false;}
   }
   state=load();
+  (function normalizeLabels(){
+    if(state.children?.[0] && ['上の子','おねえちゃん'].includes(String(state.children[0].name).trim())) state.children[0].name='お姉ちゃん';
+    if(state.children?.[1] && ['下の子','おとうとくん'].includes(String(state.children[1].name).trim())) state.children[1].name='弟くん';
+    if(state.devices?.[0] && ['Switch ①','Switch1'].includes(String(state.devices[0].name).trim())) state.devices[0].name='Switch';
+    if(state.devices?.[1] && ['Switch ②','Switch 2'].includes(String(state.devices[1].name).trim())) state.devices[1].name='Switch2';
+  })();
   let selectedChild=null, endingChild=null, editing=null, historyDay=dayStart(Date.now()), activeTab='home';
   function childBy(id){return state.children.find(c=>c.id===id)}
   function deviceBy(id){return state.devices.find(d=>d.id===id)}
@@ -87,10 +93,10 @@
   function renderClock(now){$('now-time').textContent=clock(now);$('now-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'})}
   function createCard(c,index,now){
     const st=status(c,now),elapsed=gameMs(c,now),restLeft=Math.max(0,c.restUntil-now),restDuration=Math.max(1,c.restUntil-c.restStart);
-    const bg=index===1?'green':'',device=c.deviceId?deviceBy(c.deviceId):null;
+    const bg=index===0?'green':'',device=c.deviceId?deviceBy(c.deviceId):null;
     const profile=index===0
-      ? {emoji:'🚀',tag:'チャレンジモード',ready:'ミッションスタートOK',rest:'パワーチャージ中',playing:'バトル中'}
-      : {emoji:'🌈',tag:'マイペースモード',ready:'スタートOK',rest:'ひとやすみ中',playing:'プレイ中'};
+      ? {emoji:'🌷',tag:'お姉ちゃんモード',ready:'スタートOK',rest:'ひとやすみ中',playing:'プレイ中'}
+      : {emoji:'🚀',tag:'弟くんモード',ready:'ミッションスタートOK',rest:'パワーチャージ中',playing:'バトル中'};
     let title,number,sub,prog,forecastLabel,forecastValue,forecastNote,actionLabel,footer,ribbon;
     if(st==='playing'){
       title='ゲームを始めてから';number=countDown(elapsed);sub='好きなタイミングで終わってOK';prog=100;
@@ -125,7 +131,7 @@
     if(activeTab!=='home')return;
     $('children-grid').innerHTML=state.children.map((c,i)=>createCard(c,i,now)).join('');
     $('consoles-grid').innerHTML=state.devices.map(d=>{
-      const occupants=activeOn(d.id);return `<div class="console ${occupants.length?'busy':''}"><div><div class="console-title">🎮 ${htmlEscape(d.name)}</div><div class="console-desc">${occupants.length?`${occupants.length}人がゲーム中`:'今はあいています'}</div></div><div class="console-occupants">${occupants.length?occupants.map(c=>`<span class="person-pill ${c.id==='younger'?'green':''}">${htmlEscape(c.name)}</span>`).join(''):'<span class="subtle">空き</span>'}</div></div>`;
+      const occupants=activeOn(d.id);return `<div class="console ${occupants.length?'busy':''}"><div><div class="console-title">🎮 ${htmlEscape(d.name)}</div><div class="console-desc">${occupants.length?`${occupants.length}人がゲーム中`:'今はあいています'}</div></div><div class="console-occupants">${occupants.length?occupants.map(c=>`<span class="person-pill ${c.id==='older'?'green':''}">${htmlEscape(c.name)}</span>`).join(''):'<span class="subtle">空き</span>'}</div></div>`;
     }).join('');
     $('alerts').innerHTML=state.children.filter(c=>c.activeStart!==null&&gameMs(c,now)>=state.reminderMinutes*60000).map(c=>`<div class="alert">⚠ ${htmlEscape(c.name)}は${state.reminderMinutes}分以上プレイ中です。終了ボタンを押し忘れていないかな？</div>`).join('');
   }
@@ -136,7 +142,7 @@
     const max=Math.max(15*60000,...rows.flatMap(r=>r.totals));
     $('week-chart').innerHTML=rows.map((r,i)=>{
       const day=new Date(r.d).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'});
-      return `<div class="week-day"><span class="week-day-label">${day}${i===6?' 今日':''}</span><div class="week-bars">${r.totals.map((ms,k)=>`<div class="week-track"><div class="week-fill ${k?'green':'blue'}" style="width:${(ms/max*100).toFixed(2)}%"></div></div>`).join('')}</div><span class="week-day-total">${short(r.totals[0]+r.totals[1])}</span></div>`;
+      return `<div class="week-day"><span class="week-day-label">${day}${i===6?' 今日':''}</span><div class="week-bars">${r.totals.map((ms,k)=>`<div class="week-track"><div class="week-fill ${k?'blue':'green'}" style="width:${(ms/max*100).toFixed(2)}%"></div></div>`).join('')}</div><span class="week-day-total">${short(r.totals[0]+r.totals[1])}</span></div>`;
     }).join('');
     const totals=state.children.map((c,i)=>rows.reduce((sum,r)=>sum+r.totals[i],0));
     $('legend-older').textContent=state.children[0].name;$('legend-younger').textContent=state.children[1].name;
@@ -156,7 +162,7 @@
     if(!matches.length){$('history-list').innerHTML='<div class="empty">この日はまだプレイ記録がありません</div>';return;}
     $('history-list').innerHTML=matches.sort((a,b)=>b.start-a.start).map(s=>{
       const c=childBy(s.childId),d=deviceBy(s.deviceId);const restUntil=s.end+s.duration;
-      return `<div class="history-item"><div class="history-dot ${c.id==='younger'?'green':''}"></div><div class="history-main"><strong>${htmlEscape(c.name)} ・ ${htmlEscape(d?.name||'Switch ①')}${s.isCurrent?' ・ プレイ中':''}</strong>${dateClock(s.start)}〜${s.isCurrent?'現在':dateClock(s.end)}${s.edited?' · 修正済み':''}</div><div class="history-values"><strong>${short(s.duration)}</strong>${s.isCurrent?'終了後に同じ時間休憩':`休憩は${dateClock(restUntil)}まで`}</div></div>`;
+      return `<div class="history-item"><div class="history-dot ${c.id==='older'?'green':''}"></div><div class="history-main"><strong>${htmlEscape(c.name)} ・ ${htmlEscape(d?.name||'Switch')}${s.isCurrent?' ・ プレイ中':''}</strong>${dateClock(s.start)}〜${s.isCurrent?'現在':dateClock(s.end)}${s.edited?' · 修正済み':''}</div><div class="history-values"><strong>${short(s.duration)}</strong>${s.isCurrent?'終了後に同じ時間休憩':`休憩は${dateClock(restUntil)}まで`}</div></div>`;
     }).join('');
   }
   function update(now=Date.now()){

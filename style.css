@@ -19,7 +19,7 @@
   --red:#f06d6d;
   --shadow:0 14px 34px rgba(42,73,111,.12);
   --shadow-soft:0 8px 18px rgba(42,73,111,.08);
-  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;
+  font-family:"Hiragino Maru Gothic ProN","Arial Rounded MT Bold","Hiragino Kaku Gothic ProN","Yu Gothic",-apple-system,BlinkMacSystemFont,sans-serif;
   font-variant-numeric:tabular-nums;
 }
 *{box-sizing:border-box}
