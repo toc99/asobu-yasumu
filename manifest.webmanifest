@@ -1,0 +1,16 @@
+{
+  "id":"./",
+  "name":"あそぶ・やすむ｜ゲーム時間管理",
+  "short_name":"あそぶ・やすむ",
+  "description":"子ども2人のゲーム時間と同じ長さの休憩を自動計算するアプリ",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#f3f6fa",
+  "theme_color":"#14243a",
+  "lang":"ja",
+  "icons":[
+    {"src":"./icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
