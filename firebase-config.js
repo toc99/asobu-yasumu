@@ -2,9 +2,9 @@
 // このファイルは公開されます。パスワード・秘密鍵を絶対に記載しないこと。
 export const firebaseConfig = {
     apiKey: "AIzaSyDcnJ-SgxWxpETtUZ2gpnYcjnufsnOeKQI",
-    authDomain: "toc99-41eac.firebaseapp.com",
-    projectId: "toc99-41eac",
-    storageBucket: "toc99-41eac.firebasestorage.app",
+    authDomain: "toc99.firebaseapp.com",
+    projectId: "toc99",
+    storageBucket: "toc99.firebasestorage.app",
     messagingSenderId: "445688709420",
     appId: "1:445688709420:web:e93272c6312df1c7612c89",
     measurementId: "G-SSTN3RZKVW"
