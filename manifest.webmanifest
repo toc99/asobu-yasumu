@@ -1,16 +1,10 @@
 {
-  "id": "./",
-  "name": "あそぶ・やすむ｜ゲームと休憩のじかん",
-  "short_name": "あそぶ・やすむ",
-  "description": "Switch2台に対応した兄弟のゲーム時間と同時間休憩の管理アプリ",
-  "start_url": "./",
-  "scope": "./",
-  "display": "standalone",
-  "background_color": "#f4f7fb",
-  "theme_color": "#182b45",
-  "lang": "ja",
-  "icons": [
-    {"src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-    {"src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
-  ]
+ "name":"あそぶ・やすむ v3.0",
+ "short_name":"あそぶ・やすむ",
+ "start_url":"./index.html",
+ "scope":"./",
+ "display":"standalone",
+ "background_color":"#f4f9ff",
+ "theme_color":"#eaf4ff",
+ "icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]
 }

@@ -1,274 +1,274 @@
-(() => {
-  'use strict';
-  const KEY = 'asobu-yasumu-v2';
-  const LEGACY_KEY = 'game-rest-2026-v1';
-  const DAY = 86400000;
-  const $ = id => document.getElementById(id);
-  const htmlEscape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  const pad = num => String(num).padStart(2, '0');
-  const clock = date => new Date(date).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
-  const dateClock = date => new Date(date).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  const short = millis => {const seconds=Math.max(0,Math.ceil(millis/1000)),minutes=Math.floor(seconds/60);if(minutes===0)return `${seconds}秒`;const hours=Math.floor(minutes/60),mins=minutes%60;return hours?`${hours}時間${mins?`${mins}分`:''}`:`${minutes}分${seconds%60?`${pad(seconds%60)}秒`:''}`};
-  const countDown = millis => {const s=Math.max(0,Math.ceil(millis/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`};
-  const dayStart = timestamp => {const d=new Date(timestamp);d.setHours(0,0,0,0);return d.getTime()};
-  const nextDay = timestamp => {const d=new Date(timestamp);d.setHours(0,0,0,0);d.setDate(d.getDate()+1);return d.getTime()};
-  const dateKey = timestamp => {const d=new Date(timestamp);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`};
-  const dateInput = timestamp => {const d=new Date(timestamp);return `${dateKey(timestamp)}T${pad(d.getHours())}:${pad(d.getMinutes())}`};
-  const parseTime = value => {const n=new Date(value).getTime();return Number.isFinite(n)?n:NaN};
-  const hash = str => {let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return String(h>>>0)};
-  const newSid = () => `s-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
-  const base = () => ({version:2,children:[
-    {id:'older',name:'お姉ちゃん',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0},
-    {id:'younger',name:'弟くん',activeStart:null,deviceId:null,restStart:0,restUntil:0,lastDuration:0}
-  ],devices:[{id:'sw1',name:'Switch'},{id:'sw2',name:'Switch2'}],sessions:[],pinHash:null,reminderMinutes:60});
-  function safeState(obj) {
-    if(!obj||obj.version!==2||!Array.isArray(obj.children)||obj.children.length!==2||!Array.isArray(obj.devices)||obj.devices.length!==2||!Array.isArray(obj.sessions)||obj.sessions.length>20000) throw Error('invalid data');
-    const result=base();
-    for(let i=0;i<2;i++){
-      const c=obj.children[i],d=obj.devices[i];
-      if(!c||typeof c.name!=='string'||typeof d?.name!=='string')throw Error('invalid children');
-      const id=i===0?'older':'younger';
-      result.children[i]={id,name:c.name.slice(0,12)||result.children[i].name,activeStart:Number.isFinite(c.activeStart)?c.activeStart:null,deviceId:['sw1','sw2'].includes(c.deviceId)?c.deviceId:null,restStart:Number.isFinite(c.restStart)?c.restStart:0,restUntil:Number.isFinite(c.restUntil)?c.restUntil:0,lastDuration:Number.isFinite(c.lastDuration)?c.lastDuration:0};
-      if(result.children[i].activeStart===null)result.children[i].deviceId=null;
-      if(result.children[i].activeStart!==null&&!result.children[i].deviceId)result.children[i].deviceId='sw1';
-      result.devices[i].name=d.name.slice(0,18)||result.devices[i].name;
-    }
-    result.sessions=obj.sessions.map((s,i)=>{
-      if(!s||!['older','younger'].includes(s.childId)||!Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start>=s.end)throw Error('invalid session');
-      return {sid:String(s.sid||`old-${i}`).slice(0,80),childId:s.childId,start:s.start,end:s.end,duration:s.end-s.start,deviceId:['sw1','sw2'].includes(s.deviceId)?s.deviceId:'sw1',edited:!!s.edited};
-    });
-    result.pinHash=typeof obj.pinHash==='string'?obj.pinHash:null;
-    result.reminderMinutes=[15,30,45,60,90,120].includes(Number(obj.reminderMinutes))?Number(obj.reminderMinutes):60;
-    return result;
+import {firebaseConfig, householdId} from './firebase-config.js';
+
+const $ = id => document.getElementById(id);
+const rolePage = document.body.dataset.role;
+const isParentPage = rolePage === 'parent';
+const ids = ['older','younger'];
+const palette = ['sis','bro'];
+const MIN = 60000, DAY = 86400000;
+const version = 'v3.0.0';
+const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2,'0');
+const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
+const brief = ms => {const m=Math.floor(Math.max(0,ms)/MIN);return m>=60?`${Math.floor(m/60)}時間${m%60?`${m%60}分`:''}`:m>0?`${m}分`: `${Math.max(0,Math.floor(ms/1000))}秒`;};
+const clock = t => new Date(t).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
+const dateTime = t => new Date(t).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const dateKey = t => {const d=new Date(t);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;};
+const dayStart = t => {const d=new Date(t);d.setHours(0,0,0,0);return d.getTime();};
+const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.getTime();};
+const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
+const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
+const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60});
+const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',activeStart:0,deviceId:null,restStart:0,restUntil:0,lastDuration:0,lastSessionId:'',updatedAt:null});
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null};
+let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
+let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false;
+
+function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
+function errorText(e){return e?.code==='permission-denied'?'アクセス権限がありません。Firestore Rulesとmembers設定を確認してください。':e?.code?.startsWith('auth/')?'ログインに失敗しました。メールアドレスとパスワードを確認してください。':String(e?.message||e);}
+function hasConfig(){return !Object.values(firebaseConfig).some(x=>!x||String(x).includes('REPLACE_')) && householdId && /^[a-z0-9-]{3,50}$/.test(householdId);}
+function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':(p.restUntil||0)>now?'resting':'ready';}
+function deviceName(id){return model.settings.devices?.[id]||({sw1:'Switch',sw2:'Switch2'}[id]||'Switch');}
+function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?Math.max(0,p.restUntil-now):0;}
+function todayTotal(child,now=Date.now()){
+  const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
+  const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
+}
+function playerLabel(id){return model.profiles[id]?.name||playerBase(id).name;}
+function currentDateTick(){const now=Date.now();$('clock').textContent=clock(now);$('today-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'});}
+function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!node)return;
+  const online=navigator.onLine;
+  let text='クラウド接続済み',cls='ok';
+  if(!online||model.fromCache){text='接続確認中／キャッシュ表示';cls='warn'}
+  if(!model.ready){text='データ読み込み中';cls='pending'}
+  node.className=`signal ${cls}`;node.textContent=text;
+  if(isParentPage){
+    const t=model.presence?.lastSeenAt?.toMillis?.()||0;
+    const diff=t?Date.now()-t:Infinity;
+    last.textContent=t?`iPad最終接続：${dateTime(t)}（${diff<150000?'最近接続あり': '接続未確認'}）`:'iPadの接続情報なし';
+  }else{
+    const p=model.receivedAt;last.textContent=p?`受信：${clock(p)}`:'クラウド待機中';
   }
-  function migrateV1(obj) {
-    if(!obj||obj.version!==1||!Array.isArray(obj.children)||obj.children.length!==2||!Array.isArray(obj.sessions))throw Error('not legacy');
-    const migrated=base();
-    migrated.children.forEach((c,i)=>{
-      const old=obj.children[i];
-      c.name=typeof old.name==='string'?old.name.slice(0,12):c.name;
-      c.activeStart=Number.isFinite(old.start)?old.start:null;
-      c.deviceId=c.activeStart!==null?'sw1':null;
-      c.restStart=Number.isFinite(old.restStart)?old.restStart:0;
-      c.restUntil=Number.isFinite(old.restUntil)?old.restUntil:0;
-      c.lastDuration=Number.isFinite(old.lastPlay)?old.lastPlay:0;
-    });
-    migrated.sessions=obj.sessions.filter(s=>Number.isFinite(s.start)&&Number.isFinite(s.end)&&s.end>s.start).map((s,i)=>({sid:`v1-${i}-${s.end}`,childId:s.id==='younger'?'younger':'older',start:s.start,end:s.end,duration:s.end-s.start,deviceId:'sw1',edited:false}));
-    migrated.pinHash=typeof obj.pinHash==='string'?obj.pinHash:null;
-    return migrated;
+}
+function renderAlerts(now=Date.now()){
+  const alerts=[];
+  if(isParentPage){
+    const t=model.presence?.lastSeenAt?.toMillis?.()||0;
+    if(!t||now-t>150000)alerts.push('<div class="alert stale">iPadの接続を現在確認できません。表示中のゲーム時間は、最後に届いた開始情報からの推定値です。</div>');
   }
-  let state;
-  function load() {
-    try {const raw=localStorage.getItem(KEY);if(raw)return safeState(JSON.parse(raw));}catch(err){console.warn('v2 read error',err)}
-    try {const raw=localStorage.getItem(LEGACY_KEY);if(raw){const m=migrateV1(JSON.parse(raw));localStorage.setItem(KEY,JSON.stringify(m));return m;}}catch(err){console.warn('v1 migration error',err)}
-    return base();
-  }
-  let toastTimer;
-  function toast(message) {const node=$('toast');node.textContent=message;node.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>node.classList.remove('show'),3800)}
-  function save() {
-    try {localStorage.setItem(KEY,JSON.stringify(state));$('save-status').textContent='保存済み';return true;}
-    catch(err){$('save-status').textContent='保存に失敗しました';toast('保存に失敗しました。空き容量やプライベートモードを確認してください');return false;}
-  }
-  state=load();
-  (function normalizeLabels(){
-    if(state.children?.[0] && ['上の子','おねえちゃん'].includes(String(state.children[0].name).trim())) state.children[0].name='お姉ちゃん';
-    if(state.children?.[1] && ['下の子','おとうとくん'].includes(String(state.children[1].name).trim())) state.children[1].name='弟くん';
-    if(state.devices?.[0] && ['Switch ①','Switch1'].includes(String(state.devices[0].name).trim())) state.devices[0].name='Switch';
-    if(state.devices?.[1] && ['Switch ②','Switch 2'].includes(String(state.devices[1].name).trim())) state.devices[1].name='Switch2';
-  })();
-  let selectedChild=null, endingChild=null, editing=null, historyDay=dayStart(Date.now()), activeTab='home';
-  function childBy(id){return state.children.find(c=>c.id===id)}
-  function deviceBy(id){return state.devices.find(d=>d.id===id)}
-  function activeOn(id){return state.children.filter(c=>c.activeStart!==null&&c.deviceId===id)}
-  function status(c, now=Date.now()){return c.activeStart!==null?'playing':now<c.restUntil?'resting':'ready'}
-  function gameMs(c,now=Date.now()){return c.activeStart===null?0:Math.max(0,now-c.activeStart)}
-  function overlap(start,end,begin,finish){return Math.max(0,Math.min(end,finish)-Math.max(start,begin))}
-  function totalIn(c,begin,end,now=Date.now()){
-    let sum=0;for(const s of state.sessions){if(s.childId===c.id)sum+=overlap(s.start,s.end,begin,end)}
-    if(c.activeStart!==null)sum+=overlap(c.activeStart,now,begin,end);
-    return sum;
-  }
-  function newestSessionFor(id){return state.sessions.filter(s=>s.childId===id).sort((a,b)=>b.end-a.end)[0]||null}
-  function canStart(c,now=Date.now()){return c.activeStart===null&&now>=c.restUntil}
-  function renderClock(now){$('now-time').textContent=clock(now);$('now-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'})}
-  function createCard(c,index,now){
-    const st=status(c,now),elapsed=gameMs(c,now),restLeft=Math.max(0,c.restUntil-now),restDuration=Math.max(1,c.restUntil-c.restStart);
-    const bg=index===0?'green':'',device=c.deviceId?deviceBy(c.deviceId):null;
-    const profile=index===0
-      ? {emoji:'🌷',tag:'お姉ちゃんモード',ready:'スタートOK',rest:'ひとやすみ中',playing:'プレイ中'}
-      : {emoji:'🚀',tag:'弟くんモード',ready:'ミッションスタートOK',rest:'パワーチャージ中',playing:'バトル中'};
-    let title,number,sub,prog,forecastLabel,forecastValue,forecastNote,actionLabel,footer,ribbon;
-    if(st==='playing'){
-      title='ゲームを始めてから';number=countDown(elapsed);sub='好きなタイミングで終わってOK';prog=100;
-      forecastLabel='いま終わったら…';forecastValue=`休憩 ${short(elapsed)} ｜ つぎは ${dateClock(now+elapsed)} から`;
-      forecastNote='あと5分つづけると、つぎに遊べる時間も5分のびるよ';
-      actionLabel='🛑 ゲームを終わる';footer=elapsed>=state.reminderMinutes*60000?'長く遊んでいるよ。終わったらボタンを押そう！':'終わるときは、かならずこのボタンを押してね';
-      ribbon='🎮 いまプレイ中';
-    } else if(st==='resting'){
-      title='つぎまで、あとこれだけ';number=countDown(restLeft);sub=`${dateClock(c.restUntil)} から遊べる`;prog=Math.min(100,Math.max(0,(now-c.restStart)/restDuration*100));
-      forecastLabel='前回のゲーム';forecastValue=`${short(c.lastDuration)} 遊んだ → 同じ時間休憩`;
-      forecastNote='休憩が終わると、ボタンがまた押せるようになるよ';actionLabel='⏳ 休憩がおわるまで';footer='ちがう遊びやおてつだいの時間にしてもOK';
-      ribbon='💤 ひとやすみ';
-    } else {
-      title='いま、ゲームを始められるよ';number='00:00:00';sub='じぶんのタイミングでスタート！';prog=100;
-      forecastLabel='前回のゲーム';forecastValue=c.lastDuration?`${short(c.lastDuration)} 遊んで、休憩もかんりょう！`:'今日のゲームを始めよう';forecastNote='遊ぶSwitchは、始めるときに選べます';actionLabel='▶️ ゲームを始める';footer='終わるときもボタンを押して、じぶんの時間をきろくしよう';
-      ribbon='⭐ スタートOK';
-    }
-    const today=totalIn(c,dayStart(now),nextDay(now),now);
-    return `<article class="child-card ${bg} ${st==='playing'?'playing':''}" data-child-card="${c.id}">
-      <div class="card-ribbon">${ribbon}</div>
-      <div class="head"><div class="child-person"><div class="avatar">${profile.emoji}</div><div class="child-name-wrap"><div class="child-name">${htmlEscape(c.name)}</div><div class="child-tag">${profile.tag}</div></div></div><div class="status ${st}">${st==='playing'?profile.playing:st==='resting'?profile.rest:profile.ready}</div></div>
-      <div class="main-time"><div class="time-title">${title}</div><div class="time-value">${number}</div><div class="time-sub">${sub}</div></div>
-      <div class="progress" aria-label="休憩の進み具合"><div class="progress-fill" style="width:${prog.toFixed(1)}%"></div></div>
-      <div class="forecast"><div class="forecast-label">${forecastLabel}</div><div class="forecast-value">${forecastValue}</div><div class="forecast-note">${forecastNote}</div></div>
-      <div class="device-name">${device?`🎮 ${htmlEscape(device.name)} でプレイ中`:'🎯 どのSwitchで遊ぶか、スタート時にえらべます'}</div>
-      <button class="child-action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'ask-end':'ask-start'}" data-child="${c.id}" ${st==='resting'?'disabled':''}>${actionLabel}</button>
-      <div class="card-footer">${footer}</div>
-      <div class="mini-stats"><span>今日のプレイ <strong>${short(today)}</strong></span><span>今日の終了 <strong>${state.sessions.filter(s=>s.childId===c.id&&s.end>=dayStart(now)&&s.end<nextDay(now)).length}回</strong></span></div>
-      </article>`;
-  }
-  function renderHome(now=Date.now()){
-    if(activeTab!=='home')return;
-    $('children-grid').innerHTML=state.children.map((c,i)=>createCard(c,i,now)).join('');
-    $('consoles-grid').innerHTML=state.devices.map(d=>{
-      const occupants=activeOn(d.id);return `<div class="console ${occupants.length?'busy':''}"><div><div class="console-title">🎮 ${htmlEscape(d.name)}</div><div class="console-desc">${occupants.length?`${occupants.length}人がゲーム中`:'今はあいています'}</div></div><div class="console-occupants">${occupants.length?occupants.map(c=>`<span class="person-pill ${c.id==='older'?'green':''}">${htmlEscape(c.name)}</span>`).join(''):'<span class="subtle">空き</span>'}</div></div>`;
-    }).join('');
-    $('alerts').innerHTML=state.children.filter(c=>c.activeStart!==null&&gameMs(c,now)>=state.reminderMinutes*60000).map(c=>`<div class="alert">⚠ ${htmlEscape(c.name)}は${state.reminderMinutes}分以上プレイ中です。終了ボタンを押し忘れていないかな？</div>`).join('');
-  }
-  function getDayAt(baseStamp,offset){const d=new Date(baseStamp);d.setHours(0,0,0,0);d.setDate(d.getDate()+offset);return d.getTime()}
-  function renderWeek(now=Date.now()){
-    const first=getDayAt(now,-6),days=Array.from({length:7},(_,i)=>getDayAt(first,i));
-    const rows=days.map(d=>({d,totals:state.children.map(c=>totalIn(c,d,nextDay(d),now))}));
-    const max=Math.max(15*60000,...rows.flatMap(r=>r.totals));
-    $('week-chart').innerHTML=rows.map((r,i)=>{
-      const day=new Date(r.d).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'});
-      return `<div class="week-day"><span class="week-day-label">${day}${i===6?' 今日':''}</span><div class="week-bars">${r.totals.map((ms,k)=>`<div class="week-track"><div class="week-fill ${k?'blue':'green'}" style="width:${(ms/max*100).toFixed(2)}%"></div></div>`).join('')}</div><span class="week-day-total">${short(r.totals[0]+r.totals[1])}</span></div>`;
-    }).join('');
-    const totals=state.children.map((c,i)=>rows.reduce((sum,r)=>sum+r.totals[i],0));
-    $('legend-older').textContent=state.children[0].name;$('legend-younger').textContent=state.children[1].name;
-    $('week-summary').innerHTML=state.children.map((c,i)=>`<span>${htmlEscape(c.name)}：<strong>${short(totals[i])}</strong></span>`).join('');
-  }
-  function renderTimeline(now=Date.now()){
-    const begin=historyDay,end=nextDay(begin);
-    $('history-date').value=dateKey(begin);$('next-day').disabled=begin>=dayStart(now);
-    const sessions=state.sessions.map(s=>({...s,isCurrent:false}));
-    for(const c of state.children){if(c.activeStart!==null&&now>c.activeStart)sessions.push({sid:`ongoing-${c.id}`,childId:c.id,start:c.activeStart,end:now,duration:now-c.activeStart,deviceId:c.deviceId,edited:false,isCurrent:true})}
-    const matches=sessions.filter(s=>overlap(s.start,s.end,begin,end)>0);
-    const frac=value=>Math.max(0,Math.min(100,(value-begin)/(end-begin)*100));
-    $('day-timeline').innerHTML=`<div class="timeline-hours"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div>`+state.children.map((c,i)=>{
-      const segs=matches.filter(s=>s.childId===c.id).map(s=>`<div class="segment ${i?'green':''}" title="${htmlEscape(dateClock(s.start))}〜${htmlEscape(dateClock(s.end))}" style="left:${frac(Math.max(s.start,begin)).toFixed(2)}%;width:${Math.max(.2,frac(Math.min(s.end,end))-frac(Math.max(s.start,begin))).toFixed(2)}%"></div>`).join('');
-      return `<div class="timeline-line"><div class="timeline-label">${htmlEscape(c.name)}</div><div class="timeline-track">${segs}</div></div>`;
-    }).join('');
-    if(!matches.length){$('history-list').innerHTML='<div class="empty">この日はまだプレイ記録がありません</div>';return;}
-    $('history-list').innerHTML=matches.sort((a,b)=>b.start-a.start).map(s=>{
-      const c=childBy(s.childId),d=deviceBy(s.deviceId);const restUntil=s.end+s.duration;
-      return `<div class="history-item"><div class="history-dot ${c.id==='older'?'green':''}"></div><div class="history-main"><strong>${htmlEscape(c.name)} ・ ${htmlEscape(d?.name||'Switch')}${s.isCurrent?' ・ プレイ中':''}</strong>${dateClock(s.start)}〜${s.isCurrent?'現在':dateClock(s.end)}${s.edited?' · 修正済み':''}</div><div class="history-values"><strong>${short(s.duration)}</strong>${s.isCurrent?'終了後に同じ時間休憩':`休憩は${dateClock(restUntil)}まで`}</div></div>`;
-    }).join('');
-  }
-  function update(now=Date.now()){
-    renderClock(now);
-    if(activeTab==='home')renderHome(now);
-    else if(activeTab==='history'){
-      // 週別集計と履歴は2秒ごと・画面復帰時に描画する
-      if(Math.floor(now/1000)%2===0){renderWeek(now);renderTimeline(now)}
-    }
-  }
-  function setTab(tab){activeTab=tab;document.querySelectorAll('.tab[data-tab]').forEach(b=>{const on=b.dataset.tab===tab;b.classList.toggle('active',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});$('view-home').classList.toggle('hidden',tab!=='home');$('view-history').classList.toggle('hidden',tab!=='history');update();if(tab==='history'){renderWeek();renderTimeline()}}
-  function askStart(id){const c=childBy(id),now=Date.now();if(!c||!canStart(c,now)){toast('まだ休憩中か、すでにゲーム中です');return}selectedChild=id;$('choose-title').textContent=`${c.name}：どのSwitchで遊ぶ？`;$('choose-text').textContent='空いている本体を選ぶか、もう1人が使っている本体で一緒に遊べます。';$('device-choices').innerHTML=state.devices.map(d=>{
-    const occupants=activeOn(d.id),joining=occupants.length>0;
-    return `<button class="device-choice ${joining?'join':''}" data-action="choose-device" data-device="${d.id}"><strong>🎮 ${htmlEscape(d.name)}</strong><span>${joining?`${htmlEscape(occupants.map(x=>x.name).join('・'))}と同じ本体で遊ぶ`:'空いている本体で遊ぶ'}</span></button>`;
-  }).join('');$('choose-dialog').showModal()}
-  function begin(id,deviceId){
-    const c=childBy(id),now=Date.now();if(!c||!deviceBy(deviceId)||!canStart(c,now)){toast('開始できません。休憩状態を確認してください');return}
-    c.activeStart=now;c.deviceId=deviceId;if(!save()){c.activeStart=null;c.deviceId=null;return}
-    $('choose-dialog').close();renderHome(now);toast(`${c.name}：ゲームを開始しました`);
-  }
-  function askEnd(id){const c=childBy(id);if(!c||c.activeStart===null)return;endingChild=id;const now=Date.now(),played=gameMs(c,now);$('end-title').textContent=`${c.name}：ゲームを終わる？`;$('end-summary').innerHTML=`<div class="end-summary-line"><span>いままで遊んだ時間</span><strong>${short(played)}</strong></div><div class="end-summary-line"><span>これから休む時間</span><strong>${short(played)}</strong></div><div class="end-summary-line"><span>次に遊べる時刻</span><strong>${dateClock(now+played)}</strong></div>`;$('end-dialog').showModal()}
-  function finish(id){const c=childBy(id);if(!c||c.activeStart===null)return;const now=Date.now(),duration=Math.max(1,now-c.activeStart),session={sid:newSid(),childId:c.id,start:c.activeStart,end:now,duration,deviceId:c.deviceId||'sw1',edited:false};
-    state.sessions.push(session);c.activeStart=null;c.deviceId=null;c.restStart=now;c.restUntil=now+duration;c.lastDuration=duration;
-    if(!save()){state.sessions.pop();c.activeStart=session.start;c.deviceId=session.deviceId;c.restStart=0;c.restUntil=0;return}
-    $('end-dialog').close();endingChild=null;renderHome(now);toast(`${c.name}：${short(duration)}の休憩が始まりました`);
-  }
-  function getPin(){
-    if(!state.pinHash){const pin=prompt('保護者用PINを初期登録してください（数字4〜8桁）');if(pin===null)return false;if(!/^\d{4,8}$/.test(pin)){toast('数字4〜8桁で入力してください');return false}const again=prompt('確認のため、同じPINをもう一度入力してください');if(pin!==again){toast('PINが一致しません');return false}state.pinHash=hash(pin);save();return true}
-    const pin=prompt('保護者用PINを入力してください');if(pin===null)return false;
-    if(hash(pin)!==state.pinHash){toast('PINが違います');return false}return true;
-  }
-  function parentOpen(){if(!getPin())return;state.children.forEach((c,i)=>$(`parent-name-${i}`).value=c.name);state.devices.forEach((d,i)=>$(`device-name-${i}`).value=d.name);$('reminder-minutes').value=String(state.reminderMinutes);$('new-pin').value='';renderAdminEditors();$('parent-dialog').showModal()}
-  function renderAdminEditors(){
-    const playing=state.children.filter(c=>c.activeStart!==null);
-    $('active-edits').innerHTML=playing.length?playing.map(c=>`<div class="edit-row"><span class="edit-row-main"><strong>${htmlEscape(c.name)}：現在ゲーム中</strong><small>${dateClock(c.activeStart)} から開始（${htmlEscape(deviceBy(c.deviceId)?.name||'Switch')}）</small></span><button class="small-outline" data-action="edit-active" data-child="${c.id}">修正</button></div>`).join(''):'<div class="subtle">現在ゲーム中の記録はありません。</div>';
-    const recent=[...state.sessions].sort((a,b)=>b.end-a.end).slice(0,25);
-    $('session-edits').innerHTML=recent.length?recent.map(s=>{const c=childBy(s.childId);return `<div class="edit-row"><span class="edit-row-main"><strong>${htmlEscape(c.name)}：${short(s.duration)}</strong><small>${dateClock(s.start)}〜${dateClock(s.end)}（${htmlEscape(deviceBy(s.deviceId)?.name||'Switch')}）</small></span><button class="small-outline" data-action="edit-session" data-sid="${htmlEscape(s.sid)}">修正</button></div>`}).join(''):'<div class="subtle">まだプレイ記録がありません。</div>';
-  }
-  function saveSettings(){const names=state.children.map((_,i)=>$(`parent-name-${i}`).value.trim()),devices=state.devices.map((_,i)=>$(`device-name-${i}`).value.trim());if([...names,...devices].some(s=>!s)){toast('名前を入力してください');return}const pin=$('new-pin').value.trim();if(pin&&!/^\d{4,8}$/.test(pin)){toast('新しいPINは数字4〜8桁です');return}
-    state.children.forEach((c,i)=>c.name=names[i].slice(0,12));state.devices.forEach((d,i)=>d.name=devices[i].slice(0,18));state.reminderMinutes=Number($('reminder-minutes').value)||60;if(pin)state.pinHash=hash(pin);
-    if(save()){$('parent-dialog').close();update();toast('保護者設定を保存しました')}
-  }
-  function startEdit(type,key){editing={type,key};let start,end,title,note;
-    if(type==='active'){const c=childBy(key);if(!c||c.activeStart===null)return;start=c.activeStart;title=`${c.name}：開始時刻を修正`;note='終了ボタンの押し忘れは「ゲームを終了」したあと、履歴を修正できます。誤って開始した場合は下の取消ボタンを使ってください。';$('edit-end-wrap').classList.add('hidden');$('cancel-active').classList.remove('hidden')}
-    else {const s=state.sessions.find(s=>s.sid===key);if(!s)return;start=s.start;end=s.end;title=`${childBy(s.childId).name}：プレイ履歴を修正`;note='直近のプレイを修正すると、休憩終了時刻も修正後のプレイ時間から再計算します。過去の古い記録の修正は、現在の休憩には影響しません。';$('edit-end-wrap').classList.remove('hidden');$('cancel-active').classList.add('hidden')}
-    $('edit-title').textContent=title;$('edit-start').value=dateInput(start);$('edit-end').value=end?dateInput(end):'';$('edit-note').textContent=note;$('parent-dialog').close();$('edit-dialog').showModal();
-  }
-  function editValidForChild(childId,start,end,excludeSid,excludeActive){
-    if(end<=start||end>Date.now()+60000||start<0)return false;
-    const old=state.sessions.filter(s=>s.childId===childId&&s.sid!==excludeSid);
-    if(old.some(s=>overlap(start,end,s.start,s.end)>0))return false;
-    const c=childBy(childId);if(c.activeStart!==null&&!excludeActive&&overlap(start,end,c.activeStart,Date.now())>0)return false;
-    return true;
-  }
-  function saveEdit(){if(!editing)return;const start=parseTime($('edit-start').value),end=editing.type==='active'?Date.now():parseTime($('edit-end').value);
-    if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start){toast('終了は開始より後の時刻にしてください');return}
-    if(editing.type==='active'){
-      const c=childBy(editing.key);if(!c||c.activeStart===null)return;
-      if(!editValidForChild(c.id,start,end,null,true)){toast('ほかのプレイ記録と時間が重なるか、未来の時刻です');return}
-      c.activeStart=start;
-    }else{
-      const s=state.sessions.find(s=>s.sid===editing.key);if(!s)return;
-      if(!editValidForChild(s.childId,start,end,s.sid,false)){toast('ほかのプレイ記録と時間が重なるか、未来の時刻です');return}
-      s.start=start;s.end=end;s.duration=end-start;s.edited=true;
-      const c=childBy(s.childId),last=newestSessionFor(c.id);
-      if(c.activeStart===null&&last?.sid===s.sid){c.restStart=end;c.restUntil=end+s.duration;c.lastDuration=s.duration}
-    }
-    if(save()){$('edit-dialog').close();editing=null;renderHome();renderWeek();renderTimeline();toast('プレイ時間を修正しました')}
-  }
-  function cancelActive(){if(!editing||editing.type!=='active')return;const c=childBy(editing.key);if(!c)return;if(!confirm(`${c.name}の「ゲーム中」の記録を取り消します。よろしいですか？`))return;c.activeStart=null;c.deviceId=null;if(save()){$('edit-dialog').close();editing=null;renderHome();toast('誤開始の記録を取り消しました')}}
-  function download(text,name,mime){const blob=new Blob([text],{type:mime}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),15000)}
-  function exportJSON(){download(JSON.stringify({...state,pinHash:null},null,2),`asobu-yasumu-backup-${dateKey(Date.now())}.json`,'application/json')}
-  function csvEscape(val){let s=String(val??'');if(/^[=+@\-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"'}
-  function exportCSV(){const rows=[['子ども','本体','開始日時','終了日時','プレイ時間(秒)','修正済み'],...state.sessions.map(s=>[childBy(s.childId)?.name||'',deviceBy(s.deviceId)?.name||'',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download('\ufeff'+rows.map(r=>r.map(csvEscape).join(',')).join('\r\n'),`asobu-yasumu-history-${dateKey(Date.now())}.csv`,'text/csv;charset=utf-8')}
-  async function importJSON(file){if(!file)return;if(file.size>3*1024*1024){toast('3MB以下のファイルを選んでください');return}try{
-      const incoming=safeState(JSON.parse(await file.text()));if(!confirm('このiPadの現在の記録を、読み込んだJSONで置き換えます。実行しますか？'))return;
-      incoming.pinHash=state.pinHash;state=incoming;if(!save())return;$('parent-dialog').close();setTab('home');toast('バックアップを復元しました');
-    }catch(err){toast('復元に失敗しました。v2のJSONか確認してください')}
-  }
-  function resetAll(){if(state.children.some(c=>c.activeStart!==null)){toast('ゲーム中は全削除できません。終了してから実行してください');return}if(prompt('すべての履歴・設定を消去します。確認のため「全削除」と入力してください')!=='全削除')return;const old=state;state=base();if(!save()){state=old;return}$('parent-dialog').close();setTab('home');toast('全データを削除しました')}
-  function closeDialogs(){document.querySelectorAll('dialog[open]').forEach(d=>d.close());editing=null;selectedChild=null;endingChild=null}
-  document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button)return;const a=button.dataset.action;
-    if(a==='ask-start')askStart(button.dataset.child);
-    else if(a==='choose-device'&&selectedChild)begin(selectedChild,button.dataset.device);
-    else if(a==='ask-end')askEnd(button.dataset.child);
-    else if(a==='confirm-end'&&endingChild)finish(endingChild);
-    else if(a==='close-dialog')closeDialogs();
-    else if(a==='save-parent')saveSettings();
-    else if(a==='edit-active')startEdit('active',button.dataset.child);
-    else if(a==='edit-session')startEdit('session',button.dataset.sid);
-    else if(a==='save-edit')saveEdit();
-    else if(a==='cancel-active')cancelActive();
-    else if(a==='export-json')exportJSON();
-    else if(a==='export-csv')exportCSV();
-    else if(a==='import-json')$('import-file').click();
-    else if(a==='reset')resetAll();
-    else if(a==='prev-day'){historyDay=getDayAt(historyDay,-1);renderTimeline()}
-    else if(a==='next-day'&&historyDay<dayStart(Date.now())){historyDay=getDayAt(historyDay,1);renderTimeline()}
-  });
-  document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog)closeDialogs()}));
-  document.querySelectorAll('.tab[data-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.tab)));
-  $('open-parent').addEventListener('click',parentOpen);
-  $('history-date').addEventListener('change',event=>{const day=parseTime(`${event.target.value}T00:00:00`);if(!Number.isFinite(day)||day>dayStart(Date.now())){toast('未来の日付は表示できません');$('history-date').value=dateKey(historyDay);return}historyDay=dayStart(day);renderTimeline()});
-  $('import-file').addEventListener('change',async event=>{await importJSON(event.target.files?.[0]);event.target.value=''});
-  window.addEventListener('storage',event=>{if(event.key===KEY&&event.newValue){try{state=safeState(JSON.parse(event.newValue));update();if(activeTab==='history'){renderWeek();renderTimeline()}}catch(err){console.warn('storage update ignored',err)}}});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)update()});
-  setTab('home');setInterval(()=>update(),1000);
-  if('serviceWorker' in navigator && location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(err=>console.warn('offline cache unavailable',err));
-})();
+  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(p.name)}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
+  $('alerts').innerHTML=alerts.join('');
+}
+function renderPlayers(now=Date.now()){
+  if(!model.ready)return;
+  $('players').innerHTML=ids.map((id,i)=>{
+    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),left=Math.max(0,p.restUntil-now),restDuration=Math.max(1,p.restUntil-(p.restStart||0));
+    const title=st==='playing'?'ゲーム中':st==='resting'?'休憩中':'スタートOK';
+    const mainTitle=st==='playing'?'ゲームをはじめてから':st==='resting'?'つぎまで、あと':'ゲームができるよ！';
+    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(p.restUntil)}から遊べる`:'じぶんのタイミングでスタート！';
+    const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(now+elapsed)}から`:
+      st==='resting'?`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`:(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+    const progress=st==='resting'?Math.min(100,(now-p.restStart)/restDuration*100):100;
+    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!navigator.onLine?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
+    const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
+    const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
+    return `<article class="player ${i?'bro':'sis'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${i?'🚀':'🌸'}</span>${safe(p.name)}</div><div class="player-sub">${i?'6さい・弟':'11さい・姉'}</div></div><span class="pill ${st}">${title}</span></div>
+      <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
+      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、次の開始も10分おそくなるよ</small>':''}</div>
+      <div class="player-device">${device}</div>${actions}<div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
+  }).join('');
+}
+function renderDevices(){
+  $('devices').innerHTML=['sw1','sw2'].map(id=>{const players=ids.filter(k=>model.profiles[k]?.activeStart>0&&model.profiles[k]?.deviceId===id);
+   return `<div class="device-tile ${players.length?'busy':''}"><div><strong>🎮 ${safe(deviceName(id))}</strong><small>${players.length?`${players.length}人がゲーム中`:'いまはあいているよ'}</small></div><div>${players.length?players.map(p=>`<div class="device-person">${safe(playerLabel(p))}</div>`).join(''):'<span class="device-person">空き</span>'}</div></div>`;
+  }).join('');
+}
+function weekData(now=Date.now()){
+  const today=dayStart(now),days=Array.from({length:7},(_,i)=>addDays(today,i-6));
+  const totals=days.map(d=>ids.map(id=>{
+    const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?overlap(s.start,s.end,d,end):0),0);
+    const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);return sum;
+  }));return {days,totals};
+}
+function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
+  $('week-chart').innerHTML=`<div class="chart-legend"><span><i class="dot"></i>${safe(playerLabel('older'))}</span><span><i class="dot bro"></i>${safe(playerLabel('younger'))}</span></div>` + days.map((d,i)=>{
+    const label=new Date(d).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'}),t=totals[i];
+    return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${palette[j]}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
+  }).join('');
+}
+function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});}
+  if(model.historyExtra && model.historyExtra.day===selectedDay){for(const s of model.historyExtra.items){if(!arr.some(x=>x.sid===s.sid))arr.push(s);}}
+  return arr.filter(s=>overlap(s.start,s.end,start,end)>0).sort((a,b)=>b.start-a.start);
+}
+function renderHistory(){const target=$('history-list');if(!target)return;const sessions=daySessions(),start=selectedDay,end=addDays(start,1);
+ $('history-date').value=dateKey(start);
+ const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
+ const lines=ids.map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${palette[i]}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
+ $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))} · ${safe(deviceName(s.deviceId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+}
+function render(now=Date.now()){
+ currentDateTick();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();
+ if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
+ else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
+}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();if(model.ready){renderWeek();renderHistory();}}
+function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
+function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
+function listenerError(e){console.error(e);model.fromCache=true;toast(errorText(e));renderSync();}
+function disconnect(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];model.profiles={};model.sessions=[];model.presence=null;model.ready=false;}
+function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({profiles:ids.map(i=>model.profiles[i]?.name),settings:model.settings});if(hash===lastSettingsHash)return;
+ if(document.activeElement?.closest?.('#settings-form'))return;
+ $('name-older').value=playerLabel('older');$('name-younger').value=playerLabel('younger');$('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);lastSettingsHash=hash;
+}
+function listen(){
+ cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
+   for(const doc of snap.docs)model.profiles[doc.id]=doc.data();model.fromCache=snap.metadata.fromCache;model.receivedAt=Date.now();setReady();setSettingsForm();
+ },listenerError));
+ cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'settings','main'),{includeMetadataChanges:true},snap=>{
+   if(snap.exists())model.settings={...defaultSettings(),...snap.data()};model.fromCache=snap.metadata.fromCache;model.receivedAt=Date.now();render();setSettingsForm();
+ },listenerError));
+ cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
+   model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
+ },listenerError));
+ if(isParentPage){cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'presence','ipad'),snap=>{model.presence=snap.exists()?snap.data():null;renderSync();},listenerError));}
+}
+function refProfile(id){return dbApi.doc(db,'households',householdId,'profiles',id)}
+function refSettings(){return dbApi.doc(db,'households',householdId,'settings','main')}
+function sessionsRef(){return dbApi.collection(db,'households',householdId,'sessions')}
+function ensureOnline(){if(!navigator.onLine)throw Error('インターネット接続が必要です。通信を確認してから操作してください。');}
+async function runLocked(fn){if(busy)return;busy=true;try{ensureOnline();await fn();}catch(e){console.error(e);toast(errorText(e));}finally{busy=false;render();}}
+async function startPlay(id,deviceId){return runLocked(async()=>{
+  const now=Date.now();await dbApi.runTransaction(db,async tx=>{
+    const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
+    if(p.activeStart>0)throw Error('すでにゲーム中です。');if(now<(p.restUntil||0))throw Error('まだ休憩中です。');
+    tx.update(ref,{activeStart:now,deviceId,updatedAt:dbApi.serverTimestamp()});
+  });$('device-dialog').close();toast(`${playerLabel(id)}：ゲームをスタート！`);
+ });
+}
+async function endPlay(id){return runLocked(async()=>{
+  const sidRef=dbApi.doc(sessionsRef());const now=Date.now();
+  const duration=await dbApi.runTransaction(db,async tx=>{
+    const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データがありません');const p=snap.data();
+    if(!p.activeStart)throw Error('すでに終了しています');const dur=Math.max(1000,now-p.activeStart);
+    if(dur>7*DAY)throw Error('7日以上計測されています。保護者が開始時刻を確認してください。');
+    tx.update(ref,{activeStart:0,deviceId:null,restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+    tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false});
+    return dur;
+  });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
+ });
+}
+function chooseStart(id){const p=model.profiles[id];if(!p||p.activeStart||Date.now()<(p.restUntil||0))return toast('まだ休憩中だよ');pendingStart=id;
+ $('device-title').textContent=`${p.name}：どのSwitchであそぶ？`;
+ $('device-buttons').innerHTML=['sw1','sw2'].map(d=>{const players=ids.filter(i=>model.profiles[i]?.deviceId===d&&model.profiles[i]?.activeStart>0);return `<button class="device-select" data-device="${d}">🎮 ${safe(deviceName(d))}<span>${players.length?`${safe(players.map(i=>playerLabel(i)).join('・'))}といっしょに遊ぶ`:'いま、あいてるよ！'}</span></button>`;}).join('');$('device-dialog').showModal();
+}
+function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
+ $('end-confirm-text').innerHTML=`<div>${safe(p.name)}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
+async function initFamily(){await runLocked(async()=>{const b=dbApi.writeBatch(db);b.set(refSettings(),{...defaultSettings(),createdAt:dbApi.serverTimestamp()});for(const id of ids)b.set(refProfile(id),{...playerBase(id),updatedAt:dbApi.serverTimestamp()});await b.commit();toast('家族データを作成しました');});}
+async function saveSettings(event){event.preventDefault();await runLocked(async()=>{
+ const names=[$('name-older').value.trim(),$('name-younger').value.trim()],devices={sw1:$('device-sw1').value.trim(),sw2:$('device-sw2').value.trim()};if(!names.every(Boolean)||!Object.values(devices).every(Boolean))throw Error('名前を入力してください');
+ const b=dbApi.writeBatch(db);ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),updatedAt:dbApi.serverTimestamp()}));b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,updatedAt:dbApi.serverTimestamp()},{merge:true});await b.commit();toast('設定を保存しました');
+ });}
+async function editHistory(event){event.preventDefault();const sid=editingId;if(!sid)return;
+ const a=new Date($('edit-start').value).getTime(),b=new Date($('edit-end').value).getTime();const orig=model.sessions.find(x=>x.sid===sid)||model.historyExtra?.items?.find(x=>x.sid===sid);
+ if(!orig||!Number.isFinite(a)||!Number.isFinite(b)||b<=a||b>Date.now()+MIN||b-a>7*DAY){return toast('開始・終了日時を確認してください');}
+ if(model.sessions.some(s=>s.sid!==sid&&s.childId===orig.childId&&overlap(a,b,s.start,s.end)>0))return toast('他のプレイ履歴と重なっています');
+ await runLocked(async()=>{
+  await dbApi.runTransaction(db,async tx=>{
+    const sessionRef=dbApi.doc(sessionsRef(),sid),profRef=refProfile(orig.childId);
+    const snap=await tx.get(sessionRef),pSnap=await tx.get(profRef);if(!snap.exists()||!pSnap.exists())throw Error('更新対象が見つかりません');
+    const existing=snap.data(),p=pSnap.data();
+    tx.update(sessionRef,{start:a,end:b,duration:b-a,edited:true,updatedAt:dbApi.serverTimestamp()});
+    if(p.activeStart===0&&p.lastSessionId===sid){tx.update(profRef,{restStart:b,restUntil:b+(b-a),lastDuration:b-a,updatedAt:dbApi.serverTimestamp()});}
+  });$('edit-dialog').close();toast('記録と休憩時間を修正しました');
+ });
+}
+async function editOpen(sid){const s=model.sessions.find(x=>x.sid===sid)||model.historyExtra?.items?.find(x=>x.sid===sid);if(!s)return;
+ editingId=sid;$('edit-title').textContent=`${playerLabel(s.childId)}のきろくを修正`;$('edit-start').value=dateInput(s.start);$('edit-end').value=dateInput(s.end);$('edit-dialog').showModal();
+}
+async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);try{
+  const q=dbApi.query(sessionsRef(),dbApi.where('end','>=',begin),dbApi.where('end','<',end),dbApi.orderBy('end','desc'),dbApi.limit(400));
+  const docs=await dbApi.getDocs(q);model.historyExtra={day:begin,items:docs.docs.map(d=>({...d.data(),sid:d.id}))};renderHistory();
+ }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
+function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
+async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
+ if(format==='json'){const data={version:3,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','本体','開始日時','終了日時','ゲーム時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),deviceName(s.deviceId),new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
+ toast('バックアップを保存しました');
+ }catch(e){toast(errorText(e));}}
+async function importV2(file){if(!file)return;await runLocked(async()=>{
+ if(file.size>8*1024*1024)throw Error('8MB以下のJSONを選択してください');const source=JSON.parse(await file.text());if(source.version!==2||!Array.isArray(source.sessions)||!Array.isArray(source.children))throw Error('v2のJSONバックアップではありません');
+ const existing=await dbApi.getDocs(dbApi.query(sessionsRef(),dbApi.limit(1)));if(!existing.empty)throw Error('クラウドに履歴があるため、二重登録防止のため取り込みを中止しました');
+ if(ids.some(id=>model.profiles[id]?.activeStart>0))throw Error('ゲーム中は移行できません。終了後に実行してください');
+ const n=source.sessions.length;if(!confirm(`v2のプレイ履歴 ${n}件をクラウドに取り込みますか？\n既存の子どもの状態・休憩時間も復元します。`))return;
+ const data=source.sessions.filter(s=>ids.includes(s.childId)&&Number.isFinite(s.start)&&Number.isFinite(s.end)&&s.end>s.start);
+ for(let i=0;i<data.length;i+=200){const b=dbApi.writeBatch(db);for(let j=i;j<Math.min(i+200,data.length);j++){const s=data[j];b.set(dbApi.doc(sessionsRef(),`legacy-${j}-${s.end}`),{childId:s.childId,start:s.start,end:s.end,duration:s.end-s.start,deviceId:['sw1','sw2'].includes(s.deviceId)?s.deviceId:'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:!!s.edited});}await b.commit();}
+ const b=dbApi.writeBatch(db);for(let i=0;i<2;i++){
+   const o=source.children[i]||{},id=ids[i];
+   const recent=data.map((session,j)=>({session,j})).filter(x=>x.session.childId===id).sort((a,b)=>b.session.end-a.session.end)[0];
+   const lastSessionId=recent?`legacy-${recent.j}-${recent.session.end}`:'';
+   b.update(refProfile(id),{name:String(o.name||playerLabel(id)).slice(0,12),activeStart:0,deviceId:null,restStart:Number.isFinite(o.restStart)?o.restStart:0,restUntil:Number.isFinite(o.restUntil)?o.restUntil:0,lastDuration:Number.isFinite(o.lastDuration)?o.lastDuration:0,lastSessionId,updatedAt:dbApi.serverTimestamp()});
+ }
+ if(Array.isArray(source.devices)&&source.devices.length===2){b.update(refSettings(),{devices:{sw1:source.devices[0].name?.includes('①')?'Switch':(source.devices[0].name||'Switch'),sw2:source.devices[1].name?.includes('②')?'Switch2':(source.devices[1].name||'Switch2')}});}
+ await b.commit();toast(`v2履歴 ${data.length}件を取り込みました。`);
+ });}
+async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||document.visibilityState!=='visible'||!navigator.onLine)return;
+ try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
+}
+function initUiEvents(){
+ $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
+ $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
+ document.addEventListener('click',e=>{
+   const btn=e.target.closest('button');if(!btn)return;
+   if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
+   if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
+   if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
+   if(btn.dataset.device&&pendingStart)startPlay(pendingStart,btn.dataset.device);
+   if(btn.dataset.edit)editOpen(btn.dataset.edit);
+ });
+ document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d)d.close();}));
+ $('confirm-end')?.addEventListener('click',()=>pendingEnd&&endPlay(pendingEnd));
+ $('init-family')?.addEventListener('click',initFamily);
+ $('settings-form')?.addEventListener('submit',saveSettings);
+ $('edit-form')?.addEventListener('submit',editHistory);
+ $('export-json')?.addEventListener('click',()=>exportData('json'));
+ $('export-csv')?.addEventListener('click',()=>exportData('csv'));
+ $('import-v2-file')?.addEventListener('change',e=>{importV2(e.target.files?.[0]);e.target.value='';});
+ $('history-date').value=dateKey(selectedDay);$('history-date').max=dateKey(Date.now());
+ $('history-date').addEventListener('change',e=>{const d=new Date(e.target.value+'T00:00:00').getTime();if(!Number.isFinite(d)||d>dayStart(Date.now()))return;selectedDay=d;model.historyExtra=null;renderHistory();loadSelectedDay();});
+ $('tab-home')?.addEventListener('click',()=>{historyTab='home';$('history').classList.add('hidden');$('tab-home').classList.add('subnav-active');$('tab-history').classList.remove('subnav-active');});
+ $('tab-history')?.addEventListener('click',()=>{historyTab='history';$('history').classList.remove('hidden');$('tab-home').classList.remove('subnav-active');$('tab-history').classList.add('subnav-active');renderWeek();renderHistory();});
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden){heartbeat();render();}});
+ window.addEventListener('online',()=>{heartbeat();render();});window.addEventListener('offline',render);
+}
+async function startFirebase(){
+  if(!hasConfig()){$('setup-warning').innerHTML='Firebase設定が未入力です。Windowsで <code>firebase-config.js</code> を設定し、READMEの手順で公開してください。<br>この状態ではクラウドの利用状況は表示されません。';$('setup-warning').classList.remove('hidden');$('login-form').querySelector('button').disabled=true;return;}
+  try{
+   const v='12.19.0';const [fb,au,fs]=await Promise.all([
+     import(`https://www.gstatic.com/firebasejs/${v}/firebase-app.js`),
+     import(`https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`),
+     import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`)]);
+   firebase=fb;authApi=au;dbApi=fs;
+   const app=fb.initializeApp(firebaseConfig);auth=au.getAuth(app);db=fs.getFirestore(app);
+   initUiEvents();
+   au.onAuthStateChanged(auth,async user=>{
+     disconnect();if(!user){uid=null;showLogin();return;}
+     uid=user.uid;
+     try{
+       const member=await fs.getDoc(fs.doc(db,'households',householdId,'members',uid));
+       if(!member.exists())throw Error('このアカウントの家族メンバー登録がありません。Firebaseのmembers設定を確認してください。');
+       role=member.data().role;
+       if(!['parent','kid'].includes(role))throw Error('役割の設定が正しくありません。');
+       if(isParentPage&&role!=='parent')throw Error('この画面は保護者アカウント専用です。');
+       if(!isParentPage&&role!=='kid')throw Error('この画面はiPad専用アカウントでログインしてください。');
+       $('login-error').textContent='';showApp();listen();if(!isParentPage){heartbeat();}
+     }catch(e){$('login-error').textContent=errorText(e);showLogin();await au.signOut(auth);}
+   });
+   if(!isParentPage){setInterval(heartbeat,60000);}
+   setInterval(render,1000);render();
+   if('serviceWorker' in navigator && !isParentPage && location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  }catch(e){console.error(e);$('setup-warning').textContent='Firebase SDKに接続できません。インターネット接続、ブラウザ設定、設定ファイルを確認してください。 '+errorText(e);$('setup-warning').classList.remove('hidden');}
+}
+currentDateTick();setInterval(currentDateTick,1000);
+startFirebase();
