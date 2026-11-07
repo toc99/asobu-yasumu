@@ -12,3 +12,17 @@
 .dot.neutral{background:#54b88f}
 .tseg.neutral{background:#54b88f}
 @media(max-width:600px){.settings-grid{grid-template-columns:1fr}}
+
+/* v3.2: manual wait entry and current setting context */
+.manual-open{margin-top:0;width:100%;font-weight:900;border-radius:16px;min-height:47px}
+.manual-info{font-size:12px;line-height:1.6;color:#687b94;background:#ffffffbb;padding:10px 12px;border-radius:12px}
+.manual-info strong{display:block;color:#526c88;margin-top:4px}
+.manual-current{font-weight:800;color:#47688e;line-height:1.6;margin:0}
+.manual-label{font-weight:900;display:grid;gap:8px}
+.manual-label input{border:1px solid #dce8f6;background:#fcfdff;border-radius:14px;padding:13px;font-size:18px;min-height:48px;width:100%}
+.manual-presets{display:flex;gap:8px;flex-wrap:wrap}
+.manual-presets button{border:1px solid #cadcf2;background:#f2f8ff;padding:9px 12px;border-radius:14px;font-weight:800;color:#3b659a}
+.manual-preview{background:#f0f7ff;border-radius:14px;padding:13px;color:#3468a6;font-weight:800;line-height:1.6;margin:0}
+#manual-dialog .dialog-buttons{align-items:center}
+#manual-clear{margin-right:auto}
+@media(max-width:560px){#manual-dialog .dialog-buttons{justify-content:stretch}#manual-dialog .dialog-buttons .btn{flex:1 1 auto}}

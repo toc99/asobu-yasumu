@@ -6,7 +6,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000;
-const version = 'v3.1.0';
+const version = 'v3.2.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -19,18 +19,19 @@ const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.
 const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60});
-const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,restStart:0,restUntil:0,lastDuration:0,lastSessionId:'',updatedAt:null});
+const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',updatedAt:null});
 const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
-let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false;
+let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
 function errorText(e){return e?.code==='permission-denied'?'アクセス権限がありません。Firestore Rulesとmembers設定を確認してください。':e?.code?.startsWith('auth/')?'ログインに失敗しました。メールアドレスとパスワードを確認してください。':String(e?.message||e);}
 function hasConfig(){return !Object.values(firebaseConfig).some(x=>!x||String(x).includes('REPLACE_')) && householdId && /^[a-z0-9-]{3,50}$/.test(householdId);}
-function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':(p.restUntil||0)>now?'resting':'ready';}
+function restEnd(p){return Math.max(p?.restUntil||0,p?.manualRestUntil||0);}
+function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':restEnd(p)>now?'resting':'ready';}
 function deviceName(id){return model.settings.devices?.[id]||({sw1:'Switch',sw2:'Switch2'}[id]||'Switch');}
 function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
-function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?Math.max(0,p.restUntil-now):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?Math.max(0,restEnd(p)-now):0;}
 function todayTotal(child,now=Date.now()){
   const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
   const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
@@ -98,22 +99,28 @@ function renderAlerts(now=Date.now()){
 function renderPlayers(now=Date.now()){
   if(!model.ready)return;
   $('players').innerHTML=displayIds().map((id,i)=>{
-    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),left=Math.max(0,p.restUntil-now),restDuration=Math.max(1,p.restUntil-(p.restStart||0));
+    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
+    const manualControlling=(p.manualRestUntil||0)>Math.max(p.restUntil||0,now);
+    const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
+    const restDuration=Math.max(1,until-restStart);
     const title=st==='playing'?'ゲーム中':st==='resting'?'休憩中':'スタートOK';
     const mainTitle=st==='playing'?'ゲームをはじめてから':st==='resting'?'つぎまで、あと':'ゲームができるよ！';
-    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(p.restUntil)}から遊べる`:'じぶんのタイミングでスタート！';
+    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(now+elapsed)}から`:
-      st==='resting'?`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`:(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
-    const progress=st==='resting'?Math.min(100,(now-p.restStart)/restDuration*100):100;
+      st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+    const progress=st==='resting'?Math.min(100,Math.max(0,(now-restStart)/restDuration*100)):100;
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!navigator.onLine?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
+    const recordTime=p.manualRestSetAt?.toMillis?.()||0;
+    const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
+    const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||busy||!navigator.onLine?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
     const age = ageOf(p, now);
     const subtitle = `${age === null ? '年齢未設定' : `${age}さい`}・${familyRole(id)}`;
     return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(p.name)}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、次の開始も10分おそくなるよ</small>':''}</div>
-      <div class="player-device">${device}</div>${actions}<div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
+      <div class="player-device">${device}</div>${actions}${manualAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(p.manualRestUntil-now)}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
 function renderDevices(){
@@ -186,7 +193,7 @@ async function runLocked(fn){if(busy)return;busy=true;try{ensureOnline();await f
 async function startPlay(id,deviceId){return runLocked(async()=>{
   const now=Date.now();await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
-    if(p.activeStart>0)throw Error('すでにゲーム中です。');if(now<(p.restUntil||0))throw Error('まだ休憩中です。');
+    if(p.activeStart>0)throw Error('すでにゲーム中です。');if(now<restEnd(p))throw Error('まだ待ち時間が残っています。');
     tx.update(ref,{activeStart:now,deviceId,updatedAt:dbApi.serverTimestamp()});
   });$('device-dialog').close();toast(`${playerLabel(id)}：ゲームをスタート！`);
  });
@@ -203,12 +210,87 @@ async function endPlay(id){return runLocked(async()=>{
   });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
  });
 }
-function chooseStart(id){const p=model.profiles[id];if(!p||p.activeStart||Date.now()<(p.restUntil||0))return toast('まだ休憩中だよ');pendingStart=id;
+function chooseStart(id){const p=model.profiles[id];if(!p||p.activeStart||Date.now()<restEnd(p))return toast('まだ休憩中だよ');pendingStart=id;
  $('device-title').textContent=`${p.name}：どのSwitchであそぶ？`;
  $('device-buttons').innerHTML=['sw1','sw2'].map(d=>{const players=ids.filter(i=>model.profiles[i]?.deviceId===d&&model.profiles[i]?.activeStart>0);return `<button class="device-select" data-device="${d}">🎮 ${safe(deviceName(d))}<span>${players.length?`${safe(players.map(i=>playerLabel(i)).join('・'))}といっしょに遊ぶ`:'いま、あいてるよ！'}</span></button>`;}).join('');$('device-dialog').showModal();
 }
 function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
  $('end-confirm-text').innerHTML=`<div>${safe(p.name)}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
+
+// 手動待ち時間は通常の休憩時間とは別に保持する。子どもは延長のみ、保護者は短縮・解除可能。
+function openManualWait(id){
+  const p=model.profiles[id];
+  if(!ids.includes(id)||!p)return;
+  if(p.activeStart>0)return toast('ゲーム中は待ち時間を変更できません。');
+  pendingManual=id;
+  $('manual-title').textContent=`${p.name}の待ち時間を設定`;
+  $('manual-current').textContent=`いまの待ち時間：${restEnd(p)>Date.now()?brief(restEnd(p)-Date.now()):'なし'} ／ 通常の休憩：${p.restUntil>Date.now()?brief(p.restUntil-Date.now()):'なし'}`;
+  $('manual-minutes').value='30';
+  $('manual-policy').textContent=isParentPage
+    ?'今からの残り待ち時間を指定します。通常の休憩が長ければ、その休憩は維持されます。'
+    :'今からの待ち時間を追加・延長できます。今より短くすることはできません。';
+  $('manual-clear').classList.toggle('hidden',!isParentPage);
+  updateManualPreview();
+  $('manual-dialog').showModal();
+}
+function updateManualPreview(){
+  if(!pendingManual)return;
+  const n=Number($('manual-minutes').value);
+  const out=$('manual-preview');
+  if(!Number.isInteger(n)||n<1||n>1440){out.textContent='1〜1,440分の整数を入力してください。';return;}
+  const p=model.profiles[pendingManual];
+  if(!p)return;
+  const proposed=Date.now()+n*MIN;
+  const manualUntil=isParentPage?proposed:Math.max(proposed,p.manualRestUntil||0,p.restUntil||0);
+  const effectiveUntil=Math.max(manualUntil,p.restUntil||0);
+  out.textContent=`保存後の待ち時間：あと${brief(effectiveUntil-Date.now())}（${dateTime(effectiveUntil)}まで）`;
+}
+async function saveManualWait(event){
+  event.preventDefault();
+  const id=pendingManual,n=Number($('manual-minutes').value);
+  if(!id||!ids.includes(id))return;
+  if(!Number.isInteger(n)||n<1||n>1440)return toast('待ち時間は1〜1,440分の整数で入力してください。');
+  await runLocked(async()=>{
+    const until=await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('子どものデータがありません。');
+      const p=snap.data();
+      if(p.activeStart>0)throw Error('ゲーム中は待ち時間を設定できません。');
+      const proposed=Date.now()+n*MIN;
+      if(role==='kid' && proposed<=Math.max(p.manualRestUntil||0,p.restUntil||0))
+        throw Error('今の待ち時間より短く設定することはできません。延長する時間を入力してください。');
+      const newUntil=role==='parent'?proposed:Math.max(proposed,p.manualRestUntil||0,p.restUntil||0);
+      tx.update(ref,{
+        manualRestUntil:newUntil,manualRestMinutes:n,
+        manualRestSetAt:dbApi.serverTimestamp(),manualRestSetBy:uid,manualRestSetRole:role,
+        updatedAt:dbApi.serverTimestamp()
+      });
+      return Math.max(newUntil,p.restUntil||0);
+    });
+    $('manual-dialog').close();pendingManual=null;
+    toast(`${playerLabel(id)}：${dateTime(until)}まで待ち時間を設定しました`);
+  });
+}
+async function clearManualWait(){
+  if(!isParentPage||role!=='parent'||!pendingManual)return;
+  const id=pendingManual;
+  if(!confirm(`${playerLabel(id)}の手動待ち時間を解除しますか？\nゲーム終了後の通常の休憩は残ります。`))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('子どものデータがありません。');
+      if(snap.data().activeStart>0)throw Error('ゲーム中は変更できません。');
+      tx.update(ref,{
+        manualRestUntil:0,manualRestMinutes:0,
+        manualRestSetAt:dbApi.serverTimestamp(),manualRestSetBy:uid,manualRestSetRole:'parent',
+        updatedAt:dbApi.serverTimestamp()
+      });
+    });
+    $('manual-dialog').close();pendingManual=null;
+    toast('手動待ち時間を解除しました（通常の休憩は維持します）');
+  });
+}
+
 async function initFamily(){await runLocked(async()=>{const b=dbApi.writeBatch(db);b.set(refSettings(),{...defaultSettings(),createdAt:dbApi.serverTimestamp()});for(const id of ids)b.set(refProfile(id),{...playerBase(id),updatedAt:dbApi.serverTimestamp()});await b.commit();toast('家族データを作成しました');});}
 async function saveSettings(event){event.preventDefault();await runLocked(async()=>{
   const names=ids.map(id=>$('name-'+id).value.trim());
@@ -276,9 +358,15 @@ function initUiEvents(){
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.device&&pendingStart)startPlay(pendingStart,btn.dataset.device);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
+   if(btn.dataset.manual)openManualWait(btn.dataset.manual);
+   if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d)d.close();}));
  $('confirm-end')?.addEventListener('click',()=>pendingEnd&&endPlay(pendingEnd));
+  $('manual-form')?.addEventListener('submit',saveManualWait);
+  $('manual-minutes')?.addEventListener('input',updateManualPreview);
+  $('manual-clear')?.addEventListener('click',clearManualWait);
+  $('manual-dialog')?.addEventListener('close',()=>{pendingManual=null;});
  $('init-family')?.addEventListener('click',initFamily);
  $('settings-form')?.addEventListener('submit',saveSettings);
  $('edit-form')?.addEventListener('submit',editHistory);
