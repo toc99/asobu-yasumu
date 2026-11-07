@@ -26,3 +26,10 @@
 #manual-dialog .dialog-buttons{align-items:center}
 #manual-clear{margin-right:auto}
 @media(max-width:560px){#manual-dialog .dialog-buttons{justify-content:stretch}#manual-dialog .dialog-buttons .btn{flex:1 1 auto}}
+
+/* v3.3: undo, correction, reconnection */
+.undo-action{border-color:#f3b8ab;background:#fff7f4;color:#a34a31;font-size:14px}
+.correction-action{background:#fffaf0;border-color:#f0d49b;color:#8b6328}
+.reconnect{margin-left:auto;min-height:34px;padding:6px 11px;font-size:12px;border-radius:12px}
+#retry-login{margin-top:12px}
+@media(max-width:600px){.undo-action,.correction-action{width:100%}}

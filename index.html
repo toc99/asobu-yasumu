@@ -4,17 +4,17 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#eaf4ff"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="あそぶ・やすむ">
 <meta name="description" content="Switch・Switch2を使う子どもたちのゲーム時間と休憩を自分で管理するアプリ">
-<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.2.0">
-<title>あそぶ・やすむ v3.2｜子ども用</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.3.0">
+<title>あそぶ・やすむ v3.3｜子ども用</title>
 </head>
 <body data-role="kid">
 <header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
 <main class="container">
 <div id="setup-warning" class="setup-banner hidden"></div>
-<section id="login-screen" class="login-panel card"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form id="login-form" class="login-form"><label>メールアドレス<input id="email" type="email" required autocomplete="username"></label><label>パスワード<input id="password" type="password" required autocomplete="current-password"></label><button type="submit" class="btn primary">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
+<section id="login-screen" class="login-panel card"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form id="login-form" class="login-form"><label>メールアドレス<input id="email" type="email" required autocomplete="username"></label><label>パスワード<input id="password" type="password" required autocomplete="current-password"></label><button type="submit" class="btn primary">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><button id="retry-login" type="button" class="btn outline hidden">再接続する</button><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
 <section id="app-screen" class="hidden">
  <div class="overview"><div><h1>きょうのゲームミッション <span class="sparkle">✦</span></h1><p>あそぶ時間は自由。あそんだ分だけ、同じ時間やすもう！</p></div><div class="rule-chip">🎯 ゲーム1分 = 休憩1分</div></div>
- <div class="syncbar"><span id="sync-indicator" class="signal pending">接続確認中</span><span id="last-sync"></span><button id="logout" class="text-btn">ログアウト</button></div>
+ <div class="syncbar"><span id="sync-indicator" class="signal pending">接続確認中</span><span id="last-sync"></span><button id="retry-connect" class="btn outline reconnect hidden" type="button">接続を再確認</button><button id="logout" class="text-btn">ログアウト</button></div>
  <div id="alerts" aria-live="polite"></div>
  <div class="players" id="players"></div>
  <section class="card device-section"><div class="section-head"><div><h2>🎮 2台のSwitch</h2><p>別々の本体で同時にあそべるよ</p></div></div><div class="device-grid" id="devices"></div><p class="tiny">同じSwitchで2人プレイするときは、2人とも「ゲームをはじめる」を押して、同じ本体を選んでね。</p></section>
@@ -27,5 +27,5 @@
 <dialog id="end-dialog"><div class="dialog-body"><div class="dialog-head"><h2>ゲームをおわる？</h2><button class="x" data-close>×</button></div><div id="end-confirm-text" class="end-preview"></div><div class="dialog-buttons"><button class="btn secondary" data-close>まだあそぶ</button><button class="btn finish" id="confirm-end">おわって休む</button></div></div></dialog>
 <dialog id="manual-dialog"><form id="manual-form" class="dialog-body"><div class="dialog-head"><h2 id="manual-title">待ち時間を設定</h2><button type="button" class="x" data-close aria-label="閉じる">×</button></div><p id="manual-current" class="manual-current"></p><p id="manual-policy" class="tiny"></p><label for="manual-minutes" class="manual-label">残り待ち時間（分）<input id="manual-minutes" type="number" min="1" max="1440" step="1" value="30" required inputmode="numeric"></label><div class="manual-presets"><button type="button" data-preset="15">15分</button><button type="button" data-preset="30">30分</button><button type="button" data-preset="45">45分</button><button type="button" data-preset="60">60分</button><button type="button" data-preset="90">90分</button></div><p class="manual-preview" id="manual-preview" role="status"></p><div class="dialog-buttons"><button type="button" class="btn secondary" data-close>もどる</button><button type="button" class="btn outline" id="manual-clear">手動待ち時間を解除</button><button type="submit" class="btn primary">待ち時間を保存</button></div></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script type="module" src="app.js?v=3.2.0"></script>
+<script type="module" src="app.js?v=3.3.0"></script>
 </body></html>
