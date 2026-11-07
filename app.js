@@ -250,7 +250,13 @@ async function startFirebase(){
      import(`https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`),
      import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`)]);
    firebase=fb;authApi=au;dbApi=fs;
-   const app=fb.initializeApp(firebaseConfig);auth=au.getAuth(app);db=fs.getFirestore(app);
+   
+const app = fb.initializeApp(firebaseConfig);
+auth = au.getAuth(app);
+db = fs.initializeFirestore(app, {
+  experimentalForceLongPolling: true
+});
+
    initUiEvents();
    au.onAuthStateChanged(auth,async user=>{
      disconnect();if(!user){uid=null;showLogin();return;}
