@@ -6,7 +6,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000;
-const version = 'v3.0.0';
+const version = 'v3.1.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -19,7 +19,7 @@ const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.
 const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60});
-const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',activeStart:0,deviceId:null,restStart:0,restUntil:0,lastDuration:0,lastSessionId:'',updatedAt:null});
+const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,restStart:0,restUntil:0,lastDuration:0,lastSessionId:'',updatedAt:null});
 const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false;
@@ -36,6 +36,41 @@ function todayTotal(child,now=Date.now()){
   const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
 }
 function playerLabel(id){return model.profiles[id]?.name||playerBase(id).name;}
+function validBirthDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  if (year < 1900 || year > 9999) return false;
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+    && value <= dateKey(Date.now());
+}
+function ageOf(profile, now = Date.now()) {
+  const dob = profile?.birthDate;
+  if (!validBirthDate(dob)) return null;
+  const [year, month, day] = dob.split('-').map(Number);
+  const today = dateKey(now).split('-').map(Number);
+  return today[0] - year - (today[1] < month || (today[1] === month && today[2] < day) ? 1 : 0);
+}
+function displayIds() {
+  // Both birth dates must be known; otherwise preserve existing positions.
+  if (!ids.every(id => validBirthDate(model.profiles[id]?.birthDate))) return ids;
+  return [...ids].sort((a, b) =>
+    model.profiles[a].birthDate.localeCompare(model.profiles[b].birthDate)
+    || ids.indexOf(a) - ids.indexOf(b));
+}
+function themeFor(profile) {
+  return profile?.gender === 'female' ? 'sis' : profile?.gender === 'male' ? 'bro' : 'neutral';
+}
+function symbolFor(profile) {
+  return profile?.gender === 'female' ? '🌸' : profile?.gender === 'male' ? '🚀' : '⭐';
+}
+function familyRole(id) {
+  const gender = model.profiles[id]?.gender;
+  const older = displayIds()[0] === id;
+  if (gender === 'female') return older ? '姉' : '妹';
+  if (gender === 'male') return older ? '兄' : '弟';
+  return older ? '年上' : '年下';
+}
 function currentDateTick(){const now=Date.now();$('clock').textContent=clock(now);$('today-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'});}
 function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!node)return;
   const online=navigator.onLine;
@@ -62,7 +97,7 @@ function renderAlerts(now=Date.now()){
 }
 function renderPlayers(now=Date.now()){
   if(!model.ready)return;
-  $('players').innerHTML=ids.map((id,i)=>{
+  $('players').innerHTML=displayIds().map((id,i)=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),left=Math.max(0,p.restUntil-now),restDuration=Math.max(1,p.restUntil-(p.restStart||0));
     const title=st==='playing'?'ゲーム中':st==='resting'?'休憩中':'スタートOK';
     const mainTitle=st==='playing'?'ゲームをはじめてから':st==='resting'?'つぎまで、あと':'ゲームができるよ！';
@@ -73,7 +108,9 @@ function renderPlayers(now=Date.now()){
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!navigator.onLine?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
-    return `<article class="player ${i?'bro':'sis'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${i?'🚀':'🌸'}</span>${safe(p.name)}</div><div class="player-sub">${i?'6さい・弟':'11さい・姉'}</div></div><span class="pill ${st}">${title}</span></div>
+    const age = ageOf(p, now);
+    const subtitle = `${age === null ? '年齢未設定' : `${age}さい`}・${familyRole(id)}`;
+    return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(p.name)}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、次の開始も10分おそくなるよ</small>':''}</div>
       <div class="player-device">${device}</div>${actions}<div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
@@ -86,15 +123,16 @@ function renderDevices(){
 }
 function weekData(now=Date.now()){
   const today=dayStart(now),days=Array.from({length:7},(_,i)=>addDays(today,i-6));
-  const totals=days.map(d=>ids.map(id=>{
+  const totals=days.map(d=>displayIds().map(id=>{
     const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?overlap(s.start,s.end,d,end):0),0);
     const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);return sum;
   }));return {days,totals};
 }
 function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
-  $('week-chart').innerHTML=`<div class="chart-legend"><span><i class="dot"></i>${safe(playerLabel('older'))}</span><span><i class="dot bro"></i>${safe(playerLabel('younger'))}</span></div>` + days.map((d,i)=>{
+  const ordered = displayIds();
+  $('week-chart').innerHTML=`<div class="chart-legend">${ordered.map(id=>`<span><i class="dot ${themeFor(model.profiles[id])}"></i>${safe(playerLabel(id))}</span>`).join('')}</div>` + days.map((d,i)=>{
     const label=new Date(d).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'}),t=totals[i];
-    return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${palette[j]}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
+    return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${themeFor(model.profiles[ordered[j]])}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
   }).join('');
 }
 function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});}
@@ -104,7 +142,7 @@ function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[.
 function renderHistory(){const target=$('history-list');if(!target)return;const sessions=daySessions(),start=selectedDay,end=addDays(start,1);
  $('history-date').value=dateKey(start);
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
- const lines=ids.map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${palette[i]}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
+ const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))} · ${safe(deviceName(s.deviceId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
@@ -118,9 +156,15 @@ function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').cl
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){console.error(e);model.fromCache=true;toast(errorText(e));renderSync();}
 function disconnect(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];model.profiles={};model.sessions=[];model.presence=null;model.ready=false;}
-function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({profiles:ids.map(i=>model.profiles[i]?.name),settings:model.settings});if(hash===lastSettingsHash)return;
+function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({profiles:ids.map(i=>({name:model.profiles[i]?.name,birthDate:model.profiles[i]?.birthDate,gender:model.profiles[i]?.gender})),settings:model.settings});if(hash===lastSettingsHash)return;
  if(document.activeElement?.closest?.('#settings-form'))return;
- $('name-older').value=playerLabel('older');$('name-younger').value=playerLabel('younger');$('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);lastSettingsHash=hash;
+  for (const id of ids) {
+    $('name-'+id).value=playerLabel(id);
+    $('birth-'+id).value=model.profiles[id]?.birthDate||'';
+    $('gender-'+id).value=['female','male','neutral'].includes(model.profiles[id]?.gender) ? model.profiles[id].gender : 'neutral';
+    $('birth-'+id).max=dateKey(Date.now());
+  }
+  $('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);lastSettingsHash=hash;
 }
 function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
@@ -167,8 +211,14 @@ function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pend
  $('end-confirm-text').innerHTML=`<div>${safe(p.name)}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
 async function initFamily(){await runLocked(async()=>{const b=dbApi.writeBatch(db);b.set(refSettings(),{...defaultSettings(),createdAt:dbApi.serverTimestamp()});for(const id of ids)b.set(refProfile(id),{...playerBase(id),updatedAt:dbApi.serverTimestamp()});await b.commit();toast('家族データを作成しました');});}
 async function saveSettings(event){event.preventDefault();await runLocked(async()=>{
- const names=[$('name-older').value.trim(),$('name-younger').value.trim()],devices={sw1:$('device-sw1').value.trim(),sw2:$('device-sw2').value.trim()};if(!names.every(Boolean)||!Object.values(devices).every(Boolean))throw Error('名前を入力してください');
- const b=dbApi.writeBatch(db);ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),updatedAt:dbApi.serverTimestamp()}));b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,updatedAt:dbApi.serverTimestamp()},{merge:true});await b.commit();toast('設定を保存しました');
+  const names=ids.map(id=>$('name-'+id).value.trim());
+  const births=ids.map(id=>$('birth-'+id).value);
+  const genders=ids.map(id=>$('gender-'+id).value);
+  const devices={sw1:$('device-sw1').value.trim(),sw2:$('device-sw2').value.trim()};
+  if(!names.every(Boolean)||!Object.values(devices).every(Boolean))throw Error('名前を入力してください');
+  if(!births.every(validBirthDate))throw Error('生年月日を正しく入力してください（未来の日付は登録できません）。');
+  if(!genders.every(g=>['female','male','neutral'].includes(g)))throw Error('性別を選択してください。');
+ const b=dbApi.writeBatch(db);ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),birthDate:births[i],gender:genders[i],updatedAt:dbApi.serverTimestamp()}));b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,updatedAt:dbApi.serverTimestamp()},{merge:true});await b.commit();toast('設定を保存しました');
  });}
 async function editHistory(event){event.preventDefault();const sid=editingId;if(!sid)return;
  const a=new Date($('edit-start').value).getTime(),b=new Date($('edit-end').value).getTime();const orig=model.sessions.find(x=>x.sid===sid)||model.historyExtra?.items?.find(x=>x.sid===sid);
@@ -250,13 +300,7 @@ async function startFirebase(){
      import(`https://www.gstatic.com/firebasejs/${v}/firebase-auth.js`),
      import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`)]);
    firebase=fb;authApi=au;dbApi=fs;
-   
-const app = fb.initializeApp(firebaseConfig);
-auth = au.getAuth(app);
-db = fs.initializeFirestore(app, {
-  experimentalForceLongPolling: true
-});
-
+   const app=fb.initializeApp(firebaseConfig);auth=au.getAuth(app);db=fs.initializeFirestore(app,{experimentalForceLongPolling:true});
    initUiEvents();
    au.onAuthStateChanged(auth,async user=>{
      disconnect();if(!user){uid=null;showLogin();return;}
