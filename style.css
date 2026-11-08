@@ -134,3 +134,22 @@ body{color:var(--ui-ink)}
 .card{box-shadow:0 8px 23px #274b770d}
 #players,#pokemon-collection,#weekly-report,#settings-form,#audit-panel{scroll-margin-top:20px}
 @media(max-width:560px){.player{padding:15px;gap:10px}.jump-nav{gap:7px}.jump-nav a{font-size:12px;padding:9px 11px}.player .screen-summary{gap:7px}.player .screen-summary strong{font-size:15px}}
+
+/* v3.9: 子どものチャレンジ申請、保護者承認 */
+.activity-section{margin:18px 0}
+.activity-rewards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.activity-person{background:#f6f9fe;border:1px solid #ddeafb;border-radius:18px;padding:15px;min-width:0}
+.activity-person h3{margin:0 0 10px;font-size:18px}
+.activity-item{display:flex;justify-content:space-between;gap:12px;align-items:center;border-top:1px solid #e3eaf6;padding:10px 0}
+.activity-item strong,.activity-item small,.approval-item strong,.approval-item small{display:block}
+.activity-item small,.approval-item small{color:#687b94;margin-top:3px;font-size:12px}
+.activity-item .btn{min-height:42px;white-space:nowrap;padding:8px 12px}
+.approval-item{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:15px;border-bottom:1px solid #e5ebf4}
+.approval-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.approval-buttons .btn{min-height:42px;padding:9px 12px}
+@media(max-width:750px){.activity-rewards{grid-template-columns:1fr}.approval-item{align-items:flex-start;flex-direction:column}.approval-buttons{justify-content:flex-start}}
+
+/* v3.10: 仮ゲットと活動一覧 */
+.activity-person{margin:0}.activity-person summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:17px;list-style:none;padding:7px 0}.activity-person summary::-webkit-details-marker{display:none}.activity-person summary:after{content:'⌄';margin-left:auto;color:#6283aa}.activity-person[open] summary:after{content:'⌃'}.activity-person summary span{font-size:13px;color:#4b739a;font-weight:800}
+.activity-person > .tiny{margin:8px 0 4px}.provisional-label{color:#975d24!important;font-weight:900!important}.pokedex-provisional{margin:12px 0}.pokedex-provisional h3{font-size:16px;margin:0 0 10px}.provisional-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.provisional-card{border:1px dashed #e5bc80;background:#fff7e8;border-radius:16px;padding:13px}.provisional-card strong,.provisional-card small{display:block}.provisional-card strong{font-size:15px}.provisional-card small{font-size:12px;color:#916b35;margin-top:5px}
+@media(max-width:560px){.activity-person summary{align-items:flex-start;flex-direction:column;gap:4px}.activity-person summary:after{display:none}.activity-item{gap:8px}.activity-item strong{font-size:14px}}

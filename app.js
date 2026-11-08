@@ -1,5 +1,5 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
-import {POKEMON_NAMES,officialPokedexUrl,pokemonNoFromClaim} from './pokedex-data.js';
+import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.8.0';
+const version = 'v3.10.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -21,7 +21,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
@@ -141,7 +141,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
 const AUDIT_ACTIONS={start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
-  manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
+  manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
   history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
@@ -354,7 +354,98 @@ const POKEMON_DAY_MS=86400000, POKEMON_JST_MS=32400000;
 function rewardDayIndex(now=Date.now()){return Math.floor((now+POKEMON_JST_MS)/POKEMON_DAY_MS);}
 function rewardDocumentId(id,day=rewardDayIndex()){return `${id}_${day}`;}
 function rewardRef(id,day=rewardDayIndex()){return dbApi.doc(db,'households',householdId,'rewards',rewardDocumentId(id,day));}
+
+// v3.9: 世代別解放。従来の151匹の記録は図鑑番号を固定して保存し直さない。
+const GENERATIONS = Object.freeze([
+  {name:'第1世代',end:151,needed:0},
+  {name:'第2世代',end:251,needed:30},
+  {name:'第3世代',end:386,needed:60},
+  {name:'第4世代',end:493,needed:100},
+  {name:'第5世代',end:649,needed:150},
+  {name:'第6世代',end:721,needed:220},
+  {name:'第7世代',end:809,needed:300},
+  {name:'第8世代',end:905,needed:400},
+  {name:'第9世代',end:1025,needed:500}
+]);
+// v3.10: 10種類の活動。子ども・日付ごとに活動報酬は最大3匹（仮獲得を含む）。
+const ACTIVITY_KINDS = Object.freeze({
+  study:'勉強した', reading:'本を読んだ', exercise:'体を動かした',
+  helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
+  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた'
+});
+const ACTIVITY_DAILY_MAX = 3;
+const activitySlotId = (id,day,slot) => `${id}_${day}_${slot}`;
+const activitySlotRef = (id,day,slot) => dbApi.doc(db,'households',householdId,'activitySlots',activitySlotId(id,day,slot));
+function dailyRequests(id,day=rewardDayIndex()){
+  return model.activityRequests.filter(r=>r.childId===id && r.dayIndex===day);
+}
+function dailyActivityActive(id,day=rewardDayIndex()){
+  return dailyRequests(id,day).filter(r=>r.status==='pending'||r.status==='approved').length;
+}
+// 仮獲得も予約済みと見なし、同じポケモンが出にくいようにする。
+// 本日の確定・仮獲得は競合する可能性があるため、承認時に重複の最終確認も行う。
+function provisionalPokemonFor(id,requestId,alsoReserved=[]){
+  const owned=new Set(pokemonMapFor(id).keys());
+  for(const r of model.activityRequests){
+    if(r.childId===id && r.status==='pending' && Number.isInteger(r.candidateNo))owned.add(r.candidateNo);
+  }
+  for(const no of alsoReserved)if(Number.isInteger(no)&&no>0)owned.add(no);
+  const max=GENERATIONS[generationFor(pokemonMapFor(id).size)].end;
+  const pool=[];for(let no=1;no<=max;no++)if(!owned.has(no))pool.push(no);
+  return pool.length?pool[hashReward(requestId)%pool.length]:1+hashReward(requestId)%POKEDEX_TOTAL;
+}
+
 function rewardClaims(id){return model.rewards.filter(r=>r.childId===id);}
+function activityRequestId(id,kind,day=rewardDayIndex()){return `${id}_${day}_${kind}`;}
+function activityRef(id,kind,day=rewardDayIndex()){
+  return dbApi.doc(db,'households',householdId,'activityRequests',activityRequestId(id,kind,day));
+}
+function activityRewardRef(requestId){return dbApi.doc(db,'households',householdId,'rewards',`activity_${requestId}`);}
+function claimIdOf(c){return c.rewardId||`${c.childId}_${c.dayIndex}`;}
+function claimOrder(a,b){
+  return stampMillis(a.claimedAt)-stampMillis(b.claimedAt)
+    || claimIdOf(a).localeCompare(claimIdOf(b));
+}
+function generationFor(count){
+  return GENERATIONS.reduce((acc,g,i)=>count>=g.needed?i:acc,0);
+}
+function hashReward(value){
+  let hash=2166136261;
+  for(let i=0;i<value.length;i++)hash=Math.imul(hash^value.charCodeAt(i),16777619)>>>0;
+  return hash>>>0;
+}
+// 旧版の獲得結果を保持。v3.9以降は「まだ持っていない番号」からだけ選ぶ。
+// 図鑑の表示はクライアント側で確定済みのサーバー記録を同順に再計算する。
+function assignedPokemon(id,additional=[]){
+  const docs=[...rewardClaims(id),...additional].sort(claimOrder);
+  const result=new Map(), owned=new Set();
+  for(const c of docs){
+    const rewardId=claimIdOf(c);
+    let no;
+    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)) {
+      no=c.pokemonNo;
+    }else if(c.catalogVersion===2){
+      const gen=generationFor(owned.size),max=GENERATIONS[gen].end;
+      const candidates=[];
+      for(let i=1;i<=max;i++)if(!owned.has(i))candidates.push(i);
+      if(candidates.length){no=candidates[hashReward(rewardId)%candidates.length];}
+      else {
+        // 全1025匹をコンプリートした場合だけ重複を許す。
+        no=1+hashReward(rewardId)%POKEDEX_TOTAL;
+      }
+    }else{
+      no=pokemonNoFromClaim(c); // v3.7-v3.8の従来結果を保存
+    }
+    result.set(rewardId,no);
+    owned.add(no);
+  }
+  return result;
+}
+function pokemonMapFor(id){
+  const counts=new Map();
+  for(const no of assignedPokemon(id).values())counts.set(no,(counts.get(no)||0)+1);
+  return counts;
+}
 function lastSessionFor(id){
   const p=model.profiles[id];
   return model.sessions.find(s=>s.sid===p?.lastSessionId && s.childId===id) || null;
@@ -363,8 +454,10 @@ function claimEligibility(id,now=Date.now()){
   const p=model.profiles[id];
   if(!p || !model.rewardsLoaded)return {ok:false,label:'図鑑を読み込み中'};
   const day=rewardDayIndex(now);
-  if(model.rewards.some(r=>r.childId===id && r.dayIndex===day) || Number(p.rewardLastDayIndex)===day)
-    return {ok:false,label:'きょうのポケモンはゲット済み'};
+  // 1日1回のゲーム報酬。勉強・読書・運動の獲得は別枠。
+  if(model.rewards.some(r=>r.childId===id && r.kind==='rest_completed' && r.dayIndex===day)
+     || Number(p.rewardLastDayIndex)===day)
+    return {ok:false,label:'きょうのゲーム報酬はゲット済み'};
   const s=lastSessionFor(id);
   if(!s || !s.sid || s.activityType==='video')return {ok:false,label:'ゲームと休憩を守ったらチャレンジ'};
   if(s.sid===p.rewardLastSessionId)return {ok:false,label:'次のゲームと休憩でチャレンジ'};
@@ -377,16 +470,9 @@ function claimEligibility(id,now=Date.now()){
 }
 function rewardActionFor(id,now=Date.now()){
   const state=claimEligibility(id,now);
-  return `<div class="pokemon-reward-action"><span>🎁 ポケモンチャレンジ</span>${!isParentPage && state.ok
+  return `<div class="pokemon-reward-action"><span>🎁 ゲーム・休憩のごほうび</span>${!isParentPage && state.ok
     ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>ポケモンをゲット！</button>`
     : `<small>${safe(state.label)}</small>`}</div>`;
-}
-function pokemonMapFor(id){
-  const counts=new Map();
-  for(const item of rewardClaims(id)){
-    const no=pokemonNoFromClaim(item);counts.set(no,(counts.get(no)||0)+1);
-  }
-  return counts;
 }
 function renderPokedex(){
   const target=$('pokedex-grid');if(!target)return;
@@ -394,27 +480,44 @@ function renderPokedex(){
   if(!ids.includes(select.value))select.value=displayIds()[0];
   for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
-  const id=select.value, claims=rewardClaims(id), map=pokemonMapFor(id);
+  const id=select.value,claims=rewardClaims(id),map=pokemonMapFor(id);
   const unique=map.size,duplicates=claims.length-unique;
-  $('pokedex-summary').textContent=`あつめた種類：${unique} / 151匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回`;
-  $('pokedex-progress').style.width=`${(unique/151*100).toFixed(2)}%`;
-  const next=[30,50,100,151].find(x=>unique<x);
-  $('pokedex-milestone').textContent=next?`次の目標：${next}種類まであと${next-unique}種類`:'151種類コンプリート！';
+  const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
+  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回`;
+  $('pokedex-progress').style.width=`${(unique/POKEDEX_TOTAL*100).toFixed(2)}%`;
+  const next=GENERATIONS[genIndex+1];
+  $('pokedex-milestone').textContent=next
+    ? `${GENERATIONS[genIndex].name}まで解放中（No.001〜${max}）。次の${next.name}まであと${Math.max(0,next.needed-unique)}種類`
+    : '第9世代まで解放中！ 全1,025匹を目指そう';
   const currentFilter=filter.value;
-  target.innerHTML=POKEMON_NAMES.map((name,i)=>{
-    const no=i+1,count=map.get(no)||0;
-    if(currentFilter==='owned'&&!count)return '';
-    const label=`No.${String(no).padStart(3,'0')}`;
-    if(count)return `<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong>${count>1?`<small>${count}回ゲット</small>`:'<small>公式ずかんを見る</small>'}</a>`;
-    return `<div class="pokedex-entry locked" aria-label="${label} 未発見"><span class="pokedex-number">${label}</span><span class="pokedex-mark">？</span><strong>？？？</strong><small>まだ見つけていない</small></div>`;
-  }).join('') || '<p class="empty">まだポケモンをゲットしていません。ゲームを終えて休憩を守ろう！</p>';
-  $('pokedex-note').textContent=model.rewardsServerConfirmed?'図鑑データはクラウドで同期しています。':'オフラインまたは同期確認中のため、獲得操作は停止しています。';
+  const entries=[];
+  // 初期描画負荷を抑えるため、全件表示でも現在解放中の番号まで。
+  for(let no=1;no<=max;no++){
+    const count=map.get(no)||0;
+    if(currentFilter==='owned'&&!count)continue;
+    const name=pokemonName(no),label=`No.${String(no).padStart(4,'0')}`;
+    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong>${count>1?`<small>${count}回ゲット</small>`:'<small>公式ずかんを見る</small>'}</a>`);
+    else entries.push(`<div class="pokedex-entry locked" aria-label="${label} 未発見"><span class="pokedex-number">${label}</span><span class="pokedex-mark">？</span><strong>？？？</strong><small>まだ見つけていない</small></div>`);
+  }
+  target.innerHTML=entries.join('')||'<p class="empty">まだポケモンをゲットしていません。ゲームの休憩や今日のチャレンジでゲットしよう！</p>';
+  renderProvisionalPokedex(id);
+  $('pokedex-note').textContent=(model.rewardsServerConfirmed?'図鑑データはクラウドで同期しています。':'オフラインまたは同期確認中のため、獲得操作は停止しています。')
+    +' 新しいポケモンの日本語名は外部データから読み込むため、通信環境によっては番号のみ表示されます。';
+}
+function renderProvisionalPokedex(id){
+  const root=$('pokedex-provisional');if(!root)return;
+  const pending=model.activityRequests.filter(r=>r.childId===id&&r.status==='pending');
+  if(!pending.length){root.innerHTML='';return;}
+  root.innerHTML='<h3>⏳ 仮ゲット（保護者の確認待ち）</h3><div class="provisional-grid">'+pending.map(r=>{
+    const no=Number(r.candidateNo),pokemon=Number.isInteger(no)&&no>0?`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`:'ポケモンは承認時に決まります';
+    return `<div class="provisional-card"><strong>${pokemon}</strong><small>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}・確認待ち</small><small>まだ正式な図鑑には入りません</small></div>`;
+  }).join('')+'</div>';
 }
 function announcePokemon(id,number,isDuplicate){
   const dialog=$('pokemon-result');if(!dialog)return;
   $('pokemon-result-title').textContent=`${playerLabel(id)}、${isDuplicate?'また会えたね！':'新しいポケモンをゲット！'}`;
-  $('pokemon-result-name').textContent=POKEMON_NAMES[number-1];
-  $('pokemon-result-number').textContent=`全国図鑑 No.${String(number).padStart(3,'0')}`;
+  $('pokemon-result-name').textContent=pokemonName(number);
+  $('pokemon-result-number').textContent=`全国図鑑 No.${String(number).padStart(4,'0')}`;
   $('pokemon-result-link').href=officialPokedexUrl(number);
   if(!dialog.open)dialog.showModal();
 }
@@ -439,15 +542,110 @@ async function claimPokemon(id){
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
       tx.update(ref,{rewardLastSessionId:sid,rewardLastDayIndex:day,updatedAt:dbApi.serverTimestamp()});
-      tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed'});
+      tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:2});
       appendAudit(tx,'pokemon_claim',id,'本日は未獲得','ポケモンをゲット',sid);
-      return {childId:id,sessionId:sid,dayIndex:day};
+      return {childId:id,sessionId:sid,dayIndex:day,kind:'rest_completed',catalogVersion:2,rewardId:rewardDocumentId(id,day),claimedAt:{toMillis:()=>Date.now()}};
     });
-    const number=pokemonNoFromClaim(result),duplicate=pokemonMapFor(id).has(number);
+    const number=assignedPokemon(id,[result]).get(result.rewardId),duplicate=pokemonMapFor(id).has(number);
     announcePokemon(id,number,duplicate);
   });
 }
-
+function requestFor(id,kind,day=rewardDayIndex()){
+  return model.activityRequests.find(r=>r.childId===id&&r.activityKind===kind&&r.dayIndex===day);
+}
+function renderActivities(){
+  const root=$('activity-rewards');if(!root)return;
+  // Keep each child's panel open when realtime snapshots refresh the activity list.
+  const expanded=new Set([...root.querySelectorAll('details.activity-person[open]')].map(el=>el.dataset.child));
+  if(!model.ready||!model.activityLoaded||!model.rewardsLoaded){root.innerHTML='<p class="empty">ごほうびを読み込み中…</p>';return;}
+  root.innerHTML=displayIds().map(id=>{
+    const used=dailyActivityActive(id),remaining=Math.max(0,ACTIVITY_DAILY_MAX-used);
+    const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
+      const req=requestFor(id,kind),number=Number(req?.candidateNo);
+      const label=Number.isInteger(number)&&number>0?`${pokemonName(number)}（No.${String(number).padStart(4,'0')}）`:'';
+      const status=req?.status==='approved'?'承認済み・正式ゲット':req?.status==='rejected'?'見送り・仮獲得を取り消しました':req?'仮ゲット・保護者の確認待ち':'申請できます';
+      const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
+      return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${req||remaining===0||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy?'disabled':''}>${req?'申請済み':remaining===0?'本日上限':'できた！申請'}</button>`:''}</div>`;
+    }).join('');
+    return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">項目ごとに1日1回。仮ゲット中も1枠使います。不承認なら枠が戻ります。</p>${actions}</details>`;
+  }).join('');
+}
+function renderApprovals(){
+  const root=$('activity-approvals');if(!root||!isParentPage)return;
+  if(!model.activityLoaded){root.innerHTML='<p class="empty">申請を読み込み中…</p>';return;}
+  const pending=model.activityRequests.filter(r=>r.status==='pending')
+    .sort((a,b)=>stampMillis(a.requestedAt)-stampMillis(b.requestedAt));
+  const recent=model.activityRequests.filter(r=>r.status!=='pending')
+    .sort((a,b)=>stampMillis(b.reviewedAt)-stampMillis(a.reviewedAt)).slice(0,8);
+  const requests=[...pending,...recent];
+  root.innerHTML=`<p class="tiny">未承認：${pending.length}件。承認すると仮ゲットが正式獲得になり、見送りでは消えます。</p>`+
+    (requests.length?requests.map(r=>{
+      const kind=ACTIVITY_KINDS[r.activityKind]||r.activityKind;
+      const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
+      const no=Number(r.candidateNo);
+      const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:'';
+      return `<div class="approval-item"><div><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
+    }).join(''):'<p class="empty">申請はまだありません。</p>');
+}
+async function requestActivity(id,kind){
+  if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
+  if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
+  if(requestFor(id,kind))return toast('今日はこの項目をすでに申請しています。');
+  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
+  if(!confirm(`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`))return;
+  await runLocked(async()=>{
+    const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
+    let candidate=0;
+    await dbApi.runTransaction(db,async tx=>{
+      const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
+      if(snapshots[0].exists())throw Error('今日はすでにこの項目を申請しています。');
+      // 旧v3.9の申請が残る移行日のみ、画面に表示される既存申請数も加味する。
+      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は3匹までです。');
+      const available=[1,2,3].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
+      if(!available)throw Error('きょうの活動報酬は3枠すべて使用中です。');
+      const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
+      candidate=provisionalPokemonFor(id,rid,otherReserved);
+      tx.set(ref,{childId:id,activityKind:kind,dayIndex:day,status:'pending',requestedBy:uid,requestedAt:dbApi.serverTimestamp(),slotNo:available,candidateNo:candidate});
+      tx.set(activitySlotRef(id,day,available),{childId:id,dayIndex:day,slotNo:available,requestId:rid,candidateNo:candidate,updatedAt:dbApi.serverTimestamp()});
+      appendAudit(tx,'activity_request',id,'未申請','仮ゲット・承認待ち',rid);
+    });
+    toast(`${pokemonName(candidate)}を仮ゲット！ 保護者の承認で正式ゲットになります。`);
+    // 反映はFirestoreのスナップショットを待つ（承認前に正式図鑑へ入れない）。
+  });
+}
+async function reviewActivity(requestId,action){
+  if(!isParentPage||!['approve','reject'].includes(action))return;
+  const req=model.activityRequests.find(r=>r.requestId===requestId);
+  if(!req||req.status!=='pending')return;
+  const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
+  if(!confirm(`${label}を${action==='approve'?'承認して仮ゲットを正式獲得にし':'見送りにし、仮ゲットを取り消し'}ますか？`))return;
+  await runLocked(async()=>{
+    const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId),rewardRef=activityRewardRef(requestId);
+    const doc=await dbApi.runTransaction(db,async tx=>{
+      const snap=await tx.get(requestRef),oldReward=await tx.get(rewardRef);
+      if(!snap.exists()||snap.data().status!=='pending'||oldReward.exists())throw Error('この申請はすでに処理されています。');
+      const d=snap.data(),hasSlot=Number.isInteger(d.slotNo)&&d.slotNo>=1&&d.slotNo<=3;
+      const slotRef=hasSlot?activitySlotRef(d.childId,d.dayIndex,d.slotNo):null;
+      const slotSnap=slotRef?await tx.get(slotRef):null;
+      if(hasSlot&&(!slotSnap.exists()||slotSnap.data().requestId!==requestId))throw Error('申請枠の状態が不一致です。');
+      tx.update(requestRef,{status:action==='approve'?'approved':'rejected',reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
+      if(action==='approve'){
+        const fixed=Number.isInteger(d.candidateNo)&&d.candidateNo>=1&&d.candidateNo<=POKEDEX_TOTAL;
+        tx.set(rewardRef,{childId:d.childId,dayIndex:d.dayIndex,kind:'activity',activityKind:d.activityKind,
+          sourceRequestId:requestId,sessionId:'',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:fixed?3:2,
+          ...(fixed?{pokemonNo:d.candidateNo}:{})});
+      }else if(hasSlot){
+        tx.update(slotRef,{requestId:'',candidateNo:0,updatedAt:dbApi.serverTimestamp()});
+      }
+      appendAudit(tx,action==='approve'?'activity_approve':'activity_reject',d.childId,'仮ゲット・申請中',action==='approve'?'正式獲得':'見送り・仮ゲット取消',requestId);
+      return {...d,rewardId:`activity_${requestId}`,catalogVersion:Number.isInteger(d.candidateNo)?3:2,pokemonNo:d.candidateNo,kind:'activity',claimedAt:{toMillis:()=>Date.now()}};
+    });
+    if(action==='approve'){
+      const no=assignedPokemon(doc.childId,[doc]).get(doc.rewardId);
+      toast(`${label}を承認しました。${pokemonName(no)}を正式ゲット！`);
+    }else toast(`${label}を見送りにしました。仮ゲットは取り消しました。`);
+  });
+}
 function currentDateTick(){const now=Date.now();$('clock').textContent=clock(now);$('today-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'});}
 function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!node)return;
   const online=navigator.onLine;
@@ -636,7 +834,7 @@ function render(now=Date.now()){
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();if(model.ready){renderWeek();renderHistory();}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();if(model.ready){renderWeek();renderHistory();}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -645,7 +843,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;previousRest.clear();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;previousRest.clear();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -707,6 +905,11 @@ function listen(){
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
    renderPokedex();renderPlayers();
+ },listenerError));
+ cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
+   model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
+   model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+   renderActivities();renderApprovals();renderPokedex();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -985,7 +1188,7 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
  }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
- if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
@@ -1022,6 +1225,8 @@ function initUiEvents(){
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
+   if(btn.dataset.activityRequest){const [id,kind]=btn.dataset.activityRequest.split(':');requestActivity(id,kind);}
+   if(btn.dataset.activityReview){const [rid,action]=btn.dataset.activityReview.split(':');reviewActivity(rid,action);}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
@@ -1108,3 +1313,5 @@ async function startFirebase(){
 }
 currentDateTick();setInterval(currentDateTick,1000);
 startFirebase();
+
+loadExtendedPokemonNames().then(()=>{renderPokedex();}).catch(()=>{});
