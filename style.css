@@ -220,3 +220,31 @@ body{color:var(--ui-ink)}
 .bonus-person small{font-size:12px;color:#8a99ac;text-align:right}
 .bonus-person .btn{min-width:194px;min-height:44px}
 @media(max-width:620px){.bonus-person{align-items:stretch;flex-direction:column}.bonus-person small{text-align:left}.bonus-person .btn{width:100%;min-width:0}}
+
+/* v3.11.2 終了確認：6歳児が読みやすい表示 */
+.finish-warning {background:#fff0eb;border:3px solid #e15b40;border-radius:18px;padding:18px 16px;margin:12px 0;text-align:center;color:#72281d;line-height:1.65;}
+.finish-warning-icon {font-size:2.5rem;line-height:1.1;}
+.finish-warning-title {display:block;font-size:clamp(1.25rem,4.2vw,1.75rem);margin:4px 0 10px;}
+.finish-warning p {font-size:clamp(1.05rem,3.7vw,1.32rem);margin:10px 0;}
+.finish-warning p strong {font-size:1.12em;text-decoration:underline;text-underline-offset:3px;}
+.finish-warning .finish-warning-note {font-size:1rem;color:#5b392f;}
+.finish-confirm {display:flex;gap:12px;align-items:center;background:#f1f7ed;border-radius:12px;margin:14px 0;padding:14px;font-weight:800;font-size:1.3rem;cursor:pointer;}
+.finish-confirm input {width:28px;height:28px;accent-color:#28744c;flex-shrink:0;}
+#confirm-end:disabled {opacity:.45;cursor:not-allowed;}
+.penalty-notice {color:#8b3125;background:#fff0e9;border:2px solid #db806b;padding:12px 15px;border-radius:12px;line-height:1.6;font-weight:700;}
+.honesty-admin-list {display:grid;gap:12px;}
+.honesty-person {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;border:1px solid #dce3ec;border-radius:14px;padding:14px;}
+.honesty-person-info {display:flex;flex-direction:column;gap:6px;min-width:180px;flex:1;}
+.honesty-person-info strong {font-size:1.15rem;}
+.honesty-person-info small {line-height:1.5;color:#505966;}
+.honesty-person-actions {display:flex;gap:7px;flex-wrap:wrap;}
+#honesty-form label:not(.honesty-confirm) {display:grid;gap:5px;margin:12px 0;font-weight:700;}
+#honesty-form input[type='datetime-local'],#honesty-form select {width:100%;max-width:100%;padding:12px;font-size:1rem;border:1px solid #9dabbd;border-radius:8px;}
+.honesty-impact {background:#fff1e9;border-left:4px solid #da6a44;border-radius:7px;padding:13px;margin:14px 0;line-height:1.6;font-weight:700;}
+.honesty-confirm {display:flex;gap:9px;align-items:center;margin:14px 0;}
+.honesty-confirm input {width:20px;height:20px;flex-shrink:0;}
+.honesty-last-info {line-height:1.6;color:#3b4657;}
+@media(max-width:540px){.honesty-person-actions {width:100%;}.honesty-person-actions button {flex:1;min-width:130px;}.finish-warning{padding:13px 10px;}}
+/* dialog共通のlabel / inputルールより優先し、確認チェックを横並びにする */
+.dialog-body label.finish-confirm,.dialog-body label.honesty-confirm {display:flex;align-items:center;gap:12px;}
+.dialog-body label.finish-confirm input,.dialog-body label.honesty-confirm input {width:27px;height:27px;min-height:27px;padding:0;margin:0;flex:0 0 27px;}

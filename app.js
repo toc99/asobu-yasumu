@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.11.1';
+const version = 'v3.11.2';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -142,7 +142,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
 }
 const AUDIT_ACTIONS={start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
-  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット'};
+  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
   node.innerHTML=entries.length?entries.map(a=>{
@@ -395,6 +395,14 @@ function provisionalPokemonFor(id,requestId,alsoReserved=[]){
   return pool.length?pool[hashReward(requestId)%pool.length]:1+hashReward(requestId)%POKEDEX_TOTAL;
 }
 
+// v3.11.2: parent-confirmed early finish reporting. Rules enforce the same guards.
+function rewardSuspended(p,now=Date.now()){
+  return Number(p?.rewardSuspendedUntil||0)>now;
+}
+function rewardSuspensionText(p,now=Date.now()){
+  return rewardSuspended(p,now)?`あたらしい ポケモンは ${dateTime(Number(p.rewardSuspendedUntil))}まで おやすみ`:' ';
+}
+function honestCorrectionAllowed(s){return !!s&&(s.edited!==true || s.correctionKind==='honest');}
 function rewardClaims(id){return model.rewards.filter(r=>r.childId===id);}
 function activityRequestId(id,kind,day=rewardDayIndex()){return `${id}_${day}_${kind}`;}
 function activityRef(id,kind,day=rewardDayIndex()){
@@ -442,8 +450,13 @@ function assignedPokemon(id,additional=[]){
   return result;
 }
 function pokemonMapFor(id){
-  const counts=new Map();
-  for(const no of assignedPokemon(id).values())counts.set(no,(counts.get(no)||0)+1);
+  // 取り消し済みの報酬も割当て順には残す。後から取得したポケモンの番号がずれないようにする。
+  const counts=new Map(),assigned=assignedPokemon(id);
+  for(const claim of rewardClaims(id)){
+    if(claim.revoked===true)continue;
+    const no=assigned.get(claimIdOf(claim));
+    if(Number.isInteger(no))counts.set(no,(counts.get(no)||0)+1);
+  }
   return counts;
 }
 function lastSessionFor(id){
@@ -453,6 +466,7 @@ function lastSessionFor(id){
 function claimEligibility(id,now=Date.now()){
   const p=model.profiles[id];
   if(!p || !model.rewardsLoaded)return {ok:false,label:'図鑑を読み込み中'};
+  if(rewardSuspended(p,now))return {ok:false,label:rewardSuspensionText(p,now)};
   const day=rewardDayIndex(now);
   // 1日1回のゲーム報酬。勉強・読書・運動の獲得は別枠。
   if(model.rewards.some(r=>r.childId===id && r.kind==='rest_completed' && r.dayIndex===day)
@@ -460,8 +474,8 @@ function claimEligibility(id,now=Date.now()){
     return {ok:false,label:'きょうのゲーム報酬はゲット済み'};
   const s=lastSessionFor(id);
   if(!s || !s.sid || s.activityType==='video')return {ok:false,label:'ゲームと休憩を守ったらチャレンジ'};
-  if(s.sid===p.rewardLastSessionId)return {ok:false,label:'次のゲームと休憩でチャレンジ'};
-  if(s.createdBy!==uid || s.edited || s.duration<MIN || s.end<now-2*DAY)
+  if(s.sid===p.rewardLastSessionId||s.sid===p.rewardBlockedSessionId)return {ok:false,label:'このゲームのごほうびは おやすみ'};
+  if(s.createdBy!==uid || !honestCorrectionAllowed(s) || s.duration<MIN || s.end<now-2*DAY)
     return {ok:false,label:'次のゲームと休憩でチャレンジ'};
   if(p.activeStart>0||videoStartedMillis(p)>0)return {ok:false,label:'ゲーム・動画を終えてからチャレンジ'};
   if(waitingRemaining(p,now)>0)return {ok:false,label:'おやすみを守ったらゲット！'};
@@ -480,10 +494,10 @@ function renderPokedex(){
   if(!ids.includes(select.value))select.value=displayIds()[0];
   for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
-  const id=select.value,claims=rewardClaims(id),map=pokemonMapFor(id);
+  const id=select.value,allClaims=rewardClaims(id),claims=allClaims.filter(c=>c.revoked!==true),map=pokemonMapFor(id);
   const unique=map.size,duplicates=claims.length-unique;
   const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
-  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回`;
+  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回${allClaims.length>claims.length?`　・　対象外：${allClaims.length-claims.length}件`:''}`;
   $('pokedex-progress').style.width=`${(unique/POKEDEX_TOTAL*100).toFixed(2)}%`;
   const next=GENERATIONS[genIndex+1];
   $('pokedex-milestone').textContent=next
@@ -532,12 +546,12 @@ async function claimPokemon(id){
       if(!pSnap.exists())throw Error('プロフィールを取得できません。');
       if(rewardSnap.exists())throw Error('きょうのポケモンはもうゲット済みです。');
       const p=pSnap.data(),sid=p.lastSessionId;
-      if(!sid||sid===p.rewardLastSessionId || Number(p.rewardLastDayIndex)===day || p.activeStart>0 || videoStartedMillis(p)>0)
+      if(!sid||sid===p.rewardLastSessionId || sid===p.rewardBlockedSessionId || rewardSuspended(p) || Number(p.rewardLastDayIndex)===day || p.activeStart>0 || videoStartedMillis(p)>0)
         throw Error('このゲーム記録ではゲットできません。');
       const sSnap=await tx.get(dbApi.doc(sessionsRef(),sid));
       if(!sSnap.exists())throw Error('ゲームの記録を確認できません。');
       const s=sSnap.data(),now=Date.now();
-      if(s.childId!==id||s.activityType==='video'||s.createdBy!==uid||s.edited||s.duration<MIN||s.end<now-2*DAY)
+      if(s.childId!==id||s.activityType==='video'||s.createdBy!==uid||!honestCorrectionAllowed(s)||s.duration<MIN||s.end<now-2*DAY)
         throw Error('この記録は獲得の対象外です。次のゲーム終了後に挑戦してください。');
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
@@ -570,7 +584,7 @@ function renderBonuses(){
     child.innerHTML=displayIds().map(id=>{
       const count=availableBonusGrants(id).length;
       return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし'}</span></div>`+
-        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>🎉 ポケモンを1匹ゲット！</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
+        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>🎉 ポケモンを1匹ゲット！</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
         '</div>';
     }).join('');
   }else if(admin){
@@ -601,6 +615,7 @@ async function grantSpecialBonus(id){
 async function claimSpecialBonus(id){
   if(isParentPage||!ids.includes(id)||busy)return;
   if(!model.bonusServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウドの最新状態を確認中です。');
+  if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const grant=availableBonusGrants(id)[0];
   if(!grant)return toast('受け取れる特別ボーナスはありません。');
   await runLocked(async()=>{
@@ -611,6 +626,8 @@ async function claimSpecialBonus(id){
       if(!grantSnap.exists()||grantSnap.data().status!=='available'||grantSnap.data().childId!==id)
         throw Error('特別ボーナスはすでに受け取り済みか、対象が異なります。');
       if(rewardSnap.exists())throw Error('この特別ボーナスはすでにゲット済みです。');
+      const pSnap=await tx.get(refProfile(id));
+      if(!pSnap.exists()||rewardSuspended(pSnap.data()))throw Error('いまはポケモンを受け取れません。');
       tx.update(grantRef,{status:'claimed',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),rewardId:rewardRef.id});
       tx.set(rewardRef,{childId:id,grantId:grant.grantId,sessionId:'',dayIndex:rewardDayIndex(),
         kind:'special_bonus',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:2});
@@ -749,7 +766,7 @@ function renderActivities(){
       const label=Number.isInteger(number)&&number>0?`${pokemonName(number)}（No.${String(number).padStart(4,'0')}）`:'';
       const status=req?.status==='approved'?'承認済み・正式ゲット':req?.status==='rejected'?'見送り・仮獲得を取り消しました':req?'仮ゲット・保護者の確認待ち':'申請できます';
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
-      return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${req||remaining===0||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy?'disabled':''}>${req?'申請済み':remaining===0?'本日上限':'できた！申請'}</button>`:''}</div>`;
+      return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${req||remaining===0||rewardSuspended(model.profiles[id])||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy?'disabled':''}>${req?'申請済み':rewardSuspended(model.profiles[id])?'ごほうびおやすみ中':remaining===0?'本日上限':'できた！申請'}</button>`:''}</div>`;
     }).join('');
     return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">項目ごとに1日1回。仮ゲット中も1枠使います。不承認なら枠が戻ります。</p>${actions}</details>`;
   }).join('');
@@ -781,12 +798,13 @@ function renderApprovals(){
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
     const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:'';
-    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
+    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
   }).join(''):'<p class="empty">この条件に該当する申請はありません。</p>');
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
   if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
+  if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   if(requestFor(id,kind))return toast('今日はこの項目をすでに申請しています。');
   if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
   if(!confirm(`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`))return;
@@ -814,6 +832,7 @@ async function reviewActivity(requestId,action){
   if(!isParentPage||!['approve','reject'].includes(action))return;
   const req=model.activityRequests.find(r=>r.requestId===requestId);
   if(!req||req.status!=='pending')return;
+  if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))return toast('ポケモン獲得停止中です。停止が終わってから承認してください。');
   const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
   if(!confirm(`${label}を${action==='approve'?'承認して仮ゲットを正式獲得にし':'見送りにし、仮ゲットを取り消し'}ますか？`))return;
   await runLocked(async()=>{
@@ -843,6 +862,156 @@ async function reviewActivity(requestId,action){
     }else toast(`${label}を見送りにしました。仮ゲットは取り消しました。`);
   });
 }
+// v3.11.2 事実確認は必ず保護者。未確認のズル判定や子どもからの報酬削除はしない。
+let honestyPendingChild=null;
+const CHEAT_RESET_WINDOW=30*DAY;
+function recentCheatCount(p,now=Date.now()){
+  return Number(p?.cheatLastAt||0)>0 && now-Number(p.cheatLastAt)<=CHEAT_RESET_WINDOW
+    ?Math.max(0,Number(p.cheatStrikeCount)||0):0;
+}
+function lastCorrectableSession(id){
+  const p=model.profiles[id];
+  if(!p||p.activeStart!==0||videoStartedMillis(p)>0||!p.lastSessionId)return null;
+  return model.sessions.find(s=>s.childId===id&&s.sid===p.lastSessionId&&s.activityType!=='video')||null;
+}
+function preciseDateInput(t){
+  const d=new Date(t);
+  return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function renderHonestyAdmin(){
+  const node=$('honesty-admin-list');if(!node||!isParentPage)return;
+  if(!model.ready){node.innerHTML='<p class="empty">記録を読み込み中…</p>';return;}
+  node.innerHTML=displayIds().map(id=>{
+    const p=model.profiles[id],s=lastCorrectableSession(id),blocked=rewardSuspended(p);
+    const previous=Number(p.cheatStrikeCount)||0;
+    const count=recentCheatCount(p);
+    const canApply=!!s&&s.edited!==true&&Number.isFinite(s.end)&&s.end<=Date.now()&&canOperate();
+    const canRestore=!!s&&p.cheatLastSessionId===s.sid && !!p.cheatPenaltyPrevious;
+    const note=!s?'最後のゲーム終了履歴がありません。':
+      `最後の終了申告：${dateTime(s.end)} ／ ${brief(s.duration)}${s.edited?'（確認・修正済み）':''}`;
+    return `<div class="honesty-person"><div class="honesty-person-info"><strong>${safe(playerLabel(id))}</strong>`+
+      `<small>${safe(note)}</small><small>直近30日以内の確認件数：${count}回${previous!==count?'（カウント期間外はリセット）':''}`+
+      `${blocked?` ／ 新規獲得停止：${safe(dateTime(Number(p.rewardSuspendedUntil)))}まで`:''}</small></div>`+
+      `<div class="honesty-person-actions"><button type="button" class="btn outline" data-honesty-open="${id}" ${busy||!canApply?'disabled':''}>終了申告を確認・修正</button>`+
+      `${canRestore?`<button type="button" class="btn secondary" data-honesty-restore="${id}" ${busy||!canOperate()?'disabled':''}>直前の判定を解除</button>`:''}</div></div>`;
+  }).join('');
+}
+function updateHonestyImpact(){
+  const el=$('honesty-impact');if(!el)return;
+  const id=honestyPendingChild,p=model.profiles[id];
+  if(!p)return;
+  const cheating=$('honesty-kind').value==='cheat';
+  const repeat=recentCheatCount(p)+1>=2;
+  el.textContent=cheating?
+    `このゲームのごほうびは無効。${repeat?'確認が2回目以降のため、新しいポケモンの獲得を24時間停止します。':'今回が初回なので24時間停止はしません。'}`:
+    '自分から正直に申告した場合は、休憩時間の修正だけ行います。新しいペナルティはありません。';
+}
+function openHonestyDialog(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate())return;
+  const s=lastCorrectableSession(id);
+  if(!s||s.edited||s.end>=Date.now())return toast('修正対象の最新ゲーム終了記録がありません。');
+  honestyPendingChild=id;
+  $('honesty-title').textContent=`${playerLabel(id)}：終了申告の確認`;
+  $('honesty-last-info').textContent=`アプリ上の終了：${dateTime(s.end)}。実際にSwitchを止めてから、正しい終了時刻を入力してください。`;
+  $('honesty-actual-end').value=preciseDateInput(Date.now());
+  $('honesty-actual-end').min=preciseDateInput(s.end+1000);
+  $('honesty-actual-end').max=preciseDateInput(Date.now()+30000);
+  $('honesty-kind').value='cheat';$('honesty-verified').checked=false;
+  updateHonestyImpact();$('honesty-dialog').showModal();
+}
+async function saveHonestyCorrection(event){
+  event.preventDefault();
+  const id=honestyPendingChild,actual=new Date($('honesty-actual-end').value).getTime(),kind=$('honesty-kind').value;
+  if(!isParentPage||!ids.includes(id)||!['cheat','honest'].includes(kind)||!$('honesty-verified').checked)return;
+  if(!Number.isFinite(actual))return toast('実際の終了時刻を確認してください。');
+  const message=kind==='cheat'?'ズルを確認した内容で、今回の報酬を無効にします。':'正直な申告として休憩時間だけ修正します。';
+  if(!confirm(`${playerLabel(id)}：${message}\nこの操作を確定しますか？`))return;
+  await runLocked(async()=>{
+    const result=await dbApi.runTransaction(db,async tx=>{
+      const profRef=refProfile(id),pSnap=await tx.get(profRef);
+      if(!pSnap.exists())throw Error('プロフィールがありません。');
+      const p=pSnap.data(),sid=p.lastSessionId;
+      if(p.activeStart!==0||videoStartedMillis(p)>0||!sid)throw Error('終了申告後の最新ゲーム記録だけ確認できます。');
+      const sessionRef=dbApi.doc(sessionsRef(),sid),sSnap=await tx.get(sessionRef);
+      if(!sSnap.exists())throw Error('終了履歴を取得できません。');
+      const s=sSnap.data(),now=Date.now();
+      if(s.childId!==id||s.activityType==='video'||s.edited===true||!Number.isFinite(s.start)||!Number.isFinite(s.end))
+        throw Error('この履歴はすでに修正済みか対象外です。');
+      if(actual<s.end+1000||actual>now+30000||actual-s.start>7*DAY)
+        throw Error('実際の終了は、申告より後の日時、かつ現在時刻以前を入力してください。');
+      const duration=actual-s.start,until=actual+duration;
+      if(duration<=0)throw Error('終了時刻が開始時刻より前です。');
+      const gameRewardId=p.rewardLastSessionId===sid && Number.isInteger(p.rewardLastDayIndex)
+        ?rewardDocumentId(id,p.rewardLastDayIndex):'';
+      const gameRewardRef=gameRewardId?dbApi.doc(db,'households',householdId,'rewards',gameRewardId):null;
+      const gameRewardSnap=gameRewardRef?await tx.get(gameRewardRef):null;
+      const canRevoke=kind==='cheat'&&gameRewardSnap?.exists()&&gameRewardSnap.data().kind==='rest_completed'
+        && gameRewardSnap.data().sessionId===sid&&gameRewardSnap.data().revoked!==true;
+      const lastCount=recentCheatCount(p,now),nextCount=lastCount+1;
+      const suspended=kind==='cheat'&&nextCount>=2;
+      const previous={
+        restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,
+        blockedSessionId:p.rewardBlockedSessionId||'',rewardSuspendedUntil:Number(p.rewardSuspendedUntil)||0,
+        cheatStrikeCount:Number(p.cheatStrikeCount)||0,cheatLastAt:Number(p.cheatLastAt)||0,
+        cheatLastSessionId:p.cheatLastSessionId||'',
+        sessionEnd:s.end,sessionDuration:s.duration,sessionEdited:s.edited===true,
+        sessionCorrectionKind:s.correctionKind||'',revokedRewardId:canRevoke?gameRewardId:''
+      };
+      tx.update(sessionRef,{end:actual,duration,edited:true,correctionKind:kind,updatedAt:dbApi.serverTimestamp()});
+      const updates={restStart:actual,restUntil:until,lastDuration:duration,updatedAt:dbApi.serverTimestamp()};
+      if(kind==='cheat'){
+        Object.assign(updates,{
+          rewardBlockedSessionId:sid,
+          rewardSuspendedUntil:suspended?Math.max(Number(p.rewardSuspendedUntil)||0,now+DAY):Number(p.rewardSuspendedUntil)||0,
+          cheatStrikeCount:nextCount,cheatLastAt:now,cheatLastSessionId:sid,
+          cheatPenaltyPrevious:previous
+        });
+      }
+      tx.update(profRef,updates);
+      if(canRevoke)tx.update(gameRewardRef,{revoked:true,revokedAt:dbApi.serverTimestamp(),revokedBy:uid});
+      appendAudit(tx,kind==='cheat'?'cheat_confirm':'cheat_honest',id,
+        `終了申告 ${dateTime(s.end)}`,`実終了 ${dateTime(actual)}、${kind==='cheat'?(suspended?'獲得24時間停止':'今回の報酬無効'):'自己申告・休憩のみ修正'}`,sid);
+      return {suspended,revoked:canRevoke,kind};
+    });
+    $('honesty-dialog').close();honestyPendingChild=null;
+    toast(result.kind==='honest'?'正直な申告として休憩時間を修正しました。':
+      result.suspended?'休憩を修正し、新しいポケモンを24時間停止しました。':'休憩を修正し、このゲームの報酬を無効にしました。');
+  });
+}
+async function restoreHonestyDecision(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate())return;
+  const p=model.profiles[id];
+  if(!p?.cheatPenaltyPrevious||!p.cheatLastSessionId||p.cheatLastSessionId!==p.lastSessionId)return;
+  if(!confirm(`${playerLabel(id)}の直前のズル判定・休憩修正を取り消しますか？\n最新のゲーム履歴が変わっていない場合に限ります。`))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const profRef=refProfile(id),pSnap=await tx.get(profRef);
+      if(!pSnap.exists())throw Error('プロフィールがありません。');
+      const current=pSnap.data(),prev=current.cheatPenaltyPrevious,sid=current.cheatLastSessionId;
+      if(!prev||sid!==current.lastSessionId||current.activeStart!==0||videoStartedMillis(current)>0)
+        throw Error('最新の記録が変わったため、自動解除できません。');
+      const sessionRef=dbApi.doc(sessionsRef(),sid),sSnap=await tx.get(sessionRef);
+      if(!sSnap.exists()||sSnap.data().correctionKind!=='cheat')throw Error('解除対象のズル判定が見つかりません。');
+      const rewardRefToRestore=prev.revokedRewardId?dbApi.doc(db,'households',householdId,'rewards',prev.revokedRewardId):null;
+      const rewardSnap=rewardRefToRestore?await tx.get(rewardRefToRestore):null;
+      if(rewardRefToRestore&&(!rewardSnap?.exists()||rewardSnap.data().revoked!==true))
+        throw Error('獲得履歴が変わっているため自動解除できません。');
+      const sessionPatch={end:prev.sessionEnd,duration:prev.sessionDuration,edited:prev.sessionEdited,updatedAt:dbApi.serverTimestamp(),
+        correctionKind:prev.sessionCorrectionKind||dbApi.deleteField()};
+      tx.update(sessionRef,sessionPatch);
+      tx.update(profRef,{
+        restStart:prev.restStart,restUntil:prev.restUntil,lastDuration:prev.lastDuration,
+        rewardBlockedSessionId:prev.blockedSessionId,rewardSuspendedUntil:prev.rewardSuspendedUntil,
+        cheatStrikeCount:prev.cheatStrikeCount,cheatLastAt:prev.cheatLastAt,cheatLastSessionId:prev.cheatLastSessionId,
+        cheatPenaltyPrevious:dbApi.deleteField(),updatedAt:dbApi.serverTimestamp()
+      });
+      if(rewardRefToRestore)tx.update(rewardRefToRestore,{revoked:false,restoredAt:dbApi.serverTimestamp(),restoredBy:uid});
+      appendAudit(tx,'cheat_restore',id,'直前のズル判定','誤判定を解除・元の記録に復元',sid);
+    });
+    toast(`${playerLabel(id)}の直前の判定を解除しました。`);
+  });
+}
+
 function currentDateTick(){const now=Date.now();$('clock').textContent=clock(now);$('today-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'});}
 function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!node)return;
   const online=navigator.onLine;
@@ -984,6 +1153,7 @@ function renderPlayers(now=Date.now()){
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const pokemonReward=rewardActionFor(id,now);
+    const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
     const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
     const videoToday=Math.max(0,today-gameToday);
@@ -992,7 +1162,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${pokemonReward}
+      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -1028,11 +1198,12 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
 }
 function render(now=Date.now()){
   renderRestGuide(now);
+  if(isParentPage && Math.floor(now/1000)%5===0)renderHonestyAdmin();
  currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();renderBonuses();if(model.ready){renderWeek();renderHistory();}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();if(model.ready){renderWeek();renderHistory();}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1160,7 +1331,7 @@ function chooseStart(id){
   startPlay(id,'sw1'); // 旧データ・Firestoreルールとの互換性のため固定値を保持（画面には表示しない）。
 }
 function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
- $('end-confirm-text').innerHTML=`<div>${safe(playerLabel(id))}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
+ $('end-confirm-text').innerHTML=`<div>${safe(playerLabel(id))}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('finish-actually-stopped').checked=false;$('confirm-end').disabled=true;$('end-dialog').showModal();}
 
 // 30秒以内の誤操作取り消し。終了取り消しは履歴削除とプロフィール復元を同一transactionで実行する。
 async function undoRecent(id){
@@ -1428,6 +1599,8 @@ function initUiEvents(){
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
+   if(btn.dataset.honestyOpen)openHonestyDialog(btn.dataset.honestyOpen);
+   if(btn.dataset.honestyRestore)restoreHonestyDecision(btn.dataset.honestyRestore);
    if(btn.dataset.bonusGrant)grantSpecialBonus(btn.dataset.bonusGrant);
    if(btn.dataset.bonusClaim)claimSpecialBonus(btn.dataset.bonusClaim);
    if(btn.dataset.activityRequest){const [id,kind]=btn.dataset.activityRequest.split(':');requestActivity(id,kind);}
@@ -1448,9 +1621,13 @@ function initUiEvents(){
   $('effort-calendar-prev')?.addEventListener('click',()=>effortCalendarMonthShift(-1));
   $('effort-calendar-next')?.addEventListener('click',()=>effortCalendarMonthShift(1));
   $('approval-filter')?.addEventListener('change',e=>{approvalFilter=e.target.value;renderApprovals();});
+  $('honesty-kind')?.addEventListener('change',updateHonestyImpact);
+  $('honesty-form')?.addEventListener('submit',saveHonestyCorrection);
+  $('honesty-dialog')?.addEventListener('close',()=>{honestyPendingChild=null;});
   $('pokedex-child')?.addEventListener('change',renderPokedex);
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
- $('confirm-end')?.addEventListener('click',()=>pendingEnd&&endPlay(pendingEnd));
+ $('finish-actually-stopped')?.addEventListener('change',e=>{$('confirm-end').disabled=!e.target.checked;});
+ $('confirm-end')?.addEventListener('click',()=>{if(!$('finish-actually-stopped')?.checked)return;pendingEnd&&endPlay(pendingEnd);});
   $('manual-form')?.addEventListener('submit',saveManualWait);
   $('manual-minutes')?.addEventListener('input',updateManualPreview);
   $('manual-clear')?.addEventListener('click',clearManualWait);
@@ -1516,6 +1693,8 @@ async function startFirebase(){
    });
    if(!isParentPage){setInterval(heartbeat,60000);}
     setInterval(render,1000);
+    // 停止期限が経過したらFirestoreの更新なしでも報酬ボタンを自動で再表示する。
+    setInterval(()=>{if(uid&&model.ready){renderBonuses();renderApprovals();renderActivities();}},60000);
     setInterval(()=>{if(uid&&navigator.onLine&&(!model.profilesServerConfirmed||!model.settingsServerConfirmed)&&!reconnecting&&!authCheckBusy)recheckConnection();},15000);
     setInterval(()=>{if(uid&&model.ready&&navigator.onLine&&reportPeriodKey&&reportPeriodKey!==dateKey(Date.now()))subscribeReport();},60000);
     render();
