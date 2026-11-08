@@ -5,8 +5,8 @@ const rolePage = document.body.dataset.role;
 const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
-const MIN = 60000, DAY = 86400000;
-const version = 'v3.3.0';
+const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
+const version = 'v3.4.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -18,9 +18,9 @@ const dayStart = t => {const d=new Date(t);d.setHours(0,0,0,0);return d.getTime(
 const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.getTime();};
 const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
-const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60});
+const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,nightPause:{enabled:false,start:'22:00',end:'07:00',enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[]};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
@@ -29,7 +29,7 @@ function toast(message){const box=$('toast');box.textContent=message;box.classLi
 function isTransient(e){return ['unavailable','deadline-exceeded'].includes(e?.code)||/client is offline|network-request-failed|network error|offline|failed to fetch/i.test(String(e?.message||''));}
 function errorText(e){return e?.code==='permission-denied'?'アクセス権限がありません。Firestore Rulesとmembers設定を確認してください。':e?.code?.startsWith('auth/')?'ログインに失敗しました。メールアドレスとパスワードを確認してください。':String(e?.message||e);}
 function hasConfig(){return !Object.values(firebaseConfig).some(x=>!x||String(x).includes('REPLACE_')) && householdId && /^[a-z0-9-]{3,50}$/.test(householdId);}
-function canOperate(){return !!uid && !!model.ready && !!model.profilesServerConfirmed && navigator.onLine;}
+function canOperate(){return !!uid && !!model.ready && !!model.profilesServerConfirmed && !!model.settingsServerConfirmed && navigator.onLine;}
 function stampMillis(stamp){return stamp?.toMillis?.()||0;}
 function undoKind(p, now=Date.now()){
   if(!p||!canOperate()||isParentPage)return null;
@@ -37,11 +37,108 @@ function undoKind(p, now=Date.now()){
   if(p.activeStart===0 && p.lastSessionId && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
   return null;
 }
-function restEnd(p){return Math.max(p?.restUntil||0,p?.manualRestUntil||0);}
+// 夜間待ち時間の持ち越し。計算の基準時刻は日本時間（JST、夏時間なし）。
+function clockMinute(value){
+  if(typeof value!=='string'||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))return null;
+  const [h,m]=value.split(':').map(Number);return h*60+m;
+}
+function pausePolicy(){
+  const obj=model.settings?.nightPause||{};
+  const start=clockMinute(obj.start),end=clockMinute(obj.end);
+  if(obj.enabled!==true||start===null||end===null||start<=end)return null;
+  return {start,end,enabledAt:Math.max(0,Number(obj.enabledAt)||0)};
+}
+function nightWindow(t,policy){
+  const day=Math.floor((t+JST_OFFSET)/DAY)*DAY-JST_OFFSET;
+  const minute=(t-day)/MIN;
+  if(minute<policy.end)return {paused:true,until:day+policy.end*MIN};
+  if(minute>=policy.start)return {paused:true,until:day+DAY+policy.end*MIN};
+  return {paused:false,until:day+policy.start*MIN};
+}
+function isNightPaused(now=Date.now(),policy=pausePolicy()){
+  return !!policy && now>=policy.enabledAt && nightWindow(now,policy).paused;
+}
+// 消化対象時間だけを進める。ページを閉じても、同じ開始時刻・時間帯から同じ終了予定を再現できる。
+function advanceEligible(start,duration,policy=pausePolicy()){
+  if(!(duration>0))return start;
+  if(!policy)return start+duration;
+  let t=start,left=duration;
+  for(let i=0;left>0&&i<2000;i++){
+    if(t<policy.enabledAt){const step=Math.min(left,policy.enabledAt-t);left-=step;t+=step;continue;}
+    const window=nightWindow(t,policy);
+    if(window.paused){t=window.until;continue;}
+    const step=Math.min(left,window.until-t);
+    if(step<=0)throw Error('夜間時間帯の計算に失敗しました');
+    left-=step;t+=step;
+  }
+  if(left>0)throw Error('待ち時間が長すぎます');
+  return t;
+}
+function eligibleElapsed(start,end,policy=pausePolicy()){
+  if(!(end>start))return 0;
+  if(!policy)return end-start;
+  let t=start,result=0;
+  for(let i=0;t<end&&i<2000;i++){
+    if(t<policy.enabledAt){const next=Math.min(end,policy.enabledAt);result+=next-t;t=next;continue;}
+    const window=nightWindow(t,policy),next=Math.min(end,window.until);
+    if(!window.paused)result+=next-t;
+    t=next;
+  }
+  return result;
+}
+function normalRestEnd(p){
+  const raw=Number(p?.restUntil)||0,start=Number(p?.restStart)||0;
+  const policy=pausePolicy();
+  if(!policy||raw<=start||raw<=policy.enabledAt)return raw;
+  return Math.max(raw,advanceEligible(start,raw-start,policy));
+}
+function displayTimeRange(){const p=pausePolicy();return p?`${model.settings.nightPause.start}〜${model.settings.nightPause.end}`:'';}
+function renderNightPolicy(){const e=$('night-policy');if(!e)return;
+  const p=pausePolicy();
+  e.classList.toggle('hidden',!p);
+  if(p)e.textContent=`夜間持ち越し：${displayTimeRange()}（日本時間）は待ち時間が減りません${isNightPaused()?'／現在停止中':''}`;
+}
+function auditRef(){return dbApi.doc(dbApi.collection(db,'households',householdId,'auditLogs'));}
+function appendAudit(writer,action,childId,before,after,sessionId=''){
+  const truncate=v=>String(v??'').slice(0,300);
+  writer.set(auditRef(),{action,childId,actorUid:uid,actorRole:role,createdAt:dbApi.serverTimestamp(),
+    before:truncate(before),after:truncate(after),sessionId:sessionId||''});
+}
+const AUDIT_ACTIONS={start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
+  manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',forgotten_end:'終了忘れ修正',
+  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',import_v2:'v2履歴の取り込み'};
+function renderAudit(){const node=$('audit-list');if(!node)return;
+  const entries=model.auditLogs;
+  node.innerHTML=entries.length?entries.map(a=>{
+    const created=stampMillis(a.createdAt);
+    const who=a.actorRole==='parent'?'保護者':'子ども用iPad';
+    const target=ids.includes(a.childId)?playerLabel(a.childId):'家族全体';
+    return `<div class="audit-entry"><div class="audit-head"><strong>${safe(AUDIT_ACTIONS[a.action]||a.action)} · ${safe(target)}</strong><span>${created?safe(new Date(created).toLocaleString('ja-JP')):'日時確認中'} · ${who}</span></div><div class="audit-values"><span>変更前：${safe(a.before||'—')}</span><span>変更後：${safe(a.after||'—')}</span></div></div>`;
+  }).join(''):'<p class="empty">v3.4導入後の操作履歴はまだありません。</p>';
+}
+function restEnd(p){return Math.max(normalRestEnd(p),p?.manualRestUntil||0);}
+function normalWaitRemaining(p, now=Date.now()){
+  const raw=Number(p?.restUntil)||0,start=Number(p?.restStart)||0,policy=pausePolicy();
+  if(!policy||raw<=start||raw<=policy.enabledAt)return Math.max(0,raw-now);
+  return Math.max(0,(raw-start)-eligibleElapsed(start,now,policy));
+}
+function manualWaitRemaining(p, now=Date.now()){
+  const until=Number(p?.manualRestUntil)||0;
+  if(until<=now)return 0;
+  const started=stampMillis(p.manualRestSetAt),policy=pausePolicy();
+  // Older v3.3 manual waits retain their already recorded end time.
+  if(!policy||!started||started<policy.enabledAt)return until-now;
+  const minutes=Number(p.manualRestMinutes)||0;
+  if(minutes<=0)return until-now;
+  return Math.max(0,Math.min(until-now,minutes*MIN-eligibleElapsed(started,now,policy)));
+}
+function waitingRemaining(p,now=Date.now()){
+  return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
+}
 function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':restEnd(p)>now?'resting':'ready';}
 function deviceName(id){return model.settings.devices?.[id]||({sw1:'Switch',sw2:'Switch2'}[id]||'Switch');}
 function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
-function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?Math.max(0,restEnd(p)-now):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
   const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
   const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
@@ -87,9 +184,9 @@ function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!nod
   const online=navigator.onLine;
   let text='クラウド接続済み',cls='ok';
   if(!online){text='オフライン：操作を停止中';cls='warn'}
-  else if(!model.profilesServerConfirmed){text='再接続中：最新状態を確認中';cls='warn'}
+  else if(!model.profilesServerConfirmed||!model.settingsServerConfirmed){text='再接続中：最新状態を確認中';cls='warn'}
   if(!model.ready){text='データ読み込み中';cls='pending'}
-  $('retry-connect')?.classList.toggle('hidden',!!model.profilesServerConfirmed&&online);
+  $('retry-connect')?.classList.toggle('hidden',!!model.profilesServerConfirmed&&!!model.settingsServerConfirmed&&online);
   node.className=`signal ${cls}`;node.textContent=text;
   if(isParentPage){
     const t=model.presence?.lastSeenAt?.toMillis?.()||0;
@@ -112,15 +209,15 @@ function renderPlayers(now=Date.now()){
   if(!model.ready)return;
   $('players').innerHTML=displayIds().map((id,i)=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
-    const manualControlling=(p.manualRestUntil||0)>Math.max(p.restUntil||0,now);
+    const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
-    const restDuration=Math.max(1,until-restStart);
+    const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
     const title=st==='playing'?'ゲーム中':st==='resting'?'休憩中':'スタートOK';
     const mainTitle=st==='playing'?'ゲームをはじめてから':st==='resting'?'つぎまで、あと':'ゲームができるよ！';
     const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
-    const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(now+elapsed)}から`:
+    const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
-    const progress=st==='resting'?Math.min(100,Math.max(0,(now-restStart)/restDuration*100)):100;
+    const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy())/restDuration*100)):100;
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
@@ -134,8 +231,8 @@ function renderPlayers(now=Date.now()){
     const subtitle = `${age === null ? '年齢未設定' : `${age}さい`}・${familyRole(id)}`;
     return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(p.name)}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
-      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、次の開始も10分おそくなるよ</small>':''}</div>
-      <div class="player-device">${device}</div>${actions}${undoAction}${correction}${manualAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(p.manualRestUntil-now)}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
+      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
+      <div class="player-device">${device}</div>${actions}${undoAction}${correction}${manualAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
 function renderDevices(){
@@ -169,7 +266,7 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))} · ${safe(deviceName(s.deviceId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
- currentDateTick();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();
+ currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
@@ -178,28 +275,33 @@ function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').cl
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
   console.error('Firestore listener',e);
-  model.profilesServerConfirmed=false;retryAfterError=true;
+  model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;retryAfterError=true;
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;retryAfterError=false;}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];retryAfterError=false;}
 async function recheckConnection(){
-  if(!navigator.onLine){model.profilesServerConfirmed=false;render();return;}
+  if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
   if(!uid||!db)return;
   reconnecting=(async()=>{
     if(!cleanups.length){await authorizeCurrentUser();return;}
-    model.profilesServerConfirmed=false;render();
+    model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();
     try{
       if(retryAfterError){unsubscribeListeners();retryAfterError=false;listen();}
       const expectedUid=uid;
-      const snap=await dbApi.getDocsFromServer(dbApi.collection(db,'households',householdId,'profiles'));
+      const [snap,settingSnap]=await Promise.all([
+        dbApi.getDocsFromServer(dbApi.collection(db,'households',householdId,'profiles')),
+        dbApi.getDocFromServer(refSettings())
+      ]);
       if(uid!==expectedUid)return;
+      model.settings=settingSnap.exists()?{...defaultSettings(),...settingSnap.data()}:defaultSettings();
+      model.settingsServerConfirmed=!settingSnap.metadata.hasPendingWrites;
       const next={};for(const doc of snap.docs)next[doc.id]=doc.data();
       model.profiles=next;model.profilesServerConfirmed=!snap.metadata.hasPendingWrites;
       model.fromCache=false;model.receivedAt=Date.now();
       setReady();setSettingsForm();render();
-    }catch(e){model.profilesServerConfirmed=false;retryAfterError=true;console.warn('recheck',e);render();toast('最新データを確認できません。通信回復後に「接続を再確認」を押してください。');}
+    }catch(e){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;retryAfterError=true;console.warn('recheck',e);render();toast('最新データを確認できません。通信回復後に「接続を再確認」を押してください。');}
   })();
   try{return await reconnecting;}finally{reconnecting=null;}
 }
@@ -211,19 +313,27 @@ function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({pr
     $('gender-'+id).value=['female','male','neutral'].includes(model.profiles[id]?.gender) ? model.profiles[id].gender : 'neutral';
     $('birth-'+id).max=dateKey(Date.now());
   }
-  $('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);lastSettingsHash=hash;
+  $('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);
+  const policy=model.settings.nightPause||defaultSettings().nightPause;
+  $('night-enabled').checked=policy.enabled===true;
+  $('night-start').value=policy.start||'22:00';$('night-end').value=policy.end||'07:00';
+  lastSettingsHash=hash;
 }
 function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
    const profiles={};for(const doc of snap.docs)profiles[doc.id]=doc.data();model.profiles=profiles;model.fromCache=snap.metadata.fromCache;model.profilesServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();setReady();setSettingsForm();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'settings','main'),{includeMetadataChanges:true},snap=>{
-   if(snap.exists())model.settings={...defaultSettings(),...snap.data()};model.receivedAt=Date.now();render();setSettingsForm();
+   model.settings=snap.exists()?{...defaultSettings(),...snap.data()}:defaultSettings();
+   model.settingsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();render();setSettingsForm();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
  },listenerError));
- if(isParentPage){cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'presence','ipad'),snap=>{model.presence=snap.exists()?snap.data():null;renderSync();},listenerError));}
+ if(isParentPage){
+   cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'presence','ipad'),snap=>{model.presence=snap.exists()?snap.data():null;renderSync();},listenerError));
+   cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),snap=>{model.auditLogs=snap.docs.map(d=>({...d.data(),logId:d.id}));renderAudit();},listenerError));
+ }
 }
 function refProfile(id){return dbApi.doc(db,'households',householdId,'profiles',id)}
 function refSettings(){return dbApi.doc(db,'households',householdId,'settings','main')}
@@ -235,6 +345,7 @@ async function startPlay(id,deviceId){return runLocked(async()=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
     if(p.activeStart>0)throw Error('すでにゲーム中です。');if(now<restEnd(p))throw Error('まだ待ち時間が残っています。');
     tx.update(ref,{activeStart:now,deviceId,startedAt:dbApi.serverTimestamp(),endedAt:null,updatedAt:dbApi.serverTimestamp()});
+    appendAudit(tx,'start',id,'ゲーム可能',`${deviceName(deviceId)}で開始`);
   });$('device-dialog').close();toast(`${playerLabel(id)}：ゲームをスタート！`);
  });
 }
@@ -247,6 +358,7 @@ async function endPlay(id){return runLocked(async()=>{
     tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
     tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
       undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}});
+    appendAudit(tx,'end',id,`${deviceName(p.deviceId)}でゲーム中`,`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
     return dur;
   });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
  });
@@ -271,6 +383,7 @@ async function undoRecent(id){
         const at=stampMillis(p.startedAt);
         if(!at||now-at<0||now-at>=30000)throw Error('開始から30秒を過ぎたため、取り消せません。');
         tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:null,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'undo_start',id,'ゲーム中','開始前の状態に戻した');
         return 'start';
       }
       const at=stampMillis(p.endedAt);
@@ -285,6 +398,7 @@ async function undoRecent(id){
         lastSessionId:u.lastSessionId,updatedAt:dbApi.serverTimestamp()
       });
       tx.delete(sessionRef);
+      appendAudit(tx,'undo_end',id,'終了済み・休憩中','終了を取り消してゲーム中に復元',p.lastSessionId);
       return 'end';
     });
     toast(mode==='start'?'ゲーム開始を取り消しました':'終了を取り消しました。ゲーム時間の計測を続けます');
@@ -320,6 +434,7 @@ async function correctForgottenEnd(event){
       const dur=end-p.activeStart;
       tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:end,restUntil:end+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
       tx.set(sidRef,{childId:id,start:p.activeStart,end,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:true,correctionReason:'終了忘れ（保護者修正）'});
+      appendAudit(tx,'forgotten_end',id,`${dateTime(p.activeStart)}からゲーム中`,`${dateTime(end)}に終了・${brief(dur)}休憩`,sidRef.id);
       return dur;
     });
     $('correct-dialog').close();pendingCorrection=null;
@@ -334,7 +449,7 @@ function openManualWait(id){
   if(p.activeStart>0)return toast('ゲーム中は待ち時間を変更できません。');
   pendingManual=id;
   $('manual-title').textContent=`${p.name}の待ち時間を設定`;
-  $('manual-current').textContent=`いまの待ち時間：${restEnd(p)>Date.now()?brief(restEnd(p)-Date.now()):'なし'} ／ 通常の休憩：${p.restUntil>Date.now()?brief(p.restUntil-Date.now()):'なし'}`;
+  $('manual-current').textContent=`いまの待ち時間：${waitingRemaining(p)>0?brief(waitingRemaining(p)):'なし'} ／ 通常の休憩：${normalWaitRemaining(p)>0?brief(normalWaitRemaining(p)):'なし'}`;
   $('manual-minutes').value='30';
   $('manual-policy').textContent=isParentPage
     ?'今からの残り待ち時間を指定します。通常の休憩が長ければ、その休憩は維持されます。'
@@ -350,10 +465,12 @@ function updateManualPreview(){
   if(!Number.isInteger(n)||n<1||n>1440){out.textContent='1〜1,440分の整数を入力してください。';return;}
   const p=model.profiles[pendingManual];
   if(!p)return;
-  const proposed=Date.now()+n*MIN;
-  const manualUntil=isParentPage?proposed:Math.max(proposed,p.manualRestUntil||0,p.restUntil||0);
-  const effectiveUntil=Math.max(manualUntil,p.restUntil||0);
-  out.textContent=`保存後の待ち時間：あと${brief(effectiveUntil-Date.now())}（${dateTime(effectiveUntil)}まで）`;
+  const proposed=advanceEligible(Date.now(),n*MIN);
+  const manualUntil=isParentPage?proposed:Math.max(proposed,p.manualRestUntil||0,restEnd(p));
+  const effectiveUntil=Math.max(manualUntil,normalRestEnd(p));
+  const now=Date.now(),sample={...p,manualRestUntil:manualUntil,manualRestMinutes:n,manualRestSetAt:{toMillis:()=>now}};
+  const remaining=isParentPage?Math.max(normalWaitRemaining(p,now),manualWaitRemaining(sample,now)):Math.max(waitingRemaining(p,now),manualWaitRemaining(sample,now));
+  out.textContent=`保存後の待ち時間：あと${brief(remaining)}（${dateTime(effectiveUntil)}に再開予定）`; 
 }
 async function saveManualWait(event){
   event.preventDefault();
@@ -366,16 +483,17 @@ async function saveManualWait(event){
       if(!snap.exists())throw Error('子どものデータがありません。');
       const p=snap.data();
       if(p.activeStart>0)throw Error('ゲーム中は待ち時間を設定できません。');
-      const proposed=Date.now()+n*MIN;
-      if(role==='kid' && proposed<=Math.max(p.manualRestUntil||0,p.restUntil||0))
+      const proposed=advanceEligible(Date.now(),n*MIN);
+      if(role==='kid' && proposed<=restEnd(p))
         throw Error('今の待ち時間より短く設定することはできません。延長する時間を入力してください。');
-      const newUntil=role==='parent'?proposed:Math.max(proposed,p.manualRestUntil||0,p.restUntil||0);
+      const newUntil=role==='parent'?proposed:Math.max(proposed,p.manualRestUntil||0,restEnd(p));
       tx.update(ref,{
         manualRestUntil:newUntil,manualRestMinutes:n,
         manualRestSetAt:dbApi.serverTimestamp(),manualRestSetBy:uid,manualRestSetRole:role,
         updatedAt:dbApi.serverTimestamp()
       });
-      return Math.max(newUntil,p.restUntil||0);
+      appendAudit(tx,'manual_set',id,p.manualRestUntil?dateTime(p.manualRestUntil):'未設定',`${n}分設定／${dateTime(newUntil)}まで`);
+      return Math.max(newUntil,normalRestEnd(p));
     });
     $('manual-dialog').close();pendingManual=null;
     toast(`${playerLabel(id)}：${dateTime(until)}まで待ち時間を設定しました`);
@@ -395,13 +513,14 @@ async function clearManualWait(){
         manualRestSetAt:dbApi.serverTimestamp(),manualRestSetBy:uid,manualRestSetRole:'parent',
         updatedAt:dbApi.serverTimestamp()
       });
+      appendAudit(tx,'manual_clear',id,snap.data().manualRestUntil?dateTime(snap.data().manualRestUntil):'未設定','手動待ち時間を解除');
     });
     $('manual-dialog').close();pendingManual=null;
     toast('手動待ち時間を解除しました（通常の休憩は維持します）');
   });
 }
 
-async function initFamily(){await runLocked(async()=>{const b=dbApi.writeBatch(db);b.set(refSettings(),{...defaultSettings(),createdAt:dbApi.serverTimestamp()});for(const id of ids)b.set(refProfile(id),{...playerBase(id),updatedAt:dbApi.serverTimestamp()});await b.commit();toast('家族データを作成しました');});}
+async function initFamily(){await runLocked(async()=>{const b=dbApi.writeBatch(db);b.set(refSettings(),{...defaultSettings(),createdAt:dbApi.serverTimestamp()});for(const id of ids)b.set(refProfile(id),{...playerBase(id),updatedAt:dbApi.serverTimestamp()});appendAudit(b,'family_init','all','未作成','家族データを作成');await b.commit();toast('家族データを作成しました');});}
 async function saveSettings(event){event.preventDefault();await runLocked(async()=>{
   const names=ids.map(id=>$('name-'+id).value.trim());
   const births=ids.map(id=>$('birth-'+id).value);
@@ -410,7 +529,19 @@ async function saveSettings(event){event.preventDefault();await runLocked(async(
   if(!names.every(Boolean)||!Object.values(devices).every(Boolean))throw Error('名前を入力してください');
   if(!births.every(validBirthDate))throw Error('生年月日を正しく入力してください（未来の日付は登録できません）。');
   if(!genders.every(g=>['female','male','neutral'].includes(g)))throw Error('性別を選択してください。');
- const b=dbApi.writeBatch(db);ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),birthDate:births[i],gender:genders[i],updatedAt:dbApi.serverTimestamp()}));b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,updatedAt:dbApi.serverTimestamp()},{merge:true});await b.commit();toast('設定を保存しました');
+ const enabled=$('night-enabled').checked,start=$('night-start').value,end=$('night-end').value;
+  const a=clockMinute(start),z=clockMinute(end);
+  if(a===null||z===null||a<=z)throw Error('夜間時間帯は日付をまたぐように入力してください（例：22:00〜07:00）。');
+  const oldPause=model.settings.nightPause||defaultSettings().nightPause;
+  const changed=oldPause.enabled!==enabled||oldPause.start!==start||oldPause.end!==end;
+  const nightPause={enabled,start,end,enabledAt:enabled?(changed?Date.now():(oldPause.enabledAt||Date.now())):0};
+  const oldDesc=`夜間 ${oldPause.enabled?'ON':'OFF'} ${oldPause.start||'22:00'}〜${oldPause.end||'07:00'}`;
+  const newDesc=`夜間 ${enabled?'ON':'OFF'} ${start}〜${end}`;
+  const b=dbApi.writeBatch(db);
+  ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),birthDate:births[i],gender:genders[i],updatedAt:dbApi.serverTimestamp()}));
+  b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,nightPause,updatedAt:dbApi.serverTimestamp()},{merge:true});
+  appendAudit(b,'settings_update','all',oldDesc,newDesc);
+  await b.commit();toast('設定を保存しました');
  });}
 async function editHistory(event){event.preventDefault();const sid=editingId;if(!sid)return;
  const a=new Date($('edit-start').value).getTime(),b=new Date($('edit-end').value).getTime();const orig=model.sessions.find(x=>x.sid===sid)||model.historyExtra?.items?.find(x=>x.sid===sid);
@@ -423,6 +554,7 @@ async function editHistory(event){event.preventDefault();const sid=editingId;if(
     const existing=snap.data(),p=pSnap.data();
     tx.update(sessionRef,{start:a,end:b,duration:b-a,edited:true,updatedAt:dbApi.serverTimestamp()});
     if(p.activeStart===0&&p.lastSessionId===sid){tx.update(profRef,{restStart:b,restUntil:b+(b-a),lastDuration:b-a,updatedAt:dbApi.serverTimestamp()});}
+    appendAudit(tx,'history_edit',orig.childId,`${dateTime(existing.start)}〜${dateTime(existing.end)}`,`${dateTime(a)}〜${dateTime(b)}`,sid);
   });$('edit-dialog').close();toast('記録と休憩時間を修正しました');
  });
 }
@@ -435,10 +567,23 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
  }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
- if(format==='json'){const data={version:3,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','本体','開始日時','終了日時','ゲーム時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),deviceName(s.deviceId),new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
+async function exportAuditCsv(){
+ if(!isParentPage)return;
+ try{
+  const q=dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(1000));
+  const docs=await dbApi.getDocs(q);
+  const esc=v=>{let s=String(v??'');if(/^[=+@\\-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
+  const rows=[['日時','操作','対象','操作アカウント','UID','変更前','変更後','履歴ID'],
+   ...docs.docs.map(doc=>{const a=doc.data();return [stampMillis(a.createdAt)?new Date(stampMillis(a.createdAt)).toLocaleString('ja-JP'):'',
+    AUDIT_ACTIONS[a.action]||a.action,ids.includes(a.childId)?playerLabel(a.childId):'家族全体',a.actorRole,a.actorUid,a.before,a.after,a.sessionId];})];
+  download(`asobu-yasumu-audit-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(esc).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
+  toast('操作履歴CSVを保存しました（最新1,000件まで）');
+ }catch(e){console.error(e);toast(errorText(e));}
+}
 async function importV2(file){if(!file)return;await runLocked(async()=>{
  if(file.size>8*1024*1024)throw Error('8MB以下のJSONを選択してください');const source=JSON.parse(await file.text());if(source.version!==2||!Array.isArray(source.sessions)||!Array.isArray(source.children))throw Error('v2のJSONバックアップではありません');
  const existing=await dbApi.getDocs(dbApi.query(sessionsRef(),dbApi.limit(1)));if(!existing.empty)throw Error('クラウドに履歴があるため、二重登録防止のため取り込みを中止しました');
@@ -453,7 +598,8 @@ async function importV2(file){if(!file)return;await runLocked(async()=>{
    b.update(refProfile(id),{name:String(o.name||playerLabel(id)).slice(0,12),activeStart:0,deviceId:null,restStart:Number.isFinite(o.restStart)?o.restStart:0,restUntil:Number.isFinite(o.restUntil)?o.restUntil:0,lastDuration:Number.isFinite(o.lastDuration)?o.lastDuration:0,lastSessionId,updatedAt:dbApi.serverTimestamp()});
  }
  if(Array.isArray(source.devices)&&source.devices.length===2){b.update(refSettings(),{devices:{sw1:source.devices[0].name?.includes('①')?'Switch':(source.devices[0].name||'Switch'),sw2:source.devices[1].name?.includes('②')?'Switch2':(source.devices[1].name||'Switch2')}});}
- await b.commit();toast(`v2履歴 ${data.length}件を取り込みました。`);
+  appendAudit(b,'import_v2','all','v2履歴なし',`v2履歴 ${data.length}件を取り込み`);
+  await b.commit();toast(`v2履歴 ${data.length}件を取り込みました。`);
  });}
 async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||document.visibilityState!=='visible'||!canOperate())return;
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
@@ -482,6 +628,7 @@ function initUiEvents(){
   $('correct-form')?.addEventListener('submit',correctForgottenEnd);
   $('correct-dialog')?.addEventListener('close',()=>{pendingCorrection=null;});
   $('retry-connect')?.addEventListener('click',()=>recheckConnection());
+  $('export-audit')?.addEventListener('click',exportAuditCsv);
   $('retry-login')?.addEventListener('click',()=>authorizeCurrentUser());
  $('init-family')?.addEventListener('click',initFamily);
  $('settings-form')?.addEventListener('submit',saveSettings);
@@ -493,9 +640,9 @@ function initUiEvents(){
  $('history-date').addEventListener('change',e=>{const d=new Date(e.target.value+'T00:00:00').getTime();if(!Number.isFinite(d)||d>dayStart(Date.now()))return;selectedDay=d;model.historyExtra=null;renderHistory();loadSelectedDay();});
  $('tab-home')?.addEventListener('click',()=>{historyTab='home';$('history').classList.add('hidden');$('tab-home').classList.add('subnav-active');$('tab-history').classList.remove('subnav-active');});
  $('tab-history')?.addEventListener('click',()=>{historyTab='history';$('history').classList.remove('hidden');$('tab-home').classList.remove('subnav-active');$('tab-history').classList.add('subnav-active');renderWeek();renderHistory();});
- document.addEventListener('visibilitychange',()=>{if(!document.hidden){model.profilesServerConfirmed=false;render();recheckConnection().then(heartbeat);}});
- window.addEventListener('online',()=>{model.profilesServerConfirmed=false;render();recheckConnection().then(heartbeat);});
-  window.addEventListener('offline',()=>{model.profilesServerConfirmed=false;render();});
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();recheckConnection().then(heartbeat);}});
+ window.addEventListener('online',()=>{model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();recheckConnection().then(heartbeat);});
+  window.addEventListener('offline',()=>{model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();});
 }
 async function authorizeCurrentUser(){
   if(authCheckBusy||!auth?.currentUser||!dbApi||!db)return;
@@ -539,7 +686,7 @@ async function startFirebase(){
    });
    if(!isParentPage){setInterval(heartbeat,60000);}
     setInterval(render,1000);
-    setInterval(()=>{if(uid&&navigator.onLine&&!model.profilesServerConfirmed&&!reconnecting&&!authCheckBusy)recheckConnection();},15000);
+    setInterval(()=>{if(uid&&navigator.onLine&&(!model.profilesServerConfirmed||!model.settingsServerConfirmed)&&!reconnecting&&!authCheckBusy)recheckConnection();},15000);
     render();
    if('serviceWorker' in navigator && !isParentPage && location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
   }catch(e){console.error(e);$('setup-warning').textContent='Firebase SDKに接続できません。インターネット接続、ブラウザ設定、設定ファイルを確認してください。 '+errorText(e);$('setup-warning').classList.remove('hidden');}
