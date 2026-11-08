@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.10.0';
+const version = 'v3.11.1';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -21,7 +21,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
@@ -550,6 +550,190 @@ async function claimPokemon(id){
     announcePokemon(id,number,duplicate);
   });
 }
+// v3.11.1 F06: 保護者が1回付与した権利を、子どもが1回だけ確定獲得する。
+// アカウント/データの不正操作は Firestore Rules で防止する。
+function bonusCollection(){return dbApi.collection(db,'households',householdId,'bonusGrants');}
+function bonusGrantRef(grantId){return dbApi.doc(bonusCollection(),grantId);}
+function bonusRewardRef(grantId){return dbApi.doc(db,'households',householdId,'rewards',`bonus_${grantId}`);}
+function availableBonusGrants(childId){
+  return model.bonusGrants.filter(g=>g.childId===childId&&g.status==='available')
+    .sort((a,b)=>stampMillis(a.grantedAt)-stampMillis(b.grantedAt)||a.grantId.localeCompare(b.grantId));
+}
+function renderBonuses(){
+  const child=$('bonus-child-list'),admin=$('bonus-admin-list');
+  if(!child&&!admin)return;
+  const target=child||admin;
+  if(!model.ready||!model.bonusLoaded||!model.rewardsLoaded){
+    target.innerHTML='<p class="empty">特別ボーナスを確認中…</p>';return;
+  }
+  if(child){
+    child.innerHTML=displayIds().map(id=>{
+      const count=availableBonusGrants(id).length;
+      return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし'}</span></div>`+
+        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>🎉 ポケモンを1匹ゲット！</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
+        '</div>';
+    }).join('');
+  }else if(admin){
+    admin.innerHTML=displayIds().map(id=>{
+      const pending=availableBonusGrants(id).length;
+      const recent=model.bonusGrants.filter(g=>g.childId===id&&g.status==='claimed')
+        .sort((a,b)=>stampMillis(b.claimedAt)-stampMillis(a.claimedAt))[0];
+      const last=recent&&stampMillis(recent.claimedAt)?`最後の受け取り：${dateTime(stampMillis(recent.claimedAt))}`:'受け取り履歴なし';
+      return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>未受け取り ${pending}匹分　/　${safe(last)}</span></div>`+
+        `<button type="button" class="btn primary" data-bonus-grant="${id}" ${busy||!canOperate()||!model.bonusServerConfirmed?'disabled':''}>🎁 特別ボーナスを1回付与</button></div>`;
+    }).join('');
+  }
+}
+async function grantSpecialBonus(id){
+  if(!isParentPage||!ids.includes(id)||busy)return;
+  if(!model.bonusServerConfirmed)return toast('ボーナスの最新状態を確認中です。');
+  const outstanding=availableBonusGrants(id).length;
+  const msg=`${playerLabel(id)}にポケモン1匹分の特別ボーナスを贈りますか？`+
+    (outstanding?`\nすでに未受け取りが${outstanding}匹分あります。`:'')+
+    '\n付与後の取り消しはできません。';
+  if(!confirm(msg))return;
+  await runLocked(async()=>{
+    const ref=dbApi.doc(bonusCollection());
+    await dbApi.setDoc(ref,{childId:id,status:'available',grantedBy:uid,grantedAt:dbApi.serverTimestamp()});
+    toast(`${playerLabel(id)}へ特別ボーナスを1匹分プレゼントしました！`);
+  });
+}
+async function claimSpecialBonus(id){
+  if(isParentPage||!ids.includes(id)||busy)return;
+  if(!model.bonusServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウドの最新状態を確認中です。');
+  const grant=availableBonusGrants(id)[0];
+  if(!grant)return toast('受け取れる特別ボーナスはありません。');
+  await runLocked(async()=>{
+    const grantRef=bonusGrantRef(grant.grantId),rewardRef=bonusRewardRef(grant.grantId);
+    const oldOwned=pokemonMapFor(id);
+    const result=await dbApi.runTransaction(db,async tx=>{
+      const [grantSnap,rewardSnap]=await Promise.all([tx.get(grantRef),tx.get(rewardRef)]);
+      if(!grantSnap.exists()||grantSnap.data().status!=='available'||grantSnap.data().childId!==id)
+        throw Error('特別ボーナスはすでに受け取り済みか、対象が異なります。');
+      if(rewardSnap.exists())throw Error('この特別ボーナスはすでにゲット済みです。');
+      tx.update(grantRef,{status:'claimed',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),rewardId:rewardRef.id});
+      tx.set(rewardRef,{childId:id,grantId:grant.grantId,sessionId:'',dayIndex:rewardDayIndex(),
+        kind:'special_bonus',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:2});
+      return {childId:id,grantId:grant.grantId,sessionId:'',dayIndex:rewardDayIndex(),
+        kind:'special_bonus',catalogVersion:2,rewardId:rewardRef.id,claimedAt:{toMillis:()=>Date.now()}};
+    });
+    // realtime listener が先に反映した場合も二重カウントしない。
+    const extra=model.rewards.some(r=>r.rewardId===result.rewardId)?[]:[result];
+    const no=assignedPokemon(id,extra).get(result.rewardId);
+    if(!Number.isInteger(no))throw Error('獲得済みですが、図鑑の計算に失敗しました。画面を更新してください。');
+    announcePokemon(id,no,oldOwned.has(no));
+  });
+}
+// v3.11 F01: 休憩中の活動ナビ。表示と移動のみ（申請/報酬の書き込みは既存処理）。
+const REST_GUIDE_ICONS={study:'✏️',reading:'📖',exercise:'🏃',helping:'🤝',cleaning:'🧹',creating:'🎨',practicing:'🎵',trying:'🚀',persevering:'🏆',kindness:'💐'};
+let lastRestGuideSignature='';
+function restGuideChoices(id,day){
+  const requested=new Set(dailyRequests(id,day).map(r=>r.activityKind));
+  const choices=Object.keys(ACTIVITY_KINDS).filter(kind=>!requested.has(kind));
+  if(!choices.length)return [];
+  // 子ども/日付で安定して変化。途中の描画で候補が頻繁に動かないようにする。
+  const offset=hashReward(`${id}:${day}`)%choices.length;
+  return [...choices.slice(offset),...choices.slice(0,offset)].slice(0,3);
+}
+function renderRestGuide(now=Date.now()){
+  const root=$('rest-guide');if(!root)return;
+  const resting=(!isParentPage&&model.ready&&model.activityLoaded)
+    ?displayIds().filter(id=>model.profiles[id]&&status(model.profiles[id],now)==='resting'):[];
+  const day=rewardDayIndex(now);
+  const signature=JSON.stringify([day,resting.map(id=>[id,playerLabel(id),restGuideChoices(id,day),dailyActivityActive(id,day)])]);
+  if(signature===lastRestGuideSignature)return;
+  lastRestGuideSignature=signature;
+  root.classList.toggle('hidden',resting.length===0);
+  if(!resting.length){root.innerHTML='';return;}
+  root.innerHTML='<div class="section-head"><div><h2>🌱 おやすみ時間に何しよう？</h2><p>ゲームのおやすみ中も、好きなことに挑戦してみよう。</p></div></div>'+
+    '<div class="rest-guide-people">'+resting.map(id=>{
+      const choices=restGuideChoices(id,day),full=dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX;
+      return `<article class="rest-guide-person"><h3>${safe(playerLabel(id))}のおすすめ</h3>`+
+        (choices.length?`<div class="rest-guide-choices">${choices.map(kind=>
+          `<button type="button" class="rest-guide-choice" data-rest-guide="${id}:${kind}"><span aria-hidden="true">${REST_GUIDE_ICONS[kind]}</span><strong>${safe(ACTIVITY_KINDS[kind])}</strong><small>チャレンジをひらく</small></button>`
+        ).join('')}</div>`:'<p class="tiny">今日は全部のチャレンジを確認したね！ 休憩を楽しもう。</p>')+
+        `<p class="tiny">${full?'今日の活動報酬3枠は使用済みです。活動だけでも楽しめるよ。':'実際にできたら「今日のチャレンジ」から申請できるよ。'} 選んだだけでは申請されません。</p></article>`;
+    }).join('')+'</div>';
+}
+function openRestGuideActivity(id,kind){
+  if(isParentPage||!ids.includes(id)||!Object.prototype.hasOwnProperty.call(ACTIVITY_KINDS,kind))return;
+  const section=$('activity-section');
+  const details=section?.querySelector(`details.activity-person[data-child="${id}"]`);
+  if(!details)return;
+  details.open=true;
+  section.scrollIntoView({behavior:'smooth',block:'start'});
+  const button=Array.from(details.querySelectorAll('button[data-activity-request]')).find(b=>b.dataset.activityRequest===`${id}:${kind}`);
+  if(button){button.classList.add('rest-guide-highlight');setTimeout(()=>{if(button.isConnected){button.focus({preventScroll:true});button.classList.remove('rest-guide-highlight');}},500);}
+}
+
+// v3.11 F02: JSTの申請日を基準にする「がんばりカレンダー」。全件既存購読を再利用。
+function calendarNowMonth(now=Date.now()){
+  const d=new Date(now+JST_OFFSET);return {year:d.getUTCFullYear(),month:d.getUTCMonth()};
+}
+const calendarInitial=calendarNowMonth();
+let effortCalendarYear=calendarInitial.year,effortCalendarMonth=calendarInitial.month;
+let effortCalendarChild='older',effortCalendarDay=rewardDayIndex();
+function effortDayIndex(year,month,day){return Math.floor(Date.UTC(year,month,day)/DAY);}
+function effortCalendarMonthShift(delta){
+  const date=new Date(Date.UTC(effortCalendarYear,effortCalendarMonth+delta,1));
+  effortCalendarYear=date.getUTCFullYear();effortCalendarMonth=date.getUTCMonth();
+  const current=calendarNowMonth();
+  if(effortCalendarYear>current.year||(effortCalendarYear===current.year&&effortCalendarMonth>current.month)){
+    effortCalendarYear=current.year;effortCalendarMonth=current.month;
+  }
+  effortCalendarDay=effortDayIndex(effortCalendarYear,effortCalendarMonth,1);
+  renderEffortCalendar();
+}
+function effortCalendarRows(id,day){
+  return model.activityRequests.filter(r=>r.childId===id&&r.dayIndex===day)
+    .sort((a,b)=>stampMillis(a.requestedAt)-stampMillis(b.requestedAt));
+}
+function renderEffortCalendar(){
+  const grid=$('effort-calendar-grid'),detail=$('effort-calendar-detail');if(!grid||!detail)return;
+  const selector=$('effort-calendar-child');
+  if(!ids.includes(effortCalendarChild))effortCalendarChild=displayIds()[0];
+  for(const option of selector.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
+  if(selector.value!==effortCalendarChild)selector.value=effortCalendarChild;
+  $('effort-calendar-month').textContent=`${effortCalendarYear}年${effortCalendarMonth+1}月`;
+  const current=calendarNowMonth();
+  $('effort-calendar-next').disabled=effortCalendarYear>=current.year&&effortCalendarMonth>=current.month;
+  if(!model.activityLoaded){grid.innerHTML='<p class="empty">活動記録を読み込み中…</p>';detail.innerHTML='';return;}
+  const today=rewardDayIndex();
+  const days=new Date(Date.UTC(effortCalendarYear,effortCalendarMonth+1,0)).getUTCDate();
+  const first=new Date(Date.UTC(effortCalendarYear,effortCalendarMonth,1)).getUTCDay();
+  const rows=[];const records=[];
+  for(let d=1;d<=days;d++){
+    const day=effortDayIndex(effortCalendarYear,effortCalendarMonth,d);
+    const items=effortCalendarRows(effortCalendarChild,day);
+    const approved=items.filter(r=>r.status==='approved').length;
+    const pending=items.filter(r=>r.status==='pending').length;
+    records.push({day,approved,pending});
+    rows.push(`<button type="button" class="effort-day ${effortCalendarDay===day?'selected':''} ${day===today?'today':''}" data-effort-day="${day}" aria-pressed="${effortCalendarDay===day}" ${day>today?'disabled':''} aria-label="${d}日：承認済み${approved}件、確認待ち${pending}件"><span class="effort-day-number">${d}</span><span class="effort-day-symbols">${approved?`<span class="effort-approved" aria-label="承認済み">✓${approved}</span>`:''}${pending?`<span class="effort-pending" aria-label="承認待ち">◷${pending}</span>`:''}</span></button>`);
+  }
+  grid.innerHTML='<div class="effort-weekdays">'+['日','月','火','水','木','金','土'].map(x=>`<span>${x}</span>`).join('')+'</div>'+
+    `<div class="effort-days">${Array.from({length:first},()=>'<span class="effort-blank" aria-hidden="true"></span>').join('')}${rows.join('')}</div>`;
+  const approvedDays=records.filter(d=>d.approved>0).length;
+  const approvedTotal=records.reduce((sum,r)=>sum+r.approved,0);
+  const pendingTotal=records.reduce((sum,r)=>sum+r.pending,0);
+  $('effort-calendar-summary').textContent=`承認済みの活動 ${approvedTotal}件 / がんばった日 ${approvedDays}日 / 確認待ち ${pendingTotal}件`;
+  const selected=effortCalendarDay;
+  const selectedDayNumber=new Date(selected*DAY).getUTCDate();
+  const selectedRows=effortCalendarRows(effortCalendarChild,selected);
+  const assigned=(model.rewardsLoaded&&selectedRows.some(r=>r.status==='approved'))?assignedPokemon(effortCalendarChild):null;
+  detail.innerHTML=`<h3>${effortCalendarMonth+1}月${selectedDayNumber}日のチャレンジ</h3>`+
+    (selectedRows.length?`<div class="effort-details">${selectedRows.map(r=>{
+      const label=r.status==='approved'?'承認済み':r.status==='pending'?'確認待ち':'見送り';
+      const statusClass=r.status==='approved'?'approved':r.status==='pending'?'pending':'rejected';
+      let pokemon='';
+      const no=r.status==='pending'?Number(r.candidateNo):r.status==='approved'?assigned?.get(`activity_${r.requestId}`):null;
+      if(Number.isInteger(no)&&no>=1&&no<=POKEDEX_TOTAL){
+        const name=`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`;
+        pokemon=r.status==='approved'?`<a href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer">${name}を公式ずかんで見る</a>`:`<span>仮ゲット：${name}</span>`;
+      }
+      return `<div class="effort-detail-row"><span><strong>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
+    }).join('')}</div>`:'<p class="tiny">この日の活動申請はありません。</p>');
+}
+
 function requestFor(id,kind,day=rewardDayIndex()){
   return model.activityRequests.find(r=>r.childId===id&&r.activityKind===kind&&r.dayIndex===day);
 }
@@ -570,22 +754,35 @@ function renderActivities(){
     return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">項目ごとに1日1回。仮ゲット中も1枠使います。不承認なら枠が戻ります。</p>${actions}</details>`;
   }).join('');
 }
+// v3.11 F04: 現行の承認トランザクションを変えず、一覧の視認性と子ども別フィルターを改善。
+let approvalFilter='all';
 function renderApprovals(){
   const root=$('activity-approvals');if(!root||!isParentPage)return;
   if(!model.activityLoaded){root.innerHTML='<p class="empty">申請を読み込み中…</p>';return;}
-  const pending=model.activityRequests.filter(r=>r.status==='pending')
-    .sort((a,b)=>stampMillis(a.requestedAt)-stampMillis(b.requestedAt));
-  const recent=model.activityRequests.filter(r=>r.status!=='pending')
+  const all=model.activityRequests;
+  const pendingAll=all.filter(r=>r.status==='pending');
+  const count=pendingAll.length;
+  const countEl=$('approval-pending-count');if(countEl)countEl.textContent=`未承認 ${count}件`;
+  const topCount=$('approval-jump-count');if(topCount)topCount.textContent=`${count}件`;
+  const select=$('approval-filter');
+  if(select){for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
+    if(select.value!==approvalFilter)select.value=approvalFilter;}
+  const matches=r=>approvalFilter==='all'||r.childId===approvalFilter;
+  const pending=pendingAll.filter(matches).sort((a,b)=>stampMillis(a.requestedAt)-stampMillis(b.requestedAt));
+  const recent=all.filter(r=>r.status!=='pending'&&matches(r))
     .sort((a,b)=>stampMillis(b.reviewedAt)-stampMillis(a.reviewedAt)).slice(0,8);
   const requests=[...pending,...recent];
-  root.innerHTML=`<p class="tiny">未承認：${pending.length}件。承認すると仮ゲットが正式獲得になり、見送りでは消えます。</p>`+
-    (requests.length?requests.map(r=>{
-      const kind=ACTIVITY_KINDS[r.activityKind]||r.activityKind;
-      const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
-      const no=Number(r.candidateNo);
-      const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:'';
-      return `<div class="approval-item"><div><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
-    }).join(''):'<p class="empty">申請はまだありません。</p>');
+  const staleCount=pendingAll.filter(r=>stampMillis(r.requestedAt)>0 && Date.now()-stampMillis(r.requestedAt)>=DAY).length;
+  const summary=$('approval-filter-summary');if(summary)summary.textContent=
+    `全員の確認待ち ${count}件${staleCount?`（うち24時間以上 ${staleCount}件）`:''}。表示中 ${pending.length}件。`;
+  root.innerHTML=(requests.length?requests.map(r=>{
+    const kind=ACTIVITY_KINDS[r.activityKind]||r.activityKind;
+    const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
+    const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
+    const no=Number(r.candidateNo);
+    const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:'';
+    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
+  }).join(''):'<p class="empty">この条件に該当する申請はありません。</p>');
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
@@ -830,11 +1027,12 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
+  renderRestGuide(now);
  currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();if(model.ready){renderWeek();renderHistory();}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();renderBonuses();if(model.ready){renderWeek();renderHistory();}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -843,7 +1041,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;previousRest.clear();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;previousRest.clear();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -895,7 +1093,7 @@ function subscribeReport(){
 }
 function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
-   const profiles={};for(const doc of snap.docs)profiles[doc.id]=doc.data();model.profiles=profiles;model.fromCache=snap.metadata.fromCache;model.profilesServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();setReady();setSettingsForm();
+   const profiles={};for(const doc of snap.docs)profiles[doc.id]=doc.data();model.profiles=profiles;model.fromCache=snap.metadata.fromCache;model.profilesServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();setReady();setSettingsForm();renderEffortCalendar();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'settings','main'),{includeMetadataChanges:true},snap=>{
    model.settings=snap.exists()?{...defaultSettings(),...snap.data()}:defaultSettings();
@@ -904,12 +1102,17 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderPlayers();
+   renderPokedex();renderPlayers();renderEffortCalendar();renderBonuses();
+ },listenerError));
+ cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
+   model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
+   model.bonusLoaded=true;model.bonusServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
+   renderBonuses();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();
+   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderRestGuide();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -925,7 +1128,7 @@ function refProfile(id){return dbApi.doc(db,'households',householdId,'profiles',
 function refSettings(){return dbApi.doc(db,'households',householdId,'settings','main')}
 function sessionsRef(){return dbApi.collection(db,'households',householdId,'sessions')}
 function ensureOnline(){if(!navigator.onLine)throw Error('インターネット接続が必要です。通信を確認してから操作してください。');if(!canOperate())throw Error('クラウドの最新状態を確認中です。再接続後に操作してください。');}
-async function runLocked(fn){if(busy)return;busy=true;try{ensureOnline();await fn();}catch(e){console.error(e);toast(errorText(e));}finally{busy=false;render();}}
+async function runLocked(fn){if(busy)return;busy=true;renderBonuses();try{ensureOnline();await fn();}catch(e){console.error(e);toast(errorText(e));}finally{busy=false;renderBonuses();render();}}
 async function startPlay(id,deviceId){return runLocked(async()=>{
   const now=Date.now();await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
@@ -1188,7 +1391,7 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
  }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
- if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));const data={version:4,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
@@ -1225,8 +1428,12 @@ function initUiEvents(){
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
+   if(btn.dataset.bonusGrant)grantSpecialBonus(btn.dataset.bonusGrant);
+   if(btn.dataset.bonusClaim)claimSpecialBonus(btn.dataset.bonusClaim);
    if(btn.dataset.activityRequest){const [id,kind]=btn.dataset.activityRequest.split(':');requestActivity(id,kind);}
    if(btn.dataset.activityReview){const [rid,action]=btn.dataset.activityReview.split(':');reviewActivity(rid,action);}
+   if(btn.dataset.restGuide){const [id,kind]=btn.dataset.restGuide.split(':');openRestGuideActivity(id,kind);}
+   if(btn.dataset.effortDay){effortCalendarDay=Number(btn.dataset.effortDay);renderEffortCalendar();}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
@@ -1237,7 +1444,11 @@ function initUiEvents(){
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d)d.close();}));
- $('pokedex-child')?.addEventListener('change',renderPokedex);
+ $('effort-calendar-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value)){effortCalendarChild=e.target.value;renderEffortCalendar();}});
+  $('effort-calendar-prev')?.addEventListener('click',()=>effortCalendarMonthShift(-1));
+  $('effort-calendar-next')?.addEventListener('click',()=>effortCalendarMonthShift(1));
+  $('approval-filter')?.addEventListener('change',e=>{approvalFilter=e.target.value;renderApprovals();});
+  $('pokedex-child')?.addEventListener('change',renderPokedex);
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
  $('confirm-end')?.addEventListener('click',()=>pendingEnd&&endPlay(pendingEnd));
   $('manual-form')?.addEventListener('submit',saveManualWait);

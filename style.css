@@ -153,3 +153,70 @@ body{color:var(--ui-ink)}
 .activity-person{margin:0}.activity-person summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:17px;list-style:none;padding:7px 0}.activity-person summary::-webkit-details-marker{display:none}.activity-person summary:after{content:'⌄';margin-left:auto;color:#6283aa}.activity-person[open] summary:after{content:'⌃'}.activity-person summary span{font-size:13px;color:#4b739a;font-weight:800}
 .activity-person > .tiny{margin:8px 0 4px}.provisional-label{color:#975d24!important;font-weight:900!important}.pokedex-provisional{margin:12px 0}.pokedex-provisional h3{font-size:16px;margin:0 0 10px}.provisional-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.provisional-card{border:1px dashed #e5bc80;background:#fff7e8;border-radius:16px;padding:13px}.provisional-card strong,.provisional-card small{display:block}.provisional-card strong{font-size:15px}.provisional-card small{font-size:12px;color:#916b35;margin-top:5px}
 @media(max-width:560px){.activity-person summary{align-items:flex-start;flex-direction:column;gap:4px}.activity-person summary:after{display:none}.activity-item{gap:8px}.activity-item strong{font-size:14px}}
+
+
+/* v3.11.0: F01休憩ナビ、F02活動カレンダー、F04承認インボックス */
+#activity-section,#activity-calendar,#rest-guide{scroll-margin-top:24px}
+.rest-guide{margin:16px 0;border:1px solid #cde9d7;background:linear-gradient(145deg,#f5fff7,#fffef9)}
+.rest-guide-people{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px}
+.rest-guide-person{min-width:0;background:#fff;border:1px solid #daf0e2;border-radius:17px;padding:15px}
+.rest-guide-person h3{font-size:17px;color:#277450;margin:0 0 12px}
+.rest-guide-person .tiny{line-height:1.6;margin:12px 0 0}
+.rest-guide-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.rest-guide-choice{display:grid;place-items:center;text-align:center;gap:5px;min-height:111px;padding:9px 5px;cursor:pointer;background:#f6fcf7;border:1px solid #cbe8d2;border-radius:14px;color:#285d45}
+.rest-guide-choice>span{font-size:27px;line-height:1.25}
+.rest-guide-choice strong{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.rest-guide-choice small{font-size:10px;color:#537f63}
+.rest-guide-choice:hover,.rest-guide-choice:focus-visible{background:#e4f9e9;border-color:#71b989;outline-offset:2px}
+.rest-guide-highlight{outline:4px solid #e5ae5f!important;outline-offset:2px}
+.effort-calendar-card{margin:18px 0}
+.effort-calendar-toolbar{display:flex;align-items:end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:14px 0}
+.effort-calendar-toolbar label,.approval-filterbar label{display:grid;gap:5px;font-size:13px;font-weight:850;color:#435d7e}
+.effort-calendar-toolbar select,.approval-filterbar select{min-width:150px;border:1px solid #d7e3f0;border-radius:12px;background:#fff;padding:10px 12px;font-size:16px;color:#2b4362}
+.effort-calendar-month-nav{display:flex;align-items:center;gap:11px}
+.effort-calendar-month-nav strong{min-width:114px;text-align:center;color:#344b6b}
+.effort-calendar-month-nav button{font-size:26px;font-weight:700;width:42px;height:42px;padding:0;display:grid;place-items:center}
+.effort-calendar-month-nav button:disabled{opacity:.38;cursor:not-allowed}
+.effort-calendar-summary{color:#3b617d;font-size:13px;font-weight:850;background:#f0f7ff;border-radius:12px;padding:11px 13px;line-height:1.6}
+.effort-calendar-grid{max-width:700px;margin:10px 0 15px}
+.effort-weekdays,.effort-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.effort-weekdays{margin-bottom:6px;text-align:center;font-size:12px;font-weight:800;color:#6c7e95}
+.effort-weekdays>span{padding:5px}
+.effort-day,.effort-blank{min-width:0;min-height:67px;border-radius:10px}
+.effort-day{cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:1px solid #e0e8f4;background:#fff;color:#314f74;padding:8px 3px}
+.effort-day:hover{background:#f2f8ff;border-color:#9bbfe9}
+.effort-day.selected{outline:2px solid #528fcb;outline-offset:0;background:#e8f4ff}
+.effort-day.today .effort-day-number{background:#2b7bb4;color:#fff;border-radius:50%;width:25px;height:25px;display:grid;place-items:center}
+.effort-day:disabled{opacity:.35;cursor:default}
+.effort-day-number{font-size:13px;font-weight:800;line-height:25px}
+.effort-day-symbols{display:flex;align-items:center;gap:4px;justify-content:center;flex-wrap:wrap;font-size:10px;font-weight:900}
+.effort-approved{color:#17845c}.effort-pending{color:#bb7a20}
+.effort-calendar-detail{padding:14px 16px;border:1px solid #e0eafb;background:#fafcff;border-radius:15px}
+.effort-calendar-detail h3{font-size:15px;margin:0 0 11px;color:#2f517c}
+.effort-details{display:grid;gap:7px}
+.effort-detail-row{display:flex;align-items:start;justify-content:space-between;gap:9px;border-top:1px solid #e4edf8;padding:10px 0;font-size:14px}
+.effort-detail-row strong,.effort-detail-row small{display:block}.effort-detail-row small{font-size:12px;margin-top:5px}.effort-detail-row a{color:#326da3}
+.effort-status{flex:0 0 auto;font-size:11px;font-weight:850;border-radius:99px;padding:5px 8px}
+.effort-status.approved{background:#def4e6;color:#1b7650}
+.effort-status.pending{background:#fff0cf;color:#98600c}
+.effort-status.rejected{background:#eef1f6;color:#66768c}
+.approval-count{font-size:13px;background:#fff3dc;color:#945d19;border:1px solid #f2d9ac;border-radius:99px;padding:8px 13px;white-space:nowrap}
+.approval-filterbar{display:flex;flex-wrap:wrap;gap:12px;align-items:end;justify-content:space-between;padding:10px 14px;background:#f5f9ff;border:1px solid #e3ebf7;border-radius:14px}
+.approval-filterbar .tiny{margin:0;color:#526e8a}
+.approval-overdue{background:#fffaf0;border-left:4px solid #e7a73d}
+.approval-copy{min-width:0}.approval-overdue-label{display:inline-block;margin-top:7px;font-size:11px;font-weight:850;color:#9f5d18;border-radius:99px;background:#ffe9be;padding:4px 8px}
+#approval-jump-count{display:inline-block;background:#fff1d5;color:#945e16;border-radius:99px;padding:2px 6px;margin-left:3px}
+@media(max-width:560px){.rest-guide-person{padding:12px}.rest-guide-choices{gap:6px}.rest-guide-choice{min-height:104px}.rest-guide-choice strong{font-size:12px}.effort-day,.effort-blank{min-height:56px}.effort-weekdays,.effort-days{gap:3px}.effort-day{padding:5px 1px}.effort-day-symbols{font-size:9px}.effort-calendar-month-nav{gap:6px}.effort-calendar-month-nav strong{min-width:103px;font-size:14px}}
+
+/* v3.11.1: 常時表示するバージョンと特別ボーナス */
+.app-version{display:inline-block;margin-top:5px;padding:3px 9px;border:1px solid #c8d8ea;background:#f7fbff;border-radius:8px;color:#536c89;font-size:11px;font-weight:750;letter-spacing:.03em;white-space:nowrap}
+.bonus-section{border:2px solid #e2d3a9;background:linear-gradient(145deg,#fffdf6,#f7fbff)}
+.bonus-section .section-head h2{margin-bottom:3px}
+.bonus-list{display:grid;gap:10px;margin:14px 0}
+.bonus-person{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid #e0e9f3;border-radius:16px;padding:13px 16px}
+.bonus-person-info{display:grid;gap:3px;min-width:0}
+.bonus-person-info strong{font-weight:900;color:#2b4464;font-size:16px}
+.bonus-person-info span{color:#596f88;font-size:13px}
+.bonus-person small{font-size:12px;color:#8a99ac;text-align:right}
+.bonus-person .btn{min-width:194px;min-height:44px}
+@media(max-width:620px){.bonus-person{align-items:stretch;flex-direction:column}.bonus-person small{text-align:left}.bonus-person .btn{width:100%;min-width:0}}
