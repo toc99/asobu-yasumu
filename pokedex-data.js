@@ -155,7 +155,7 @@ export const POKEMON_NAMES = Object.freeze(
 ]
 );
 export function officialPokedexUrl(number){
-  if(!Number.isInteger(number)||number<1||number>151)throw Error('図鑑番号が不正です');
+  if(!Number.isInteger(number)||number<1||number>1025)throw Error('図鑑番号が不正です');
   return `https://zukan.pokemon.co.jp/detail/${String(number).padStart(4,'0')}`;
 }
 // 同一獲得記録はどの端末でも同じポケモンに決定される（画像APIや外部通信不要）。
@@ -166,4 +166,39 @@ export function pokemonNoFromClaim(claim){
     hash=Math.imul(hash ^ input.charCodeAt(i), 16777619) >>> 0;
   }
   return 1+(hash % POKEMON_NAMES.length);
+}
+
+
+// v3.9: 全国図鑑1025匹。画像は取得しない。
+// 日本語名は公開データから取得。利用できない場合は番号表示にフォールバックする。
+export const POKEDEX_TOTAL=1025;
+const extendedNames=new Array(POKEDEX_TOTAL);
+for(let i=0;i<POKEMON_NAMES.length;i++)extendedNames[i]=POKEMON_NAMES[i];
+let namesPromise;
+export function pokemonName(number){return extendedNames[number-1]||`No.${String(number).padStart(4,'0')}`;}
+export function loadExtendedPokemonNames(){
+  if(namesPromise)return namesPromise;
+  namesPromise=(async()=>{
+    const urls=[
+      'https://cdn.jsdelivr.net/gh/motemen/pokemon-data@main/POKEMON_ALL.json',
+      'https://raw.githubusercontent.com/motemen/pokemon-data/main/POKEMON_ALL.json'
+    ];
+    for(const url of urls){
+      try{
+        const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),9000);
+        let response;
+        try{response=await fetch(url,{signal:controller.signal,cache:'force-cache'});}finally{clearTimeout(timer);}
+        if(!response.ok)continue;
+        const data=await response.json();if(!Array.isArray(data))continue;
+        for(const row of data){
+          const no=Number(row.national_pokedex_number);
+          if(no>=152&&no<=POKEDEX_TOTAL&&!extendedNames[no-1]&&row.pokeapi_species_name_ja)
+            extendedNames[no-1]=String(row.pokeapi_species_name_ja);
+        }
+        if(extendedNames[POKEDEX_TOTAL-1])return true;
+      }catch(err){console.warn('ポケモン名の読み込みができませんでした',err);}
+    }
+    return false;
+  })();
+  return namesPromise;
 }
