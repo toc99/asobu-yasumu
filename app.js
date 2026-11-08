@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.11.2';
+const version = 'v3.11.4';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -641,48 +641,6 @@ async function claimSpecialBonus(id){
     announcePokemon(id,no,oldOwned.has(no));
   });
 }
-// v3.11 F01: 休憩中の活動ナビ。表示と移動のみ（申請/報酬の書き込みは既存処理）。
-const REST_GUIDE_ICONS={study:'✏️',reading:'📖',exercise:'🏃',helping:'🤝',cleaning:'🧹',creating:'🎨',practicing:'🎵',trying:'🚀',persevering:'🏆',kindness:'💐'};
-let lastRestGuideSignature='';
-function restGuideChoices(id,day){
-  const requested=new Set(dailyRequests(id,day).map(r=>r.activityKind));
-  const choices=Object.keys(ACTIVITY_KINDS).filter(kind=>!requested.has(kind));
-  if(!choices.length)return [];
-  // 子ども/日付で安定して変化。途中の描画で候補が頻繁に動かないようにする。
-  const offset=hashReward(`${id}:${day}`)%choices.length;
-  return [...choices.slice(offset),...choices.slice(0,offset)].slice(0,3);
-}
-function renderRestGuide(now=Date.now()){
-  const root=$('rest-guide');if(!root)return;
-  const resting=(!isParentPage&&model.ready&&model.activityLoaded)
-    ?displayIds().filter(id=>model.profiles[id]&&status(model.profiles[id],now)==='resting'):[];
-  const day=rewardDayIndex(now);
-  const signature=JSON.stringify([day,resting.map(id=>[id,playerLabel(id),restGuideChoices(id,day),dailyActivityActive(id,day)])]);
-  if(signature===lastRestGuideSignature)return;
-  lastRestGuideSignature=signature;
-  root.classList.toggle('hidden',resting.length===0);
-  if(!resting.length){root.innerHTML='';return;}
-  root.innerHTML='<div class="section-head"><div><h2>🌱 おやすみ時間に何しよう？</h2><p>ゲームのおやすみ中も、好きなことに挑戦してみよう。</p></div></div>'+
-    '<div class="rest-guide-people">'+resting.map(id=>{
-      const choices=restGuideChoices(id,day),full=dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX;
-      return `<article class="rest-guide-person"><h3>${safe(playerLabel(id))}のおすすめ</h3>`+
-        (choices.length?`<div class="rest-guide-choices">${choices.map(kind=>
-          `<button type="button" class="rest-guide-choice" data-rest-guide="${id}:${kind}"><span aria-hidden="true">${REST_GUIDE_ICONS[kind]}</span><strong>${safe(ACTIVITY_KINDS[kind])}</strong><small>チャレンジをひらく</small></button>`
-        ).join('')}</div>`:'<p class="tiny">今日は全部のチャレンジを確認したね！ 休憩を楽しもう。</p>')+
-        `<p class="tiny">${full?'今日の活動報酬3枠は使用済みです。活動だけでも楽しめるよ。':'実際にできたら「今日のチャレンジ」から申請できるよ。'} 選んだだけでは申請されません。</p></article>`;
-    }).join('')+'</div>';
-}
-function openRestGuideActivity(id,kind){
-  if(isParentPage||!ids.includes(id)||!Object.prototype.hasOwnProperty.call(ACTIVITY_KINDS,kind))return;
-  const section=$('activity-section');
-  const details=section?.querySelector(`details.activity-person[data-child="${id}"]`);
-  if(!details)return;
-  details.open=true;
-  section.scrollIntoView({behavior:'smooth',block:'start'});
-  const button=Array.from(details.querySelectorAll('button[data-activity-request]')).find(b=>b.dataset.activityRequest===`${id}:${kind}`);
-  if(button){button.classList.add('rest-guide-highlight');setTimeout(()=>{if(button.isConnected){button.focus({preventScroll:true});button.classList.remove('rest-guide-highlight');}},500);}
-}
-
 // v3.11 F02: JSTの申請日を基準にする「がんばりカレンダー」。全件既存購読を再利用。
 function calendarNowMonth(now=Date.now()){
   const d=new Date(now+JST_OFFSET);return {year:d.getUTCFullYear(),month:d.getUTCMonth()};
@@ -764,11 +722,16 @@ function renderActivities(){
     const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
       const req=requestFor(id,kind),number=Number(req?.candidateNo);
       const label=Number.isInteger(number)&&number>0?`${pokemonName(number)}（No.${String(number).padStart(4,'0')}）`:'';
-      const status=req?.status==='approved'?'承認済み・正式ゲット':req?.status==='rejected'?'見送り・仮獲得を取り消しました':req?'仮ゲット・保護者の確認待ち':'申請できます';
+      const retry=req?.status==='rejected';
+      const alreadyDone=!!req&&!retry;
+      const suspended=rewardSuspended(model.profiles[id]);
+      const status=req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます';
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
-      return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${req||remaining===0||rewardSuspended(model.profiles[id])||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy?'disabled':''}>${req?'申請済み':rewardSuspended(model.profiles[id])?'ごほうびおやすみ中':remaining===0?'本日上限':'できた！申請'}</button>`:''}</div>`;
+      const unavailable=alreadyDone||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
+      const buttonLabel=alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請';
+      return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
     }).join('');
-    return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">項目ごとに1日1回。仮ゲット中も1枠使います。不承認なら枠が戻ります。</p>${actions}</details>`;
+    return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。</p>${actions}</details>`;
   }).join('');
 }
 // v3.11 F04: 現行の承認トランザクションを変えず、一覧の視認性と子ども別フィルターを改善。
@@ -805,24 +768,33 @@ async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
   if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
-  if(requestFor(id,kind))return toast('今日はこの項目をすでに申請しています。');
+  const existing=requestFor(id,kind);
+  if(existing&&existing.status!=='rejected')return toast('今日はこの項目をすでに申請しています。');
   if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
-  if(!confirm(`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`))return;
+  const prompt=existing?.status==='rejected'
+    ?`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」をもう一度やった？\nできたなら、もう一度申請してポケモンを仮ゲットしよう！`
+    :`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`;
+  if(!confirm(prompt))return;
   await runLocked(async()=>{
     const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
       const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
-      if(snapshots[0].exists())throw Error('今日はすでにこの項目を申請しています。');
+      const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
+      if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
+      if(oldRequest && (oldRequest.childId!==id || oldRequest.activityKind!==kind || oldRequest.dayIndex!==day))
+        throw Error('申請履歴と対象の活動が一致しません。');
       // 旧v3.9の申請が残る移行日のみ、画面に表示される既存申請数も加味する。
       if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は3匹までです。');
       const available=[1,2,3].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
       if(!available)throw Error('きょうの活動報酬は3枠すべて使用中です。');
       const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
       candidate=provisionalPokemonFor(id,rid,otherReserved);
+      // 見送り済みドキュメントは再利用する。set(上書き)により以前のreviewedAt/reviewedByを消去し、
+      // 新しい申請日時・仮ゲット番号・空き枠に差し替える。Firestore Rulesはrejected→pendingのみ許可。
       tx.set(ref,{childId:id,activityKind:kind,dayIndex:day,status:'pending',requestedBy:uid,requestedAt:dbApi.serverTimestamp(),slotNo:available,candidateNo:candidate});
       tx.set(activitySlotRef(id,day,available),{childId:id,dayIndex:day,slotNo:available,requestId:rid,candidateNo:candidate,updatedAt:dbApi.serverTimestamp()});
-      appendAudit(tx,'activity_request',id,'未申請','仮ゲット・承認待ち',rid);
+      appendAudit(tx,'activity_request',id,oldRequest?'見送り・再挑戦':'未申請','仮ゲット・承認待ち',rid);
     });
     toast(`${pokemonName(candidate)}を仮ゲット！ 保護者の承認で正式ゲットになります。`);
     // 反映はFirestoreのスナップショットを待つ（承認前に正式図鑑へ入れない）。
@@ -1197,7 +1169,6 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
-  renderRestGuide(now);
   if(isParentPage && Math.floor(now/1000)%5===0)renderHonestyAdmin();
  currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
@@ -1283,7 +1254,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderRestGuide();
+   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -1605,7 +1576,6 @@ function initUiEvents(){
    if(btn.dataset.bonusClaim)claimSpecialBonus(btn.dataset.bonusClaim);
    if(btn.dataset.activityRequest){const [id,kind]=btn.dataset.activityRequest.split(':');requestActivity(id,kind);}
    if(btn.dataset.activityReview){const [rid,action]=btn.dataset.activityReview.split(':');reviewActivity(rid,action);}
-   if(btn.dataset.restGuide){const [id,kind]=btn.dataset.restGuide.split(':');openRestGuideActivity(id,kind);}
    if(btn.dataset.effortDay){effortCalendarDay=Number(btn.dataset.effortDay);renderEffortCalendar();}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);

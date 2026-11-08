@@ -4,11 +4,11 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#eaf4ff"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="あそぶ・やすむ">
 <meta name="description" content="子どもたちのゲーム・動画の時間と休憩を自分で管理するアプリ">
-<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.11.2">
-<title>あそぶ・やすむ v3.11.2｜子ども用</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.11.4">
+<title>あそぶ・やすむ v3.11.4｜子ども用</title>
 </head>
 <body data-role="kid">
-<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span class="app-version" aria-label="アプリのバージョン">v3.11.2</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
+<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span class="app-version" aria-label="アプリのバージョン">v3.11.4</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
 <main class="container">
 <div id="setup-warning" class="setup-banner hidden"></div>
 <section id="login-screen" class="login-panel card"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form id="login-form" class="login-form"><label>メールアドレス<input id="email" type="email" required autocomplete="username"></label><label>パスワード<input id="password" type="password" required autocomplete="current-password"></label><button type="submit" class="btn primary">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><button id="retry-login" type="button" class="btn outline hidden">再接続する</button><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
@@ -20,7 +20,6 @@
  <aside id="rest-notice" class="rest-notice hidden" role="status" aria-live="polite"><div><strong id="rest-notice-title"></strong><p id="rest-notice-text"></p></div><button type="button" id="rest-notice-close" aria-label="閉じる">×</button></aside>
  <div class="players" id="players"></div>
 
- <section id="rest-guide" class="card rest-guide hidden" aria-label="休憩中の活動提案"></section>
  <section class="card bonus-section" id="bonus-child" aria-label="特別ボーナス">
   <div class="section-head"><div><h2>🎁 特別ボーナス</h2><p>おうちの人から届いたプレゼントで、ポケモンを1匹ゲットできるよ！</p></div></div>
   <div id="bonus-child-list" class="bonus-list"><p class="empty">プレゼントを確認中…</p></div>
@@ -58,5 +57,5 @@
 <dialog id="manual-dialog"><form id="manual-form" class="dialog-body"><div class="dialog-head"><h2 id="manual-title">待ち時間を設定</h2><button type="button" class="x" data-close aria-label="閉じる">×</button></div><p id="manual-current" class="manual-current"></p><p id="manual-policy" class="tiny"></p><label for="manual-minutes" class="manual-label">残り待ち時間（分）<input id="manual-minutes" type="number" min="1" max="1440" step="1" value="30" required inputmode="numeric"></label><div class="manual-presets"><button type="button" data-preset="15">15分</button><button type="button" data-preset="30">30分</button><button type="button" data-preset="45">45分</button><button type="button" data-preset="60">60分</button><button type="button" data-preset="90">90分</button></div><p class="manual-preview" id="manual-preview" role="status"></p><div class="dialog-buttons"><button type="button" class="btn secondary" data-close>もどる</button><button type="button" class="btn outline" id="manual-clear">手動待ち時間を解除</button><button type="submit" class="btn primary">待ち時間を保存</button></div></form></dialog>
 <dialog id="pokemon-result" class="pokemon-result"><div class="dialog-body pokemon-result-content"><div class="pokedex-celebrate">✦ ✨ ✦</div><h2 id="pokemon-result-title">ポケモンをゲット！</h2><div id="pokemon-result-name" class="pokemon-result-name"></div><p id="pokemon-result-number"></p><a id="pokemon-result-link" class="btn primary pokemon-link" href="https://zukan.pokemon.co.jp/" target="_blank" rel="noopener noreferrer">公式ずかんで姿を見る</a><button type="button" class="btn secondary" data-close>図鑑にもどる</button></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script type="module" src="app.js?v=3.11.2"></script>
+<script type="module" src="app.js?v=3.11.4"></script>
 </body></html>
