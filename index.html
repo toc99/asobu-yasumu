@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#eaf4ff"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="あそぶ・やすむ">
 <meta name="description" content="Switch・Switch2を使う子どもたちのゲーム時間と休憩を自分で管理するアプリ">
-<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.4.0">
-<title>あそぶ・やすむ v3.4｜子ども用</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=3.5.0">
+<title>あそぶ・やすむ v3.5｜子ども用</title>
 </head>
 <body data-role="kid">
 <header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
@@ -17,16 +17,23 @@
 <div id="night-policy" class="night-policy hidden" role="status"></div>
  <div class="syncbar"><span id="sync-indicator" class="signal pending">接続確認中</span><span id="last-sync"></span><button id="retry-connect" class="btn outline reconnect hidden" type="button">接続を再確認</button><button id="logout" class="text-btn">ログアウト</button></div>
  <div id="alerts" aria-live="polite"></div>
+ <aside id="rest-notice" class="rest-notice hidden" role="status" aria-live="polite"><div><strong id="rest-notice-title"></strong><p id="rest-notice-text"></p></div><button type="button" id="rest-notice-close" aria-label="閉じる">×</button></aside>
  <div class="players" id="players"></div>
  <section class="card device-section"><div class="section-head"><div><h2>🎮 2台のSwitch</h2><p>別々の本体で同時にあそべるよ</p></div></div><div class="device-grid" id="devices"></div><p class="tiny">同じSwitchで2人プレイするときは、2人とも「ゲームをはじめる」を押して、同じ本体を選んでね。</p></section>
  <nav class="subnav"><button id="tab-home" data-tab="home" class="subnav-active">🏠 いまのじかん</button><button id="tab-history" data-tab="history">📅 あそんだきろく</button></nav>
  <section id="history" class="card hidden"><div class="section-head"><h2>📊 この7日間のきろく</h2></div><div id="week-chart"></div><div class="section-head compact"><h2>1日のきろく</h2><input id="history-date" type="date" aria-label="日付"></div><div id="timeline"></div><div id="history-list"></div></section>
- <footer>Switch本体とは連動していません。ゲームを始める・終わる操作は本人が行います。</footer>
+ <section class="card report-section"><div class="section-head"><div><h2>📊 週間レポートとバッジ</h2><p>昨日までの7日間をふりかえろう</p></div></div><div id="weekly-report"><p class="empty">週間レポートを読み込み中…</p></div></section>
+ <section class="card rest-notify-settings"><div class="section-head"><div><h2>🔔 おやすみのおしらせ</h2><p>iPadでアプリを開いている間のお知らせ</p></div></div>
+ <label class="notify-option"><input id="notify-enabled" type="checkbox"> 休憩が終わる5分前・1分前・終了時にお知らせする</label>
+ <label class="notify-option"><input id="notify-sound" type="checkbox"> 音も鳴らす</label>
+ <div class="notify-buttons"><button type="button" id="notify-test" class="btn outline">おしらせをテスト</button><button type="button" id="notify-permission" class="btn outline">システム通知を許可（対応端末のみ）</button></div>
+ <p class="tiny" id="notify-help"></p></section>
+ <footer>Switch本体とは連動していません。ゲームを始める・終わる操作は本人が行います。通知はアプリを開いている間の補助機能です。</footer>
 </section>
 </main>
 <dialog id="device-dialog"><div class="dialog-body"><div class="dialog-head"><h2 id="device-title">どちらであそぶ？</h2><button class="x" data-close>×</button></div><p>2台ともえらべるよ。同じSwitchで2人プレイもOK！</p><div id="device-buttons" class="device-choice-grid"></div><button class="btn secondary full" data-close>もどる</button></div></dialog>
 <dialog id="end-dialog"><div class="dialog-body"><div class="dialog-head"><h2>ゲームをおわる？</h2><button class="x" data-close>×</button></div><div id="end-confirm-text" class="end-preview"></div><div class="dialog-buttons"><button class="btn secondary" data-close>まだあそぶ</button><button class="btn finish" id="confirm-end">おわって休む</button></div></div></dialog>
 <dialog id="manual-dialog"><form id="manual-form" class="dialog-body"><div class="dialog-head"><h2 id="manual-title">待ち時間を設定</h2><button type="button" class="x" data-close aria-label="閉じる">×</button></div><p id="manual-current" class="manual-current"></p><p id="manual-policy" class="tiny"></p><label for="manual-minutes" class="manual-label">残り待ち時間（分）<input id="manual-minutes" type="number" min="1" max="1440" step="1" value="30" required inputmode="numeric"></label><div class="manual-presets"><button type="button" data-preset="15">15分</button><button type="button" data-preset="30">30分</button><button type="button" data-preset="45">45分</button><button type="button" data-preset="60">60分</button><button type="button" data-preset="90">90分</button></div><p class="manual-preview" id="manual-preview" role="status"></p><div class="dialog-buttons"><button type="button" class="btn secondary" data-close>もどる</button><button type="button" class="btn outline" id="manual-clear">手動待ち時間を解除</button><button type="submit" class="btn primary">待ち時間を保存</button></div></form></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script type="module" src="app.js?v=3.4.0"></script>
+<script type="module" src="app.js?v=3.5.0"></script>
 </body></html>

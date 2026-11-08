@@ -6,7 +6,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.4.0';
+const version = 'v3.5.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -20,7 +20,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,nightPause:{enabled:false,start:'22:00',end:'07:00',enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[]};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
@@ -179,6 +179,140 @@ function familyRole(id) {
   if (gender === 'male') return older ? '兄' : '弟';
   return older ? '年上' : '年下';
 }
+// v3.5: 週間レポートは完了済みの7日間を対象にし、途中の「今日」を含めない。
+const REPORT_LIMIT = 1500;
+function reportRange(now=Date.now()) {
+  const end=dayStart(now);
+  return {before:addDays(end,-14),start:addDays(end,-7),end};
+}
+function reportStats(id) {
+  const {before,start,end}=reportRange();
+  const sessions=model.reportSessions.filter(s=>s.childId===id && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end>s.start).sort((a,b)=>a.start-b.start || a.end-b.end);
+  const days=Array.from({length:7},(_,i)=>addDays(start,i));
+  const daily=days.map(d=>sessions.reduce((total,s)=>total+overlap(s.start,s.end,d,addDays(d,1)),0));
+  const total=daily.reduce((a,b)=>a+b,0);
+  const priorDays=Array.from({length:7},(_,i)=>addDays(before,i));
+  const prevTotal=priorDays.reduce((sum,d)=>sum+sessions.reduce((a,s)=>a+overlap(s.start,s.end,d,addDays(d,1)),0),0);
+  const completed=sessions.filter(s=>s.end>=start && s.end<end);
+  // 休憩間隔の「記録上の比較」。夜間停止・保護者修正・端末外のゲームは監査できない。
+  let checked=0,passed=0;
+  for(let i=1;i<sessions.length;i++){
+    const s=sessions[i],prev=sessions[i-1];
+    if(s.start<start||s.start>=end || prev.end> s.start || prev.end < before)continue;
+    checked++;
+    if(s.start>=prev.end+(prev.end-prev.start))passed++;
+  }
+  // sessions.createdBy は当該アプリの子ども/保護者アカウントのUID。
+  // 旧版データ移行時に保護者が作成した履歴は「子ども自身の終了」に数えない。
+  const selfEnded=completed.filter(s=>typeof s.createdBy==='string' && s.createdBy.length>0 && (isParentPage ? s.createdBy!==uid : s.createdBy===uid)).length;
+  const badges=[
+    {icon:'🌟',title:'じぶんでおしまい',description:'子ども画面から1回終了',earned:selfEnded>=1},
+    {icon:'🏅',title:'おしまい上手',description:'子ども画面から3回終了',earned:selfEnded>=3},
+    {icon:'🌱',title:'やすむ名人',description:'記録上、休憩間隔を3回守れた',earned:passed>=3}
+  ];
+  return {total,prevTotal,average:total/7,daily,days,completed:completed.length,checked,passed,selfEnded,badges};
+}
+function reportDelta(now,prev){
+  if(prev===0)return now===0?'前週と同じ':'前週の記録なし';
+  const p=Math.round((now-prev)/prev*100);
+  return `${p>0?'+':''}${p}%`;
+}
+function renderReport(){
+  const node=$('weekly-report');if(!node)return;
+  if(!model.reportLoaded){node.innerHTML='<p class="empty">週間レポートを読み込み中…</p>';return;}
+  const range=reportRange();
+  const header=`<p class="report-note">${safe(dateKey(range.start))}〜${safe(dateKey(range.end-DAY))}の確定記録（今日のプレイは明日の集計から反映）</p>`;
+  const cards=displayIds().map(id=>{
+    const stats=reportStats(id);
+    const theme=themeFor(model.profiles[id]);
+    const pct=stats.checked?Math.round(stats.passed/stats.checked*100):null;
+    const dayBars=stats.daily.map((v,i)=>{
+      const pctBar=Math.max(0,Math.min(100,v/(Math.max(...stats.daily,30*MIN))*100));
+      const label=new Date(stats.days[i]).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric'});
+      return `<div class="report-day"><span>${safe(label)}</span><div class="report-track"><i class="${theme}" style="width:${pctBar.toFixed(1)}%"></i></div><span>${safe(brief(v))}</span></div>`;
+    }).join('');
+    const badges=stats.badges.map(b=>`<div class="badge-item ${b.earned?'earned':'locked'}" aria-label="${safe(b.title)}・${b.earned?'達成':'未達成'}"><span aria-hidden="true">${b.earned?b.icon:'○'}</span><strong>${safe(b.title)}</strong><small>${safe(b.description)}${b.earned?' · 達成':''}</small></div>`).join('');
+    return `<article class="report-card ${theme}"><h3>${safe(symbolFor(model.profiles[id]))} ${safe(playerLabel(id))}</h3>
+      <div class="report-metrics"><div><small>7日間の合計</small><strong>${safe(brief(stats.total))}</strong></div><div><small>1日平均（7日割）</small><strong>${safe(brief(stats.average))}</strong></div><div><small>前週比</small><strong>${safe(reportDelta(stats.total,stats.prevTotal))}</strong></div></div>
+      <div class="report-subtitle">日別プレイ時間</div><div class="report-days">${dayBars}</div>
+      <div class="report-subtitle">記録上の休憩間隔</div><p class="report-compliance">${pct===null?'比較できる連続記録がありません':`${stats.passed}/${stats.checked}回（${pct}%）`}</p>
+      <div class="report-subtitle">今週のバッジ</div><div class="report-badges">${badges}</div></article>`;
+  }).join('');
+  node.innerHTML=header+`<div class="report-grid">${cards}</div>`+
+    `<p class="tiny report-caveat">集計はアプリに記録された履歴に基づきます。休憩間隔は「直前のゲーム時間と同じ長さを空けたか」の参考値です。夜間停止・保護者による変更や、Switch本体の実利用までは判定しません。${model.reportFromCache?'（通信が不安定なため保存済みデータを表示中）':''}${model.reportTruncated?'（取得上限に達したため集計が不完全な可能性があります）':''}</p>`;
+}
+// v3.5: iPadでアプリを開いている間に使える画面通知＋音＋任意のOS通知。
+// Web Pushサーバーがないため、アプリを閉じた状態への通知は保証しない。
+const notifyKeys={enabled:'asobu.v35.notify.enabled',sound:'asobu.v35.notify.sound'};
+function storedFlag(key,fallback=false){try{const v=localStorage.getItem(key);return v===null?fallback:v==='true';}catch{return fallback;}}
+function saveFlag(key,value){try{localStorage.setItem(key,String(value));}catch{}}
+let notifyEnabled=storedFlag(notifyKeys.enabled,false),notifySound=storedFlag(notifyKeys.sound,true);
+let noticeAudio=null,noticeHideTimer=null;
+const previousRest=new Map(),noticeDedup=new Set();
+function initNotifySettings(){
+  if(isParentPage)return;
+  $('notify-enabled').checked=notifyEnabled;$('notify-sound').checked=notifySound;
+  updateNotifyHelp();
+}
+function updateNotifyHelp(){
+  const el=$('notify-help');if(!el)return;
+  const granted=typeof Notification!=='undefined' && Notification.permission==='granted';
+  const possible=typeof Notification!=='undefined' && typeof Notification.requestPermission==='function' && 'serviceWorker' in navigator;
+  el.textContent=(!notifyEnabled?'お知らせはOFFです。':`画面内のお知らせはONです。${notifySound?'音も鳴らします。':'音は鳴らしません。'}`)+
+    (granted?' 端末のシステム通知も許可されています（アプリ起動中のみ）。':possible?' 「システム通知を許可」は任意です。':' このブラウザーではシステム通知を使えません。')+
+    ' iPadを閉じた状態や別アプリ使用中の通知は保証しません。';
+  $('notify-permission').classList.toggle('hidden',!possible||granted);
+}
+function warmAudio(){
+  if(!notifySound)return;
+  try{
+    const Ctor=window.AudioContext||window.webkitAudioContext;
+    if(Ctor){noticeAudio=noticeAudio||new Ctor();noticeAudio.resume().catch(()=>{});}
+  }catch(e){console.warn('audio warm-up',e);}
+}
+function playNoticeSound(){
+  if(!notifySound||!noticeAudio||noticeAudio.state!=='running')return;
+  try{
+    const ctx=noticeAudio,t=ctx.currentTime;
+    for(const [index,freq] of [660,880].entries()){
+      const osc=ctx.createOscillator(),gain=ctx.createGain(),at=t+index*.19;
+      osc.type='sine';osc.frequency.value=freq;
+      gain.gain.setValueAtTime(0.0001,at);gain.gain.exponentialRampToValueAtTime(0.10,at+.025);gain.gain.exponentialRampToValueAtTime(0.0001,at+.17);
+      osc.connect(gain);gain.connect(ctx.destination);osc.start(at);osc.stop(at+.18);
+    }
+  }catch(e){console.warn('notification sound',e);}
+}
+async function systemNotice(title,body,tag){
+  if(typeof Notification==='undefined'||Notification.permission!=='granted'||!('serviceWorker' in navigator))return;
+  try{const reg=await navigator.serviceWorker.ready;
+    if(typeof reg.showNotification==='function')await reg.showNotification(title,{body,tag,icon:'./icon-192.png',badge:'./icon-192.png'});
+  }catch(e){console.warn('system notification unavailable',e);}
+}
+function showRestNotice(title,body,tag){
+  const panel=$('rest-notice');if(!panel)return;
+  $('rest-notice-title').textContent=title;$('rest-notice-text').textContent=body;panel.classList.remove('hidden');
+  clearTimeout(noticeHideTimer);noticeHideTimer=setTimeout(()=>panel.classList.add('hidden'),20000);
+  playNoticeSound();systemNotice(title,body,tag);
+}
+function checkRestNotices(now=Date.now()){
+  if(isParentPage||!model.ready||!canOperate()||document.hidden)return;
+  for(const id of ids){
+    const p=model.profiles[id];if(!p)continue;
+    const due=restEnd(p),left=p.activeStart>0?0:waitingRemaining(p,now),resting=p.activeStart===0&&left>0;
+    const prev=previousRest.get(id);const current={due,left,resting};
+    previousRest.set(id,current);
+    if(!notifyEnabled||!prev||!prev.resting||prev.due!==due)continue;
+    let kind=null,title='',body='';
+    if(prev.left>0 && !resting && left===0 && now-due>=0 && now-due<=60000){kind='end';title=`${playerLabel(id)}：休憩おわり！`;body='ゲームをはじめてもいいよ。';}
+    else if(resting&&prev.left>MIN&&left<=MIN){kind='1m';title=`${playerLabel(id)}：あと1分`;body='もうすぐ休憩がおわるよ。';}
+    else if(resting&&prev.left>5*MIN&&left<=5*MIN){kind='5m';title=`${playerLabel(id)}：あと5分`;body='あと少し、ゆっくり休もう。';}
+    if(!kind)continue;
+    const key=`${id}|${due}|${kind}`;
+    if(noticeDedup.has(key))continue;
+    noticeDedup.add(key);showRestNotice(title,body,`asobu-${key}`);
+  }
+}
+
 function currentDateTick(){const now=Date.now();$('clock').textContent=clock(now);$('today-date').textContent=new Date(now).toLocaleDateString('ja-JP',{month:'long',day:'numeric',weekday:'short'});}
 function renderSync(){const node=$('sync-indicator'),last=$('last-sync');if(!node)return;
   const online=navigator.onLine;
@@ -266,11 +400,11 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))} · ${safe(deviceName(s.deviceId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
- currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();
+ currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();checkRestNotices(now);
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();if(model.ready){renderWeek();renderHistory();}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();if(model.ready){renderWeek();renderHistory();}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -279,7 +413,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];retryAfterError=false;}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;previousRest.clear();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -319,6 +453,16 @@ function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({pr
   $('night-start').value=policy.start||'22:00';$('night-end').value=policy.end||'07:00';
   lastSettingsHash=hash;
 }
+let reportUnsubscribe=null,reportPeriodKey='';
+function subscribeReport(){
+  if(!dbApi||!db||!uid)return;
+  if(reportUnsubscribe){reportUnsubscribe();reportUnsubscribe=null;}
+  reportPeriodKey=dateKey(Date.now());
+  model.reportLoaded=false;renderReport();
+  reportUnsubscribe=dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.where('end','>=',reportRange().before),dbApi.orderBy('end','desc'),dbApi.limit(REPORT_LIMIT)),{includeMetadataChanges:true},snap=>{
+    model.reportSessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.reportLoaded=true;model.reportFromCache=snap.metadata.fromCache;model.reportTruncated=snap.size>=REPORT_LIMIT;renderReport();
+  },e=>{console.warn('report listener',e);model.reportLoaded=false;renderReport();});
+}
 function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
    const profiles={};for(const doc of snap.docs)profiles[doc.id]=doc.data();model.profiles=profiles;model.fromCache=snap.metadata.fromCache;model.profilesServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();setReady();setSettingsForm();
@@ -330,6 +474,8 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
  },listenerError));
+ subscribeReport();
+ cleanups.push(()=>{if(reportUnsubscribe){reportUnsubscribe();reportUnsubscribe=null;}reportPeriodKey='';});
  if(isParentPage){
    cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'presence','ipad'),snap=>{model.presence=snap.exists()?snap.data():null;renderSync();},listenerError));
    cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),snap=>{model.auditLogs=snap.docs.map(d=>({...d.data(),logId:d.id}));renderAudit();},listenerError));
@@ -607,6 +753,14 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
 function initUiEvents(){
  $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
  $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
+ if(!isParentPage){
+   $('notify-enabled')?.addEventListener('change',e=>{notifyEnabled=e.target.checked;saveFlag(notifyKeys.enabled,notifyEnabled);warmAudio();updateNotifyHelp();});
+   $('notify-sound')?.addEventListener('change',e=>{notifySound=e.target.checked;saveFlag(notifyKeys.sound,notifySound);warmAudio();updateNotifyHelp();});
+   $('notify-test')?.addEventListener('click',()=>{warmAudio();showRestNotice('お知らせのテスト','アプリを開いている間は、お知らせを表示できます。','asobu-test');});
+   $('rest-notice-close')?.addEventListener('click',()=>{$('rest-notice').classList.add('hidden');});
+   $('notify-permission')?.addEventListener('click',async()=>{try{const permission=await Notification.requestPermission();updateNotifyHelp();toast(permission==='granted'?'通知を許可しました。':'システム通知は許可されていません。');}catch(e){updateNotifyHelp();toast('この環境ではシステム通知を利用できません。');}});
+   initNotifySettings();
+ }
  document.addEventListener('click',e=>{
    const btn=e.target.closest('button');if(!btn)return;
    if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
@@ -687,6 +841,7 @@ async function startFirebase(){
    if(!isParentPage){setInterval(heartbeat,60000);}
     setInterval(render,1000);
     setInterval(()=>{if(uid&&navigator.onLine&&(!model.profilesServerConfirmed||!model.settingsServerConfirmed)&&!reconnecting&&!authCheckBusy)recheckConnection();},15000);
+    setInterval(()=>{if(uid&&model.ready&&navigator.onLine&&reportPeriodKey&&reportPeriodKey!==dateKey(Date.now()))subscribeReport();},60000);
     render();
    if('serviceWorker' in navigator && !isParentPage && location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
   }catch(e){console.error(e);$('setup-warning').textContent='Firebase SDKに接続できません。インターネット接続、ブラウザ設定、設定ファイルを確認してください。 '+errorText(e);$('setup-warning').classList.remove('hidden');}
