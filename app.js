@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.11.4';
+const version = 'v3.11.5';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -199,6 +199,28 @@ function ageOf(profile, now = Date.now()) {
   const [year, month, day] = dob.split('-').map(Number);
   const today = dateKey(now).split('-').map(Number);
   return today[0] - year - (today[1] < month || (today[1] === month && today[2] < day) ? 1 : 0);
+}
+// v3.11.5: 1台のiPadに2人を並べて表示するため、年齢による見た目の変更は子ども単位。
+// ゲーム・休憩・報酬の判定とFirestore上の値には一切影響を与えない。
+const JUNIOR_MAX_AGE = 7;
+const JUNIOR_ACTIVITIES = Object.freeze({
+  study:{icon:'✏️',label:'べんきょうを した'},
+  reading:{icon:'📖',label:'ほんを よんだ'},
+  exercise:{icon:'🏃',label:'からだを うごかした'},
+  helping:{icon:'🧹',label:'おてつだいを した'},
+  cleaning:{icon:'🧺',label:'おかたづけを した'},
+  creating:{icon:'🎨',label:'なにかを つくった'},
+  practicing:{icon:'🎵',label:'れんしゅうを した'},
+  trying:{icon:'🌟',label:'あたらしい ことに ちょうせん'},
+  persevering:{icon:'💪',label:'さいごまで がんばった'},
+  kindness:{icon:'🤝',label:'だれかを たすけた'}
+});
+function ageModeFor(profile,now=Date.now()){
+  const age=ageOf(profile,now);
+  return age!==null&&age>=0&&age<=JUNIOR_MAX_AGE?'junior':'standard';
+}
+function ageModeForChild(id,now=Date.now()){
+  return ageModeFor(model.profiles[id],now);
 }
 function displayIds() {
   // Both birth dates must be known; otherwise preserve existing positions.
@@ -483,10 +505,23 @@ function claimEligibility(id,now=Date.now()){
   return {ok:true,label:'ポケモンをゲット！'};
 }
 function rewardActionFor(id,now=Date.now()){
-  const state=claimEligibility(id,now);
-  return `<div class="pokemon-reward-action"><span>🎁 ゲーム・休憩のごほうび</span>${!isParentPage && state.ok
-    ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>ポケモンをゲット！</button>`
-    : `<small>${safe(state.label)}</small>`}</div>`;
+  const state=claimEligibility(id,now),junior=!isParentPage&&ageModeForChild(id,now)==='junior';
+  const caption=junior?'🎁 ゲームと おやすみの ごほうび':'🎁 ゲーム・休憩のごほうび';
+  const claimLabel=junior?'ポケモンを ゲット！':'ポケモンをゲット！';
+  const simpleMessages={
+    '図鑑を読み込み中':'ずかんを よんでいるよ',
+    'きょうのゲーム報酬はゲット済み':'きょうの ポケモンは もう もらったよ',
+    'ゲームと休憩を守ったらチャレンジ':'ゲームを やめて、おやすみ したら もらえるよ',
+    'このゲームのごほうびは おやすみ':'こんかいの ポケモンは おやすみ',
+    '次のゲームと休憩でチャレンジ':'つぎの ゲームの あとに チャレンジ！',
+    'ゲーム・動画を終えてからチャレンジ':'ゲームや どうがを やめてからね',
+    'おやすみを守ったらゲット！':'おやすみ が おわったら ゲット！',
+    'クラウドを確認中':'つながるのを まってね'
+  };
+  const stateLabel=junior?(simpleMessages[state.label]||state.label):state.label;
+  return `<div class="pokemon-reward-action"><span>${caption}</span>${!isParentPage && state.ok
+    ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>${claimLabel}</button>`
+    : `<small>${safe(stateLabel)}</small>`}</div>`;
 }
 function renderPokedex(){
   const target=$('pokedex-grid');if(!target)return;
@@ -495,6 +530,7 @@ function renderPokedex(){
   for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
   const id=select.value,allClaims=rewardClaims(id),claims=allClaims.filter(c=>c.revoked!==true),map=pokemonMapFor(id);
+  if(!isParentPage)$('pokemon-collection')?.classList.toggle('age-junior',ageModeForChild(id)==='junior');
   const unique=map.size,duplicates=claims.length-unique;
   const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
   $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回${allClaims.length>claims.length?`　・　対象外：${allClaims.length-claims.length}件`:''}`;
@@ -582,9 +618,10 @@ function renderBonuses(){
   }
   if(child){
     child.innerHTML=displayIds().map(id=>{
-      const count=availableBonusGrants(id).length;
-      return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし'}</span></div>`+
-        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>🎉 ポケモンを1匹ゲット！</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
+      const count=availableBonusGrants(id).length,junior=ageModeForChild(id)==='junior';
+      const message=junior?(count?`🎁 あと ${count}かい もらえるよ`:'いまは プレゼントなし'):(count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし');
+      return `<div class="bonus-person ${junior?'age-junior':''}"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${message}</span></div>`+
+        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>${junior?'🎉 ポケモンを もらう！':'🎉 ポケモンを1匹ゲット！'}</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
         '</div>';
     }).join('');
   }else if(admin){
@@ -669,6 +706,7 @@ function renderEffortCalendar(){
   if(!ids.includes(effortCalendarChild))effortCalendarChild=displayIds()[0];
   for(const option of selector.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(selector.value!==effortCalendarChild)selector.value=effortCalendarChild;
+  if(!isParentPage)$('activity-calendar')?.classList.toggle('age-junior',ageModeForChild(effortCalendarChild)==='junior');
   $('effort-calendar-month').textContent=`${effortCalendarYear}年${effortCalendarMonth+1}月`;
   const current=calendarNowMonth();
   $('effort-calendar-next').disabled=effortCalendarYear>=current.year&&effortCalendarMonth>=current.month;
@@ -714,10 +752,13 @@ function requestFor(id,kind,day=rewardDayIndex()){
 }
 function renderActivities(){
   const root=$('activity-rewards');if(!root)return;
-  // Keep each child's panel open when realtime snapshots refresh the activity list.
+  // 監視データ更新時に、子どもが開いた/閉じたパネルの状態を維持する。
+  const existing=root.querySelectorAll('details.activity-person');
+  const hasExisting=existing.length>0;
   const expanded=new Set([...root.querySelectorAll('details.activity-person[open]')].map(el=>el.dataset.child));
   if(!model.ready||!model.activityLoaded||!model.rewardsLoaded){root.innerHTML='<p class="empty">ごほうびを読み込み中…</p>';return;}
   root.innerHTML=displayIds().map(id=>{
+    const junior=!isParentPage&&ageModeForChild(id)==='junior';
     const used=dailyActivityActive(id),remaining=Math.max(0,ACTIVITY_DAILY_MAX-used);
     const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
       const req=requestFor(id,kind),number=Number(req?.candidateNo);
@@ -725,13 +766,22 @@ function renderActivities(){
       const retry=req?.status==='rejected';
       const alreadyDone=!!req&&!retry;
       const suspended=rewardSuspended(model.profiles[id]);
-      const status=req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます';
+      const status=junior
+        ?(req?.status==='approved'?'できた！ ポケモン ゲット！':retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち':'まだ おくってないよ')
+        :(req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
       const unavailable=alreadyDone||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
-      const buttonLabel=alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請';
+      const buttonLabel=junior
+        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
+        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
+      const display=junior?(JUNIOR_ACTIVITIES[kind]||{icon:'⭐',label:name}):null;
+      if(junior)return `<div class="activity-item activity-junior-item"><div class="activity-junior-icon" aria-hidden="true">${display.icon}</div><div class="activity-junior-text"><strong>${safe(display.label)}</strong><small>${safe(status)}</small>${detail}</div><button type="button" class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button></div>`;
       return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
     }).join('');
-    return `<details class="activity-person" data-child="${id}" ${expanded.has(id)?'open':''}><summary><strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span></summary><p class="tiny">1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。</p>${actions}</details>`;
+    const opened=expanded.has(id)||(!hasExisting&&junior);
+    const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの できた：${used} / ${ACTIVITY_DAILY_MAX}　あと ${remaining}かい</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span>`;
+    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
+    return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p><div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
 }
 // v3.11 F04: 現行の承認トランザクションを変えず、一覧の視認性と子ども別フィルターを改善。
@@ -771,9 +821,13 @@ async function requestActivity(id,kind){
   const existing=requestFor(id,kind);
   if(existing&&existing.status!=='rejected')return toast('今日はこの項目をすでに申請しています。');
   if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
-  const prompt=existing?.status==='rejected'
-    ?`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」をもう一度やった？\nできたなら、もう一度申請してポケモンを仮ゲットしよう！`
-    :`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`;
+  const junior=ageModeForChild(id)==='junior';
+  const activityName=junior?(JUNIOR_ACTIVITIES[kind]?.label||ACTIVITY_KINDS[kind]):ACTIVITY_KINDS[kind];
+  const prompt=junior
+    ?`${playerLabel(id)}：${activityName}？\nほんとうに できたら、おうちのひとに おくろう！\n「OK」を おしてね。`
+    :existing?.status==='rejected'
+      ?`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」をもう一度やった？\nできたなら、もう一度申請してポケモンを仮ゲットしよう！`
+      :`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`;
   if(!confirm(prompt))return;
   await runLocked(async()=>{
     const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
@@ -1022,18 +1076,19 @@ function videoShortcutUrl(minutes){
 }
 function renderVideoAction(id,p,now=Date.now()){
   const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p),active=!!start;
+  const junior=!isParentPage&&ageModeForChild(id,now)==='junior';
   if(!active){
     if(isParentPage)return '';
-    return `<div class="video-box"><div class="video-head">📺 動画を見る <small>お知らせ：${Number(model.settings.videoLimitMinutes)||30}分</small></div>`+
+    return `<div class="video-box"><div class="video-head">${junior?'📺 どうがを みる':'📺 動画を見る'} <small>${junior?'おしらせ':'お知らせ'}：${Number(model.settings.videoLimitMinutes)||30}分</small></div>`+
       (isParentPage?'<p class="video-note">動画も利用時間に加算。終了後は同じ長さだけ休みます。</p>':
-       `<button type="button" class="btn video-start" data-video-start="${id}" ${p.activeStart>0||waitingRemaining(p,now)>0||busy||!canOperate()?'disabled':''}>▶️ 動画を見る</button>`)+
+       `<button type="button" class="btn video-start" data-video-start="${id}" ${p.activeStart>0||waitingRemaining(p,now)>0||busy||!canOperate()?'disabled':''}>${junior?'▶️ どうがを みる':'▶️ 動画を見る'}</button>`)+
       '</div>';
   }
   const remaining=Math.max(0,due-now),overdue=now>=due;
   const label=overdue?'時間になったよ！':`あと ${hms(remaining)}`;
   const nativeAction=!isParentPage&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
-  const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>⏹️ 動画をおわる</button>`:'';
-  return `<div class="video-box ${overdue?'video-overdue':''}"><div class="video-head">📺 動画を見ているよ <small>${minutes}分のお知らせ</small></div>`+
+  const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>${junior?'⏹️ どうがを やめたよ':'⏹️ 動画をおわる'}</button>`:'';
+  return `<div class="video-box ${overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
     `<div class="video-countdown">${safe(label)}</div>`+
     (overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
     (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
@@ -1102,17 +1157,25 @@ function renderPlayers(now=Date.now()){
   const keepOpen=new Set([...$('players').querySelectorAll('details[data-player-tools][open]')].map(el=>el.dataset.playerTools));
   $('players').innerHTML=displayIds().map((id,i)=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
+    const junior=!isParentPage&&ageModeFor(p,now)==='junior';
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
     const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
     const title=st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
+    const juniorTitle=st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
     const mainTitle=st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
     const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
       st==='watching'?`いま終わると ${brief(Math.max(0,now-videoStartedMillis(p)))} の休憩が必要`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+    const juniorMainTitle=st==='playing'?'あそんでいる じかん':st==='watching'?'どうがを みている じかん':st==='resting'?'あと これだけ おやすみ':'いまは あそべるよ！';
+    const juniorSub=st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
+    const juniorDetail=st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
+      st==='watching'?`いま やめたら ${brief(Math.max(0,now-videoStartedMillis(p)))} おやすみ`:
+      st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
-    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||st==='watching'||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
+    const actionText=junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
+    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||st==='watching'||busy||!canOperate()?'disabled':''}>${actionText}</button>`;
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
@@ -1131,9 +1194,9 @@ function renderPlayers(now=Date.now()){
     const videoToday=Math.max(0,today-gameToday);
     const age = ageOf(p, now);
     const subtitle = age === null ? '年齢未設定' : `${age}さい`;
-    return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
-      <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
-      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
+    return `<article class="player ${themeFor(p)} ${junior?'age-junior':''}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
+      <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
+      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
       <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
