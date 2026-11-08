@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.11.5';
+const version = 'v3.11.6';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -480,6 +480,116 @@ function pokemonMapFor(id){
     if(Number.isInteger(no))counts.set(no,(counts.get(no)||0)+1);
   }
   return counts;
+}
+// v3.11.6: 5匹編成のマイチーム。プロフィールの独立フィールドのみ更新し、報酬処理は変更しない。
+const TEAM_SIZE=5;
+let favoriteTeamChild='older', editingTeamSlot=null;
+function teamFromProfile(profile){
+  const raw=Array.isArray(profile?.favoriteTeam)?profile.favoriteTeam:[];
+  const seen=new Set();
+  return Array.from({length:TEAM_SIZE},(_,i)=>{
+    const no=raw[i];
+    if(!Number.isInteger(no)||no<1||no>POKEDEX_TOTAL||seen.has(no))return 0;
+    seen.add(no);return no;
+  });
+}
+function effectiveTeamFor(id,profile=model.profiles[id]){
+  const owned=pokemonMapFor(id);
+  // ズル判定によって取り消された報酬はチームから非表示にする。保存した編成は消さない。
+  return teamFromProfile(profile).map(no=>no&&owned.has(no)?no:0);
+}
+function teamAfterSelection(team,slot,no){
+  if(!Number.isInteger(slot)||slot<0||slot>=TEAM_SIZE||!Number.isInteger(no)||no<0||no>POKEDEX_TOTAL)
+    throw Error('チームの選択が正しくありません。');
+  const next=[...team];
+  if(next.length!==TEAM_SIZE)throw Error('チームの人数が正しくありません。');
+  const previous=next.indexOf(no);
+  if(no===0){next[slot]=0;return next;}
+  // すでにチーム内にいるポケモンを選ぶと、その枠と位置を入れ替える。
+  if(previous>=0&&previous!==slot)next[previous]=next[slot];
+  next[slot]=no;
+  return next;
+}
+function renderFavoriteTeam(){
+  const stage=$('team-stage'),selector=$('team-child'),info=$('team-status');
+  if(!stage||!selector||!info)return;
+  if(!ids.includes(favoriteTeamChild))favoriteTeamChild='older';
+  for(const option of selector.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
+  if(selector.value!==favoriteTeamChild)selector.value=favoriteTeamChild;
+  if(!model.ready||!model.rewardsLoaded){stage.innerHTML='<p class="empty">チームをよみこみ中…</p>';info.textContent='ずかんのデータを かくにん中…';return;}
+  const id=favoriteTeamChild,team=effectiveTeamFor(id),count=team.filter(Boolean).length;
+  const junior=!isParentPage&&ageModeForChild(id)==='junior';
+  const canEdit=!isParentPage&&canOperate()&&model.rewardsServerConfirmed&&!busy;
+  $('favorite-team')?.classList.toggle('age-junior',junior);
+  $('favorite-team')?.classList.toggle('team-bro',id==='younger');
+  info.textContent=`${playerLabel(id)}の チーム　${count} / ${TEAM_SIZE}ひき`;
+  stage.innerHTML=team.map((no,i)=>{
+    const leader=i===0,role=leader?'リーダー':`メンバー ${i+1}`;
+    const name=no?pokemonName(no):'あいている ばしょ';
+    const hue=no?(no*37+40)%360:215;
+    const inside=`<span class="team-slot-top"><span class="team-role">${leader?'★ ':''}${role}</span><span class="team-order">${pad(i+1)}</span></span>`+
+       `<span class="team-portrait" style="--team-hue:${hue}"><span class="team-orb" aria-hidden="true"><i></i></span></span>`+
+       `<strong class="team-pokemon-name">${safe(name)}</strong>`+
+       `<span class="team-pokemon-number">${no?'No.'+String(no).padStart(4,'0'):'＋ えらぶ'}</span>`+
+       (!isParentPage?`<span class="team-slot-action">${no?(junior?'いれかえる':'いれかえ'):(junior?'ここに いれる':'なかまを えらぶ')}</span>`:'');
+    const className=`team-slot ${leader?'team-leader':''} ${no?'team-occupied':'team-empty'} ${junior?'team-junior':''}`;
+    return isParentPage?`<article class="${className}" aria-label="${safe(role)} ${safe(name)}">${inside}</article>`:
+      `<button type="button" class="${className}" data-team-slot="${i}" aria-label="${safe(role)}：${safe(name)} をいれかえる" ${canEdit?'':'disabled'}>${inside}</button>`;
+  }).join('');
+  if(!isParentPage){
+    const note=count===0?'まずは すきな ポケモンを えらんで チームを つくろう！':
+      count===TEAM_SIZE?'5ひき そろったよ！ いつでも いれかえられるよ。':'あいている ばしょを おして なかまを ふやそう！';
+    info.textContent+='　・　'+note;
+  }
+}
+function teamSearchKey(value){
+  // 6歳児も入力しやすいように、ひらがな・カタカナ・全角数字を同じ条件で検索する。
+  return String(value??'').normalize('NFKC').toLowerCase()
+    .replace(/[\u3041-\u3096]/g,c=>String.fromCharCode(c.charCodeAt(0)+0x60));
+}
+function renderTeamPicker(){
+  const dialog=$('team-picker'),list=$('team-choice-list');
+  if(!dialog||!dialog.open||!list||editingTeamSlot===null)return;
+  const id=favoriteTeamChild,team=effectiveTeamFor(id),current=team[editingTeamSlot],owned=[...pokemonMapFor(id).keys()].sort((a,b)=>a-b);
+  const q=teamSearchKey($('team-search').value.trim());
+  const options=owned.filter(no=>!q||teamSearchKey(pokemonName(no)).includes(q)||String(no).includes(q)).slice(0,80);
+  $('team-picker-title').textContent=`${editingTeamSlot===0?'リーダー':`${editingTeamSlot+1}ばんめの なかま`}を えらぼう`;
+  $('team-picker-caption').textContent=`ゲットした ${owned.length}しゅるいから えらべるよ。${q?'':' なまえで さがすことも できるよ。'}`;
+  $('team-remove').disabled=!current||busy;
+  const inTeam=new Set(team.filter(Boolean));
+  list.innerHTML=options.length?options.map(no=>{
+    const selected=no===current,assigned=inTeam.has(no);
+    return `<button type="button" class="team-choice ${selected?'selected':''}" data-team-pick="${no}" ${busy?'disabled':''}>`+
+      `<span class="team-choice-icon" aria-hidden="true">${selected?'★':'●'}</span><span class="team-choice-text"><strong>${safe(pokemonName(no))}</strong><small>No.${String(no).padStart(4,'0')} ${selected?'・いま えらんでいる':assigned?'・チームに いる':''}</small></span>`+
+      `<span class="team-choice-arrow">${selected?'✓':'＋'}</span></button>`;
+  }).join(''):'<p class="empty">みつからなかったよ。べつの なまえで さがしてね。</p>';
+  if(owned.length>80&&!q)list.innerHTML+='<p class="tiny">たくさん いるから 80ひきずつ ひょうじしているよ。なまえで さがしてね。</p>';
+}
+function openTeamPicker(slot){
+  if(isParentPage||!Number.isInteger(slot)||slot<0||slot>=TEAM_SIZE)return;
+  if(!canOperate()||!model.rewardsServerConfirmed)return toast('チームの最新データを確認中です。');
+  if(pokemonMapFor(favoriteTeamChild).size===0)return toast('まずはポケモンをゲットしてね！');
+  editingTeamSlot=slot;
+  $('team-search').value='';$('team-picker').showModal();renderTeamPicker();
+}
+async function saveTeamChoice(no){
+  if(isParentPage||editingTeamSlot===null||busy)return;
+  const id=favoriteTeamChild,slot=editingTeamSlot;
+  if(no!==0&&!pokemonMapFor(id).has(no))return toast('ゲットしたポケモンだけえらべるよ。');
+  await runLocked(async()=>{
+    if(!model.rewardsServerConfirmed)throw Error('クラウドの図鑑データを確認中です。');
+    let changed=false;
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('子どものデータが見つかりません。');
+      const before=effectiveTeamFor(id,snap.data());
+      const next=teamAfterSelection(before,slot,no);
+      if(next.every((n,i)=>n===before[i]))return;
+      tx.update(ref,{favoriteTeam:next,teamUpdatedAt:dbApi.serverTimestamp()});changed=true;
+    });
+    $('team-picker')?.close();editingTeamSlot=null;
+    toast(changed?no===0?'チームから はずしたよ！':'マイチームを かえたよ！':'このポケモンは もう チームに いるよ！');
+  });
 }
 function lastSessionFor(id){
   const p=model.profiles[id];
@@ -1237,7 +1347,7 @@ function render(now=Date.now()){
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();if(model.ready){renderWeek();renderHistory();}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();if(model.ready){renderWeek();renderHistory();}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1246,7 +1356,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;previousRest.clear();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -1307,7 +1417,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderPlayers();renderEffortCalendar();renderBonuses();
+   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
    model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
@@ -1633,6 +1743,8 @@ function initUiEvents(){
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
+   if(btn.dataset.teamSlot!==undefined)openTeamPicker(Number(btn.dataset.teamSlot));
+   if(btn.dataset.teamPick!==undefined)saveTeamChoice(Number(btn.dataset.teamPick));
    if(btn.dataset.honestyOpen)openHonestyDialog(btn.dataset.honestyOpen);
    if(btn.dataset.honestyRestore)restoreHonestyDecision(btn.dataset.honestyRestore);
    if(btn.dataset.bonusGrant)grantSpecialBonus(btn.dataset.bonusGrant);
@@ -1657,7 +1769,11 @@ function initUiEvents(){
   $('honesty-kind')?.addEventListener('change',updateHonestyImpact);
   $('honesty-form')?.addEventListener('submit',saveHonestyCorrection);
   $('honesty-dialog')?.addEventListener('close',()=>{honestyPendingChild=null;});
-  $('pokedex-child')?.addEventListener('change',renderPokedex);
+  $('team-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value)){favoriteTeamChild=e.target.value;renderFavoriteTeam();}});
+ $('team-search')?.addEventListener('input',renderTeamPicker);
+ $('team-remove')?.addEventListener('click',()=>saveTeamChoice(0));
+ $('team-picker')?.addEventListener('close',()=>{editingTeamSlot=null;});
+ $('pokedex-child')?.addEventListener('change',renderPokedex);
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
  $('finish-actually-stopped')?.addEventListener('change',e=>{$('confirm-end').disabled=!e.target.checked;});
  $('confirm-end')?.addEventListener('click',()=>{if(!$('finish-actually-stopped')?.checked)return;pendingEnd&&endPlay(pendingEnd);});
@@ -1737,4 +1853,4 @@ async function startFirebase(){
 currentDateTick();setInterval(currentDateTick,1000);
 startFirebase();
 
-loadExtendedPokemonNames().then(()=>{renderPokedex();}).catch(()=>{});
+loadExtendedPokemonNames().then(()=>{renderPokedex();renderFavoriteTeam();renderTeamPicker();}).catch(()=>{});
