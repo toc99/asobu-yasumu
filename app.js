@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.7.0';
+const version = 'v3.8.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -84,7 +84,7 @@ function eligibleSlice(t,policy,resumeAt=0,resumeWindowEnd=0){
 }
 function canEarlyResume(p,now=Date.now()){
   const policy=pausePolicy();
-  if(isParentPage||!p||p.activeStart>0||!canOperate()||!policy||!isNightPaused(now,policy))return false;
+  if(isParentPage||!p||p.activeStart>0||videoStartedMillis(p)>0||!canOperate()||!policy||!isNightPaused(now,policy))return false;
   if(resumedThisNight(p,now,policy))return false;
   return waitingRemaining(p,now)>0;
 }
@@ -171,12 +171,13 @@ function manualWaitRemaining(p, now=Date.now()){
 function waitingRemaining(p,now=Date.now()){
   return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
 }
-function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':restEnd(p)>now?'resting':'ready';}
+function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':videoStartedMillis(p)>0?'watching':restEnd(p)>now?'resting':'ready';}
 function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
-function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?waitingRemaining(p,now):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?Math.max(0,now-videoStartedMillis(p)):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
   const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
-  const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
+  const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);
+  const videoStart=videoStartedMillis(p);if(videoStart>0)total+=overlap(videoStart,now,a,b);return total;
 }
 function playerLabel(id){
   const name=String(model.profiles[id]?.name||'').trim();
@@ -222,6 +223,7 @@ function reportRange(now=Date.now()) {
 function reportStats(id) {
   const {before,start,end}=reportRange();
   const sessions=model.reportSessions.filter(s=>s.childId===id && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end>s.start).sort((a,b)=>a.start-b.start || a.end-b.end);
+  const videoTotal=sessions.reduce((a,s)=>a+(s.activityType==='video'?overlap(s.start,s.end,start,end):0),0);
   const days=Array.from({length:7},(_,i)=>addDays(start,i));
   const daily=days.map(d=>sessions.reduce((total,s)=>total+overlap(s.start,s.end,d,addDays(d,1)),0));
   const total=daily.reduce((a,b)=>a+b,0);
@@ -238,13 +240,13 @@ function reportStats(id) {
   }
   // sessions.createdBy は当該アプリの子ども/保護者アカウントのUID。
   // 旧版データ移行時に保護者が作成した履歴は「子ども自身の終了」に数えない。
-  const selfEnded=completed.filter(s=>typeof s.createdBy==='string' && s.createdBy.length>0 && (isParentPage ? s.createdBy!==uid : s.createdBy===uid)).length;
+  const selfEnded=completed.filter(s=>s.activityType!=='video' && typeof s.createdBy==='string' && s.createdBy.length>0 && (isParentPage ? s.createdBy!==uid : s.createdBy===uid)).length;
   const badges=[
     {icon:'🌟',title:'じぶんでおしまい',description:'子ども画面から1回終了',earned:selfEnded>=1},
     {icon:'🏅',title:'おしまい上手',description:'子ども画面から3回終了',earned:selfEnded>=3},
     {icon:'🌱',title:'やすむ名人',description:'記録上、休憩間隔を3回守れた',earned:passed>=3}
   ];
-  return {total,prevTotal,average:total/7,daily,days,completed:completed.length,checked,passed,selfEnded,badges};
+  return {total,videoTotal,gameTotal:total-videoTotal,prevTotal,average:total/7,daily,days,completed:completed.length,checked,passed,selfEnded,badges};
 }
 function reportDelta(now,prev){
   if(prev===0)return now===0?'前週と同じ':'前週の記録なし';
@@ -267,13 +269,13 @@ function renderReport(){
     }).join('');
     const badges=stats.badges.map(b=>`<div class="badge-item ${b.earned?'earned':'locked'}" aria-label="${safe(b.title)}・${b.earned?'達成':'未達成'}"><span aria-hidden="true">${b.earned?b.icon:'○'}</span><strong>${safe(b.title)}</strong><small>${safe(b.description)}${b.earned?' · 達成':''}</small></div>`).join('');
     return `<article class="report-card ${theme}"><h3>${safe(symbolFor(model.profiles[id]))} ${safe(playerLabel(id))}</h3>
-      <div class="report-metrics"><div><small>7日間の合計</small><strong>${safe(brief(stats.total))}</strong></div><div><small>1日平均（7日割）</small><strong>${safe(brief(stats.average))}</strong></div><div><small>前週比</small><strong>${safe(reportDelta(stats.total,stats.prevTotal))}</strong></div></div>
-      <div class="report-subtitle">日別プレイ時間</div><div class="report-days">${dayBars}</div>
+      <div class="report-metrics"><div><small>7日間の合計</small><strong>${safe(brief(stats.total))}</strong></div><div><small>1日平均（7日割）</small><strong>${safe(brief(stats.average))}</strong></div><div><small>前週比</small><strong>${safe(reportDelta(stats.total,stats.prevTotal))}</strong></div></div><div class="report-breakdown">ゲーム ${safe(brief(stats.gameTotal))} ／ 動画 ${safe(brief(stats.videoTotal))}</div>
+      <div class="report-subtitle">日別の合計利用時間</div><div class="report-days">${dayBars}</div>
       <div class="report-subtitle">記録上の休憩間隔</div><p class="report-compliance">${pct===null?'比較できる連続記録がありません':`${stats.passed}/${stats.checked}回（${pct}%）`}</p>
       <div class="report-subtitle">今週のバッジ</div><div class="report-badges">${badges}</div></article>`;
   }).join('');
   node.innerHTML=header+`<div class="report-grid">${cards}</div>`+
-    `<p class="tiny report-caveat">集計はアプリに記録された履歴に基づきます。休憩間隔は「直前のゲーム時間と同じ長さを空けたか」の参考値です。夜間停止・保護者による変更や、ゲーム機本体の実利用までは判定しません。${model.reportFromCache?'（通信が不安定なため保存済みデータを表示中）':''}${model.reportTruncated?'（取得上限に達したため集計が不完全な可能性があります）':''}</p>`;
+    `<p class="tiny report-caveat">集計はアプリに記録された履歴に基づきます。休憩間隔は「直前のゲームまたは動画の利用時間と同じ長さを空けたか」の参考値です。夜間停止・保護者による変更や、ゲーム機本体の実利用までは判定しません。${model.reportFromCache?'（通信が不安定なため保存済みデータを表示中）':''}${model.reportTruncated?'（取得上限に達したため集計が不完全な可能性があります）':''}</p>`;
 }
 // v3.5: iPadでアプリを開いている間に使える画面通知＋音＋任意のOS通知。
 // Web Pushサーバーがないため、アプリを閉じた状態への通知は保証しない。
@@ -364,11 +366,11 @@ function claimEligibility(id,now=Date.now()){
   if(model.rewards.some(r=>r.childId===id && r.dayIndex===day) || Number(p.rewardLastDayIndex)===day)
     return {ok:false,label:'きょうのポケモンはゲット済み'};
   const s=lastSessionFor(id);
-  if(!s || !s.sid)return {ok:false,label:'ゲームの記録ができたらチャレンジ'};
+  if(!s || !s.sid || s.activityType==='video')return {ok:false,label:'ゲームと休憩を守ったらチャレンジ'};
   if(s.sid===p.rewardLastSessionId)return {ok:false,label:'次のゲームと休憩でチャレンジ'};
   if(s.createdBy!==uid || s.edited || s.duration<MIN || s.end<now-2*DAY)
     return {ok:false,label:'次のゲームと休憩でチャレンジ'};
-  if(p.activeStart>0)return {ok:false,label:'ゲームを終えてからチャレンジ'};
+  if(p.activeStart>0||videoStartedMillis(p)>0)return {ok:false,label:'ゲーム・動画を終えてからチャレンジ'};
   if(waitingRemaining(p,now)>0)return {ok:false,label:'おやすみを守ったらゲット！'};
   if(!canOperate()||!model.rewardsServerConfirmed)return {ok:false,label:'クラウドを確認中'};
   return {ok:true,label:'ポケモンをゲット！'};
@@ -427,12 +429,12 @@ async function claimPokemon(id){
       if(!pSnap.exists())throw Error('プロフィールを取得できません。');
       if(rewardSnap.exists())throw Error('きょうのポケモンはもうゲット済みです。');
       const p=pSnap.data(),sid=p.lastSessionId;
-      if(!sid||sid===p.rewardLastSessionId || Number(p.rewardLastDayIndex)===day || p.activeStart>0)
+      if(!sid||sid===p.rewardLastSessionId || Number(p.rewardLastDayIndex)===day || p.activeStart>0 || videoStartedMillis(p)>0)
         throw Error('このゲーム記録ではゲットできません。');
       const sSnap=await tx.get(dbApi.doc(sessionsRef(),sid));
       if(!sSnap.exists())throw Error('ゲームの記録を確認できません。');
       const s=sSnap.data(),now=Date.now();
-      if(s.childId!==id||s.createdBy!==uid||s.edited||s.duration<MIN||s.end<now-2*DAY)
+      if(s.childId!==id||s.activityType==='video'||s.createdBy!==uid||s.edited||s.duration<MIN||s.end<now-2*DAY)
         throw Error('この記録は獲得の対象外です。次のゲーム終了後に挑戦してください。');
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
@@ -472,10 +474,10 @@ function renderAlerts(now=Date.now()){
   for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
   $('alerts').innerHTML=alerts.join('');
 }
-// 動画タイマーはゲーム時間・通常休憩とは独立。Firestoreのサーバー時刻で開始を記録。
+// v3.8: 動画視聴も画面利用時間として履歴に保存し、終了時に同時間の休憩を設定。
 // iPadでYouTubeを開いている間のお知らせは、別途iPad標準の「タイマーを開始」ショートカットを使用する。
 const VIDEO_SHORTCUT_NAME = 'あそぶやすむ動画タイマー';
-function videoStartedMillis(p){return stampMillis(p?.videoStartedAt);}
+function videoStartedMillis(p){const ms=stampMillis(p?.videoStartedAt);return ms>0?Math.floor(ms):0;}
 function videoLimitOf(p){const n=Number(p?.videoDurationMinutes);return Number.isInteger(n)&&n>=1&&n<=240?n:30;}
 function videoDueMillis(p){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN:0;}
 function videoShortcutUrl(minutes){
@@ -485,9 +487,10 @@ function videoShortcutUrl(minutes){
 function renderVideoAction(id,p,now=Date.now()){
   const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p),active=!!start;
   if(!active){
+    if(isParentPage)return '';
     return `<div class="video-box"><div class="video-head">📺 動画を見る <small>お知らせ：${Number(model.settings.videoLimitMinutes)||30}分</small></div>`+
-      (isParentPage?'<p class="video-note">動画の開始状況はiPadから記録されます。</p>':
-       `<button type="button" class="btn video-start" data-video-start="${id}" ${p.activeStart>0||busy||!canOperate()?'disabled':''}>▶️ 動画を見る</button>`)+
+      (isParentPage?'<p class="video-note">動画も利用時間に加算。終了後は同じ長さだけ休みます。</p>':
+       `<button type="button" class="btn video-start" data-video-start="${id}" ${p.activeStart>0||waitingRemaining(p,now)>0||busy||!canOperate()?'disabled':''}>▶️ 動画を見る</button>`)+
       '</div>';
   }
   const remaining=Math.max(0,due-now),overdue=now>=due;
@@ -526,6 +529,7 @@ async function startVideo(id){return runLocked(async()=>{
     const p=snap.data();
     if(p.activeStart>0)throw Error('ゲーム中は動画タイマーを開始できません。');
     if(videoStartedMillis(p)>0)throw Error('すでに動画を見ています。');
+    if(waitingRemaining(p,Date.now())>0)throw Error('まだ休憩中です。動画を見る前に休憩を終えてください。');
     const configured=Number(settingsSnap.exists()?settingsSnap.data().videoLimitMinutes:30)||30;
     if(!Number.isInteger(configured)||configured<1||configured>240)throw Error('保護者設定の動画時間が正しくありません。');
     tx.update(ref,{videoStartedAt:dbApi.serverTimestamp(),videoDurationMinutes:configured,updatedAt:dbApi.serverTimestamp()});
@@ -536,34 +540,46 @@ async function startVideo(id){return runLocked(async()=>{
 });}
 async function stopVideo(id){return runLocked(async()=>{
   if(!ids.includes(id))throw Error('対象の子どもが不正です。');
-  const ref=refProfile(id);
-  await dbApi.runTransaction(db,async tx=>{
+  const ref=refProfile(id),sidRef=dbApi.doc(sessionsRef());
+  const duration=await dbApi.runTransaction(db,async tx=>{
     const snap=await tx.get(ref);if(!snap.exists())throw Error('子どものデータが見つかりません。');
-    const p=snap.data();if(!videoStartedMillis(p))throw Error('動画タイマーは開始されていません。');
-    const minutes=Math.max(0,Math.round((Date.now()-videoStartedMillis(p))/MIN));
-    tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,updatedAt:dbApi.serverTimestamp()});
-    appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,`${minutes}分で終了`);
+    const p=snap.data(),start=videoStartedMillis(p),end=Date.now();
+    if(!start)throw Error('動画タイマーは開始されていません。');
+    const dur=end-start;
+    if(dur<1000)throw Error('開始から1秒以上経過してから終了してください。');
+    if(dur>7*DAY)throw Error('動画視聴が7日を超えています。保護者が記録を確認してください。');
+    // 既存の休憩が残る特殊なケースでも、待ち時間を短くしない。
+    const until=Math.max(Number(p.restUntil)||0,end+dur);
+    tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,endedAt:null,
+      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+    tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false});
+    appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
+      `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
+    return dur;
   });
-  toast('動画タイマーを終了しました。iPad標準タイマーを設定していたら、そちらも停止してください。');
+  toast(`動画を終了しました。${brief(duration)}の休憩を開始します。iPad標準タイマーは必要なら停止してください。`);
 });}
 
 function renderPlayers(now=Date.now()){
   if(!model.ready)return;
+  const keepOpen=new Set([...$('players').querySelectorAll('details[data-player-tools][open]')].map(el=>el.dataset.playerTools));
   $('players').innerHTML=displayIds().map((id,i)=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
     const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
-    const title=st==='playing'?'ゲーム中':st==='resting'?'休憩中':'スタートOK';
-    const mainTitle=st==='playing'?'ゲームをはじめてから':st==='resting'?'つぎまで、あと':'ゲームができるよ！';
-    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
+    const title=st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
+    const mainTitle=st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
+    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
-      st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+      st==='watching'?`いま終わると ${brief(Math.max(0,now-videoStartedMillis(p)))} の休憩が必要`:
+      st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
-    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':videoStartedMillis(p)>0?'🎬 動画視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
+    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||st==='watching'||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
-    const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
+    const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
     const earlyPossible=canEarlyResume(p,now);
     const nightAction=!isParentPage&&earlyPossible
       ? `<button class="btn early-resume-action" data-night-resume="${id}" ${busy||!canOperate()||!hasNightResumeRuleConfig()?'disabled':''}>☀️ いまから休憩の消化を再開</button><p class="early-resume-hint">夜間の停止だけを解除。残りの休憩時間はそのまま守ろう。</p>${!hasNightResumeRuleConfig()?'<p class="early-resume-hint">保護者画面で夜間停止設定を一度保存してください。</p>':''}`
@@ -574,19 +590,26 @@ function renderPlayers(now=Date.now()){
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const pokemonReward=rewardActionFor(id,now);
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
+    const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
+    const videoToday=Math.max(0,today-gameToday);
     const age = ageOf(p, now);
     const subtitle = age === null ? '年齢未設定' : `${age}さい`;
     return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
-      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      ${actions}${videoAction}${undoAction}${correction}${manualAction}${nightAction}${pokemonReward}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
+      <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
+      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${pokemonReward}
+      <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
+        <summary>⏳ 待ち時間の調整・その他の操作</summary>
+        <div class="player-tools-content">${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
+      </details><div class="mini screen-summary"><div>今日の合計<strong>${brief(today)}</strong></div><div>ゲーム<strong>${brief(gameToday)}</strong></div><div>動画<strong>${brief(videoToday)}</strong></div><div>今日の終了<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
 function weekData(now=Date.now()){
   const today=dayStart(now),days=Array.from({length:7},(_,i)=>addDays(today,i-6));
   const totals=days.map(d=>displayIds().map(id=>{
     const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?overlap(s.start,s.end,d,end):0),0);
-    const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);return sum;
+    const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);
+    const vs=videoStartedMillis(p);if(vs>0)sum+=overlap(vs,now,d,end);return sum;
   }));return {days,totals};
 }
 function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
@@ -596,7 +619,8 @@ function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();
     return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${themeFor(model.profiles[ordered[j]])}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
   }).join('');
 }
-function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});}
+function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});
+  const vs=videoStartedMillis(p);if(vs>0)arr.push({sid:'video-active-'+id,childId:id,start:vs,end:now,duration:now-vs,activityType:'video',ongoing:true});}
   if(model.historyExtra && model.historyExtra.day===selectedDay){for(const s of model.historyExtra.items){if(!arr.some(x=>x.sid===s.sid))arr.push(s);}}
   return arr.filter(s=>overlap(s.start,s.end,start,end)>0).sort((a,b)=>b.start-a.start);
 }
@@ -605,7 +629,7 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
  const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
- target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
  currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
@@ -962,7 +986,7 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
  if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
- else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','開始日時','終了日時','ゲーム時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
+ else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
 async function exportAuditCsv(){
