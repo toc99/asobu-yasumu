@@ -78,3 +78,9 @@
 .rest-notice button{border-radius:12px;background:#fff;color:#2c7760;min-width:44px;min-height:44px;font-size:24px}
 @media(max-width:850px){.report-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.report-card{padding:13px}.report-metrics{gap:5px}.report-metrics div{padding:10px 4px}.report-badges{gap:5px}.report-day{grid-template-columns:38px minmax(0,1fr) 65px;gap:6px}}
+
+/* v3.5.1 夜間停止中の前倒し再開（iPad専用） */
+.early-resume-action{width:100%;min-height:55px;border:2px solid #f4c46a;border-radius:17px;background:linear-gradient(120deg,#fff1be,#ffe3a0);color:#725016;font-size:16px;font-weight:900;box-shadow:0 5px 12px #c89d3b1c}
+.early-resume-action:disabled{background:#f0f2f6;border-color:#dfe5ed;color:#72859b;box-shadow:none}
+.early-resume-hint{margin:0;color:#8a6a36;font-weight:750;font-size:12px;line-height:1.5}
+.early-resume-hint.early-active{color:#147957;background:#def9ea;border-radius:13px;padding:10px 12px}

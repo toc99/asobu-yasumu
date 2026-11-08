@@ -6,7 +6,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.5.0';
+const version = 'v3.5.1';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -18,8 +18,8 @@ const dayStart = t => {const d=new Date(t);d.setHours(0,0,0,0);return d.getTime(
 const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.getTime();};
 const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
-const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,nightPause:{enabled:false,start:'22:00',end:'07:00',enabledAt:0}});
-const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',updatedAt:null});
+const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
+const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,updatedAt:null});
 const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
@@ -37,7 +37,7 @@ function undoKind(p, now=Date.now()){
   if(p.activeStart===0 && p.lastSessionId && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
   return null;
 }
-// 夜間待ち時間の持ち越し。計算の基準時刻は日本時間（JST、夏時間なし）。
+// 夜間待ち時間の持ち越し。計算の基準時刻はJST（夏時間なし）。
 function clockMinute(value){
   if(typeof value!=='string'||!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))return null;
   const [h,m]=value.split(':').map(Number);return h*60+m;
@@ -58,15 +58,50 @@ function nightWindow(t,policy){
 function isNightPaused(now=Date.now(),policy=pausePolicy()){
   return !!policy && now>=policy.enabledAt && nightWindow(now,policy).paused;
 }
+// 子どもごとに、当夜の夜間停止だけを「いまから消化」に切り替える。
+// Firestoreの時刻を使い、他の夜や前倒し前の時間には遡及させない。
+function nightResumeMillis(p){return stampMillis(p?.nightResumeAt);}
+function resumedForWindow(p,t,policy=pausePolicy()){
+  if(!policy || !p)return false;
+  const start=nightResumeMillis(p),end=Number(p.nightResumeWindowEnd)||0;
+  if(!start||!end||start<policy.enabledAt||t<start||t>=end)return false;
+  const w=nightWindow(t,policy);
+  return w.paused && w.until===end && nightWindow(start,policy).paused
+    && nightWindow(start,policy).until===end;
+}
+function resumedThisNight(p,now=Date.now(),policy=pausePolicy()){
+  return resumedForWindow(p,now,policy);
+}
+function eligibleSlice(t,policy,resumeAt=0,resumeWindowEnd=0){
+  const win=nightWindow(t,policy);
+  if(!win.paused)return {eligible:true,until:win.until};
+  const matching=resumeAt>0&&resumeWindowEnd===win.until
+    && nightWindow(resumeAt,policy).paused&&nightWindow(resumeAt,policy).until===win.until;
+  if(!matching)return {eligible:false,until:win.until};
+  if(t<resumeAt)return {eligible:false,until:Math.min(win.until,resumeAt)};
+  return {eligible:true,until:win.until};
+}
+function canEarlyResume(p,now=Date.now()){
+  const policy=pausePolicy();
+  if(isParentPage||!p||p.activeStart>0||!canOperate()||!policy||!isNightPaused(now,policy))return false;
+  if(resumedThisNight(p,now,policy))return false;
+  return waitingRemaining(p,now)>0;
+}
+function hasNightResumeRuleConfig(){
+  const cfg=model.settings?.nightPause;
+  const policy=pausePolicy();
+  return !!policy&&Number.isInteger(cfg.startMinutes)&&Number.isInteger(cfg.endMinutes)
+    && cfg.startMinutes===policy.start&&cfg.endMinutes===policy.end;
+}
 // 消化対象時間だけを進める。ページを閉じても、同じ開始時刻・時間帯から同じ終了予定を再現できる。
-function advanceEligible(start,duration,policy=pausePolicy()){
+function advanceEligible(start,duration,policy=pausePolicy(),resumeAt=0,resumeWindowEnd=0){
   if(!(duration>0))return start;
   if(!policy)return start+duration;
   let t=start,left=duration;
   for(let i=0;left>0&&i<2000;i++){
     if(t<policy.enabledAt){const step=Math.min(left,policy.enabledAt-t);left-=step;t+=step;continue;}
-    const window=nightWindow(t,policy);
-    if(window.paused){t=window.until;continue;}
+    const window=eligibleSlice(t,policy,resumeAt,resumeWindowEnd);
+    if(!window.eligible){t=window.until;continue;}
     const step=Math.min(left,window.until-t);
     if(step<=0)throw Error('夜間時間帯の計算に失敗しました');
     left-=step;t+=step;
@@ -74,14 +109,14 @@ function advanceEligible(start,duration,policy=pausePolicy()){
   if(left>0)throw Error('待ち時間が長すぎます');
   return t;
 }
-function eligibleElapsed(start,end,policy=pausePolicy()){
+function eligibleElapsed(start,end,policy=pausePolicy(),resumeAt=0,resumeWindowEnd=0){
   if(!(end>start))return 0;
   if(!policy)return end-start;
   let t=start,result=0;
   for(let i=0;t<end&&i<2000;i++){
     if(t<policy.enabledAt){const next=Math.min(end,policy.enabledAt);result+=next-t;t=next;continue;}
-    const window=nightWindow(t,policy),next=Math.min(end,window.until);
-    if(!window.paused)result+=next-t;
+    const window=eligibleSlice(t,policy,resumeAt,resumeWindowEnd),next=Math.min(end,window.until);
+    if(window.eligible)result+=next-t;
     t=next;
   }
   return result;
@@ -90,13 +125,13 @@ function normalRestEnd(p){
   const raw=Number(p?.restUntil)||0,start=Number(p?.restStart)||0;
   const policy=pausePolicy();
   if(!policy||raw<=start||raw<=policy.enabledAt)return raw;
-  return Math.max(raw,advanceEligible(start,raw-start,policy));
+  return Math.max(raw,advanceEligible(start,raw-start,policy,nightResumeMillis(p),Number(p?.nightResumeWindowEnd)||0));
 }
 function displayTimeRange(){const p=pausePolicy();return p?`${model.settings.nightPause.start}〜${model.settings.nightPause.end}`:'';}
 function renderNightPolicy(){const e=$('night-policy');if(!e)return;
   const p=pausePolicy();
   e.classList.toggle('hidden',!p);
-  if(p)e.textContent=`夜間持ち越し：${displayTimeRange()}（日本時間）は待ち時間が減りません${isNightPaused()?'／現在停止中':''}`;
+  if(p)e.textContent=`夜間持ち越し：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
 }
 function auditRef(){return dbApi.doc(dbApi.collection(db,'households',householdId,'auditLogs'));}
 function appendAudit(writer,action,childId,before,after,sessionId=''){
@@ -105,8 +140,8 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
 const AUDIT_ACTIONS={start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
-  manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',forgotten_end:'終了忘れ修正',
-  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',import_v2:'v2履歴の取り込み'};
+  manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
+  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
   node.innerHTML=entries.length?entries.map(a=>{
@@ -120,7 +155,7 @@ function restEnd(p){return Math.max(normalRestEnd(p),p?.manualRestUntil||0);}
 function normalWaitRemaining(p, now=Date.now()){
   const raw=Number(p?.restUntil)||0,start=Number(p?.restStart)||0,policy=pausePolicy();
   if(!policy||raw<=start||raw<=policy.enabledAt)return Math.max(0,raw-now);
-  return Math.max(0,(raw-start)-eligibleElapsed(start,now,policy));
+  return Math.max(0,(raw-start)-eligibleElapsed(start,now,policy,nightResumeMillis(p),Number(p?.nightResumeWindowEnd)||0));
 }
 function manualWaitRemaining(p, now=Date.now()){
   const until=Number(p?.manualRestUntil)||0;
@@ -130,7 +165,7 @@ function manualWaitRemaining(p, now=Date.now()){
   if(!policy||!started||started<policy.enabledAt)return until-now;
   const minutes=Number(p.manualRestMinutes)||0;
   if(minutes<=0)return until-now;
-  return Math.max(0,Math.min(until-now,minutes*MIN-eligibleElapsed(started,now,policy)));
+  return Math.max(0,Math.min(until-now,minutes*MIN-eligibleElapsed(started,now,policy,nightResumeMillis(p),Number(p?.nightResumeWindowEnd)||0)));
 }
 function waitingRemaining(p,now=Date.now()){
   return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
@@ -351,12 +386,16 @@ function renderPlayers(now=Date.now()){
     const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
-    const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy())/restDuration*100)):100;
+    const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
+    const earlyPossible=canEarlyResume(p,now);
+    const nightAction=!isParentPage&&earlyPossible
+      ? `<button class="btn early-resume-action" data-night-resume="${id}" ${busy||!canOperate()||!hasNightResumeRuleConfig()?'disabled':''}>☀️ いまから休憩の消化を再開</button><p class="early-resume-hint">夜間の停止だけを解除。残りの休憩時間はそのまま守ろう。</p>${!hasNightResumeRuleConfig()?'<p class="early-resume-hint">保護者画面で夜間停止設定を一度保存してください。</p>':''}`
+      : (!isParentPage&&resumedThisNight(p,now)&&waitingRemaining(p,now)>0?'<p class="early-resume-hint early-active">☀️ 今夜は休憩時間を消化中</p>':'');
     const undo=undoKind(p,now);
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
@@ -366,7 +405,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(p.name)}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-device">${device}</div>${actions}${undoAction}${correction}${manualAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
+      <div class="player-device">${device}</div>${actions}${undoAction}${correction}${manualAction}${nightAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
 function renderDevices(){
@@ -588,6 +627,37 @@ async function correctForgottenEnd(event){
   });
 }
 
+// 夜間停止中の本人操作：残量を変えず、当夜の残りの停止時間だけ消化を開始。
+// 通常の休憩は原記録を維持し、既に計算済みの手動期限だけは短縮量を保存する。
+async function resumeNightEarly(id){
+  if(!ids.includes(id)||isParentPage)return;
+  const initial=model.profiles[id];
+  if(!canEarlyResume(initial))return toast('前倒し再開できる待ち時間がありません。');
+  if(!hasNightResumeRuleConfig())return toast('保護者画面で夜間停止の設定を一度保存してください。');
+  if(!confirm(`${playerLabel(id)}：夜間の停止をいま解除して、残りの休憩時間の消化を進めますか？\n休憩そのものは短くなりません。`))return;
+  await runLocked(async()=>{
+    const result=await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('子どものデータがありません。');
+      const p=snap.data(),now=Date.now(),policy=pausePolicy();
+      if(!canEarlyResume(p,now)||!policy)throw Error('前倒し再開できる待ち時間がありません。');
+      const window=nightWindow(now,policy),oldManual=Number(p.manualRestUntil)||0;
+      const stoppedTime=Math.max(0,window.until-now);
+      // 手動待ち時間は夜間停止を含んだ予定時刻で保存済みなので、
+      // 停止解除で消化可能となった時間だけ期限を前倒しする。
+      const newManual=oldManual>window.until?oldManual-stoppedTime:oldManual;
+      tx.update(ref,{
+        nightResumeAt:dbApi.serverTimestamp(),nightResumeWindowEnd:window.until,
+        manualRestUntil:Math.round(newManual),updatedAt:dbApi.serverTimestamp()
+      });
+      appendAudit(tx,'night_resume',id,`夜間停止中／残り${brief(waitingRemaining(p,now))}`,
+        `いまから消化再開／残り${brief(waitingRemaining(p,now))}`);
+      return waitingRemaining(p,now);
+    });
+    toast(`${playerLabel(id)}：休憩の消化を再開しました。残り${brief(result)}です。`);
+  });
+}
+
 // 手動待ち時間は通常の休憩時間とは別に保持する。子どもは延長のみ、保護者は短縮・解除可能。
 function openManualWait(id){
   const p=model.profiles[id];
@@ -611,7 +681,7 @@ function updateManualPreview(){
   if(!Number.isInteger(n)||n<1||n>1440){out.textContent='1〜1,440分の整数を入力してください。';return;}
   const p=model.profiles[pendingManual];
   if(!p)return;
-  const proposed=advanceEligible(Date.now(),n*MIN);
+  const proposed=advanceEligible(Date.now(),n*MIN,pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0);
   const manualUntil=isParentPage?proposed:Math.max(proposed,p.manualRestUntil||0,restEnd(p));
   const effectiveUntil=Math.max(manualUntil,normalRestEnd(p));
   const now=Date.now(),sample={...p,manualRestUntil:manualUntil,manualRestMinutes:n,manualRestSetAt:{toMillis:()=>now}};
@@ -629,7 +699,7 @@ async function saveManualWait(event){
       if(!snap.exists())throw Error('子どものデータがありません。');
       const p=snap.data();
       if(p.activeStart>0)throw Error('ゲーム中は待ち時間を設定できません。');
-      const proposed=advanceEligible(Date.now(),n*MIN);
+      const proposed=advanceEligible(Date.now(),n*MIN,pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0);
       if(role==='kid' && proposed<=restEnd(p))
         throw Error('今の待ち時間より短く設定することはできません。延長する時間を入力してください。');
       const newUntil=role==='parent'?proposed:Math.max(proposed,p.manualRestUntil||0,restEnd(p));
@@ -680,7 +750,7 @@ async function saveSettings(event){event.preventDefault();await runLocked(async(
   if(a===null||z===null||a<=z)throw Error('夜間時間帯は日付をまたぐように入力してください（例：22:00〜07:00）。');
   const oldPause=model.settings.nightPause||defaultSettings().nightPause;
   const changed=oldPause.enabled!==enabled||oldPause.start!==start||oldPause.end!==end;
-  const nightPause={enabled,start,end,enabledAt:enabled?(changed?Date.now():(oldPause.enabledAt||Date.now())):0};
+  const nightPause={enabled,start,end,startMinutes:a,endMinutes:z,enabledAt:enabled?(changed?Date.now():(oldPause.enabledAt||Date.now())):0};
   const oldDesc=`夜間 ${oldPause.enabled?'ON':'OFF'} ${oldPause.start||'22:00'}〜${oldPause.end||'07:00'}`;
   const newDesc=`夜間 ${enabled?'ON':'OFF'} ${start}〜${end}`;
   const b=dbApi.writeBatch(db);
@@ -730,23 +800,6 @@ async function exportAuditCsv(){
   toast('操作履歴CSVを保存しました（最新1,000件まで）');
  }catch(e){console.error(e);toast(errorText(e));}
 }
-async function importV2(file){if(!file)return;await runLocked(async()=>{
- if(file.size>8*1024*1024)throw Error('8MB以下のJSONを選択してください');const source=JSON.parse(await file.text());if(source.version!==2||!Array.isArray(source.sessions)||!Array.isArray(source.children))throw Error('v2のJSONバックアップではありません');
- const existing=await dbApi.getDocs(dbApi.query(sessionsRef(),dbApi.limit(1)));if(!existing.empty)throw Error('クラウドに履歴があるため、二重登録防止のため取り込みを中止しました');
- if(ids.some(id=>model.profiles[id]?.activeStart>0))throw Error('ゲーム中は移行できません。終了後に実行してください');
- const n=source.sessions.length;if(!confirm(`v2のプレイ履歴 ${n}件をクラウドに取り込みますか？\n既存の子どもの状態・休憩時間も復元します。`))return;
- const data=source.sessions.filter(s=>ids.includes(s.childId)&&Number.isFinite(s.start)&&Number.isFinite(s.end)&&s.end>s.start);
- for(let i=0;i<data.length;i+=200){const b=dbApi.writeBatch(db);for(let j=i;j<Math.min(i+200,data.length);j++){const s=data[j];b.set(dbApi.doc(sessionsRef(),`legacy-${j}-${s.end}`),{childId:s.childId,start:s.start,end:s.end,duration:s.end-s.start,deviceId:['sw1','sw2'].includes(s.deviceId)?s.deviceId:'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:!!s.edited});}await b.commit();}
- const b=dbApi.writeBatch(db);for(let i=0;i<2;i++){
-   const o=source.children[i]||{},id=ids[i];
-   const recent=data.map((session,j)=>({session,j})).filter(x=>x.session.childId===id).sort((a,b)=>b.session.end-a.session.end)[0];
-   const lastSessionId=recent?`legacy-${recent.j}-${recent.session.end}`:'';
-   b.update(refProfile(id),{name:String(o.name||playerLabel(id)).slice(0,12),activeStart:0,deviceId:null,restStart:Number.isFinite(o.restStart)?o.restStart:0,restUntil:Number.isFinite(o.restUntil)?o.restUntil:0,lastDuration:Number.isFinite(o.lastDuration)?o.lastDuration:0,lastSessionId,updatedAt:dbApi.serverTimestamp()});
- }
- if(Array.isArray(source.devices)&&source.devices.length===2){b.update(refSettings(),{devices:{sw1:source.devices[0].name?.includes('①')?'Switch':(source.devices[0].name||'Switch'),sw2:source.devices[1].name?.includes('②')?'Switch2':(source.devices[1].name||'Switch2')}});}
-  appendAudit(b,'import_v2','all','v2履歴なし',`v2履歴 ${data.length}件を取り込み`);
-  await b.commit();toast(`v2履歴 ${data.length}件を取り込みました。`);
- });}
 async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||document.visibilityState!=='visible'||!canOperate())return;
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
 }
@@ -771,6 +824,7 @@ function initUiEvents(){
    if(btn.dataset.manual)openManualWait(btn.dataset.manual);
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
+   if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d)d.close();}));
@@ -789,7 +843,7 @@ function initUiEvents(){
  $('edit-form')?.addEventListener('submit',editHistory);
  $('export-json')?.addEventListener('click',()=>exportData('json'));
  $('export-csv')?.addEventListener('click',()=>exportData('csv'));
- $('import-v2-file')?.addEventListener('change',e=>{importV2(e.target.files?.[0]);e.target.value='';});
+
  $('history-date').value=dateKey(selectedDay);$('history-date').max=dateKey(Date.now());
  $('history-date').addEventListener('change',e=>{const d=new Date(e.target.value+'T00:00:00').getTime();if(!Number.isFinite(d)||d>dayStart(Date.now()))return;selectedDay=d;model.historyExtra=null;renderHistory();loadSelectedDay();});
  $('tab-home')?.addEventListener('click',()=>{historyTab='home';$('history').classList.add('hidden');$('tab-home').classList.add('subnav-active');$('tab-history').classList.remove('subnav-active');});
