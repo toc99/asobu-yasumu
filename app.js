@@ -6,7 +6,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.5.1';
+const version = 'v3.6.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -18,8 +18,8 @@ const dayStart = t => {const d=new Date(t);d.setHours(0,0,0,0);return d.getTime(
 const addDays = (t,n) => {const d=new Date(t);d.setDate(d.getDate()+n);return d.getTime();};
 const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;};
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
-const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
-const playerBase = (id) => ({name:id==='older'?'お姉ちゃん':'弟くん',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,updatedAt:null});
+const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
+const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
 const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
@@ -141,7 +141,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
 }
 const AUDIT_ACTIONS={start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
-  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化'};
+  history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
   node.innerHTML=entries.length?entries.map(a=>{
@@ -171,14 +171,18 @@ function waitingRemaining(p,now=Date.now()){
   return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
 }
 function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':restEnd(p)>now?'resting':'ready';}
-function deviceName(id){return model.settings.devices?.[id]||({sw1:'Switch',sw2:'Switch2'}[id]||'Switch');}
 function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
 function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
   const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
   const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);return total;
 }
-function playerLabel(id){return model.profiles[id]?.name||playerBase(id).name;}
+function playerLabel(id){
+  const name=String(model.profiles[id]?.name||'').trim();
+  // v3.0初期値の続柄を画面から除去。利用者が入力したその他の名前は維持。
+  if(!name||name==='お姉ちゃん'||name==='弟くん')return id==='older'?'子ども1':'子ども2';
+  return name;
+}
 function validBirthDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -207,13 +211,7 @@ function themeFor(profile) {
 function symbolFor(profile) {
   return profile?.gender === 'female' ? '🌸' : profile?.gender === 'male' ? '🚀' : '⭐';
 }
-function familyRole(id) {
-  const gender = model.profiles[id]?.gender;
-  const older = displayIds()[0] === id;
-  if (gender === 'female') return older ? '姉' : '妹';
-  if (gender === 'male') return older ? '兄' : '弟';
-  return older ? '年上' : '年下';
-}
+
 // v3.5: 週間レポートは完了済みの7日間を対象にし、途中の「今日」を含めない。
 const REPORT_LIMIT = 1500;
 function reportRange(now=Date.now()) {
@@ -274,7 +272,7 @@ function renderReport(){
       <div class="report-subtitle">今週のバッジ</div><div class="report-badges">${badges}</div></article>`;
   }).join('');
   node.innerHTML=header+`<div class="report-grid">${cards}</div>`+
-    `<p class="tiny report-caveat">集計はアプリに記録された履歴に基づきます。休憩間隔は「直前のゲーム時間と同じ長さを空けたか」の参考値です。夜間停止・保護者による変更や、Switch本体の実利用までは判定しません。${model.reportFromCache?'（通信が不安定なため保存済みデータを表示中）':''}${model.reportTruncated?'（取得上限に達したため集計が不完全な可能性があります）':''}</p>`;
+    `<p class="tiny report-caveat">集計はアプリに記録された履歴に基づきます。休憩間隔は「直前のゲーム時間と同じ長さを空けたか」の参考値です。夜間停止・保護者による変更や、ゲーム機本体の実利用までは判定しません。${model.reportFromCache?'（通信が不安定なため保存済みデータを表示中）':''}${model.reportTruncated?'（取得上限に達したため集計が不完全な可能性があります）':''}</p>`;
 }
 // v3.5: iPadでアプリを開いている間に使える画面通知＋音＋任意のOS通知。
 // Web Pushサーバーがないため、アプリを閉じた状態への通知は保証しない。
@@ -371,9 +369,84 @@ function renderAlerts(now=Date.now()){
     const t=model.presence?.lastSeenAt?.toMillis?.()||0;
     if(!t||now-t>150000)alerts.push('<div class="alert stale">iPadの接続を現在確認できません。表示中のゲーム時間は、最後に届いた開始情報からの推定値です。</div>');
   }
-  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(p.name)}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
+  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
   $('alerts').innerHTML=alerts.join('');
 }
+// 動画タイマーはゲーム時間・通常休憩とは独立。Firestoreのサーバー時刻で開始を記録。
+// iPadでYouTubeを開いている間のお知らせは、別途iPad標準の「タイマーを開始」ショートカットを使用する。
+const VIDEO_SHORTCUT_NAME = 'あそぶやすむ動画タイマー';
+function videoStartedMillis(p){return stampMillis(p?.videoStartedAt);}
+function videoLimitOf(p){const n=Number(p?.videoDurationMinutes);return Number.isInteger(n)&&n>=1&&n<=240?n:30;}
+function videoDueMillis(p){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN:0;}
+function videoShortcutUrl(minutes){
+  const n=Math.max(1,Math.min(240,Math.floor(Number(minutes)||30)));
+  return `shortcuts://run-shortcut?name=${encodeURIComponent(VIDEO_SHORTCUT_NAME)}&input=text&text=${encodeURIComponent(String(n))}`;
+}
+function renderVideoAction(id,p,now=Date.now()){
+  const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p),active=!!start;
+  if(!active){
+    return `<div class="video-box"><div class="video-head">📺 動画を見る <small>お知らせ：${Number(model.settings.videoLimitMinutes)||30}分</small></div>`+
+      (isParentPage?'<p class="video-note">動画の開始状況はiPadから記録されます。</p>':
+       `<button type="button" class="btn video-start" data-video-start="${id}" ${p.activeStart>0||busy||!canOperate()?'disabled':''}>▶️ 動画を見る</button>`)+
+      '</div>';
+  }
+  const remaining=Math.max(0,due-now),overdue=now>=due;
+  const label=overdue?'時間になったよ！':`あと ${hms(remaining)}`;
+  const nativeAction=!isParentPage&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
+  const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>⏹️ 動画をおわる</button>`:'';
+  return `<div class="video-box ${overdue?'video-overdue':''}"><div class="video-head">📺 動画を見ているよ <small>${minutes}分のお知らせ</small></div>`+
+    `<div class="video-countdown">${safe(label)}</div>`+
+    (overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
+    (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
+    `<div class="video-actions">${nativeAction}${stopAction}</div></div>`;
+}
+const videoNoticeSent = new Set();
+function checkVideoNotices(now=Date.now()){
+  if(isParentPage||!model.ready||!canOperate()||document.hidden)return;
+  for(const id of ids){
+    const p=model.profiles[id],due=videoDueMillis(p);
+    if(!due||now<due)continue;
+    const key=`${id}|${due}`;
+    if(videoNoticeSent.has(key))continue;
+    const storageKey=`asobu.v36.video.lastNotice.${id}`;
+    let previous='';try{previous=localStorage.getItem(storageKey)||'';}catch{}
+    videoNoticeSent.add(key);
+    if(previous===key)continue;
+    try{localStorage.setItem(storageKey,key);}catch{}
+    showRestNotice(`${playerLabel(id)}：動画の時間だよ！`,`${videoLimitOf(p)}分になりました。動画をいったん終わろう。`,`video-${id}-${due}`);
+  }
+}
+async function startVideo(id){return runLocked(async()=>{
+  if(!ids.includes(id))throw Error('対象の子どもが不正です。');
+  warmAudio();
+  const ref=refProfile(id);
+  const startedMinutes=await dbApi.runTransaction(db,async tx=>{
+    const [snap,settingsSnap]=await Promise.all([tx.get(ref),tx.get(refSettings())]);
+    if(!snap.exists())throw Error('子どものデータが見つかりません。');
+    const p=snap.data();
+    if(p.activeStart>0)throw Error('ゲーム中は動画タイマーを開始できません。');
+    if(videoStartedMillis(p)>0)throw Error('すでに動画を見ています。');
+    const configured=Number(settingsSnap.exists()?settingsSnap.data().videoLimitMinutes:30)||30;
+    if(!Number.isInteger(configured)||configured<1||configured>240)throw Error('保護者設定の動画時間が正しくありません。');
+    tx.update(ref,{videoStartedAt:dbApi.serverTimestamp(),videoDurationMinutes:configured,updatedAt:dbApi.serverTimestamp()});
+    appendAudit(tx,'video_start',id,'動画視聴なし',`${configured}分の動画タイマーを開始`);
+    return configured;
+  });
+  toast(`動画タイマーを開始しました（${startedMinutes}分）。iPadの通知タイマーもセットしてください。`);
+});}
+async function stopVideo(id){return runLocked(async()=>{
+  if(!ids.includes(id))throw Error('対象の子どもが不正です。');
+  const ref=refProfile(id);
+  await dbApi.runTransaction(db,async tx=>{
+    const snap=await tx.get(ref);if(!snap.exists())throw Error('子どものデータが見つかりません。');
+    const p=snap.data();if(!videoStartedMillis(p))throw Error('動画タイマーは開始されていません。');
+    const minutes=Math.max(0,Math.round((Date.now()-videoStartedMillis(p))/MIN));
+    tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,updatedAt:dbApi.serverTimestamp()});
+    appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,`${minutes}分で終了`);
+  });
+  toast('動画タイマーを終了しました。iPad標準タイマーを設定していたら、そちらも停止してください。');
+});}
+
 function renderPlayers(now=Date.now()){
   if(!model.ready)return;
   $('players').innerHTML=displayIds().map((id,i)=>{
@@ -387,8 +460,7 @@ function renderPlayers(now=Date.now()){
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} あそんだので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
-    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
-    const device=p.activeStart>0?`🎮 ${safe(deviceName(p.deviceId))} であそんでいます`:'🎮 Switch / Switch2';
+    const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>${st==='playing'?'🛑 ゲームをおわる':videoStartedMillis(p)>0?'🎬 動画視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる'}</button>`;
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
@@ -396,21 +468,17 @@ function renderPlayers(now=Date.now()){
     const nightAction=!isParentPage&&earlyPossible
       ? `<button class="btn early-resume-action" data-night-resume="${id}" ${busy||!canOperate()||!hasNightResumeRuleConfig()?'disabled':''}>☀️ いまから休憩の消化を再開</button><p class="early-resume-hint">夜間の停止だけを解除。残りの休憩時間はそのまま守ろう。</p>${!hasNightResumeRuleConfig()?'<p class="early-resume-hint">保護者画面で夜間停止設定を一度保存してください。</p>':''}`
       : (!isParentPage&&resumedThisNight(p,now)&&waitingRemaining(p,now)>0?'<p class="early-resume-hint early-active">☀️ 今夜は休憩時間を消化中</p>':'');
+    const videoAction=renderVideoAction(id,p,now);
     const undo=undoKind(p,now);
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
     const age = ageOf(p, now);
-    const subtitle = `${age === null ? '年齢未設定' : `${age}さい`}・${familyRole(id)}`;
-    return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(p.name)}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
+    const subtitle = age === null ? '年齢未設定' : `${age}さい`;
+    return `<article class="player ${themeFor(p)}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}</div></div><span class="pill ${st}">${title}</span></div>
       <div class="big-time"><div class="caption">${mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${st==='playing'?'⏰ いま終わったら':st==='resting'?'⌛ 前に遊んだ時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(detail)}</div>${st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-device">${device}</div>${actions}${undoAction}${correction}${manualAction}${nightAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
-  }).join('');
-}
-function renderDevices(){
-  $('devices').innerHTML=['sw1','sw2'].map(id=>{const players=ids.filter(k=>model.profiles[k]?.activeStart>0&&model.profiles[k]?.deviceId===id);
-   return `<div class="device-tile ${players.length?'busy':''}"><div><strong>🎮 ${safe(deviceName(id))}</strong><small>${players.length?`${players.length}人がゲーム中`:'いまはあいているよ'}</small></div><div>${players.length?players.map(p=>`<div class="device-person">${safe(playerLabel(p))}</div>`).join(''):'<span class="device-person">空き</span>'}</div></div>`;
+      ${actions}${videoAction}${undoAction}${correction}${manualAction}${nightAction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div><div class="mini"><div>今日のゲーム<strong>${brief(today)}</strong></div><div>今日おわった回数<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
 function weekData(now=Date.now()){
@@ -436,10 +504,10 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
  const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
- target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))} · ${safe(deviceName(s.deviceId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 function render(now=Date.now()){
- currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);renderDevices();checkRestNotices(now);
+ currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
  if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
  else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
 }
@@ -486,7 +554,7 @@ function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({pr
     $('gender-'+id).value=['female','male','neutral'].includes(model.profiles[id]?.gender) ? model.profiles[id].gender : 'neutral';
     $('birth-'+id).max=dateKey(Date.now());
   }
-  $('device-sw1').value=deviceName('sw1');$('device-sw2').value=deviceName('sw2');$('reminder').value=String(model.settings.reminderMinutes||60);
+  $('reminder').value=String(model.settings.reminderMinutes||60);$('video-limit').value=String(model.settings.videoLimitMinutes||30);
   const policy=model.settings.nightPause||defaultSettings().nightPause;
   $('night-enabled').checked=policy.enabled===true;
   $('night-start').value=policy.start||'22:00';$('night-end').value=policy.end||'07:00';
@@ -528,10 +596,11 @@ async function runLocked(fn){if(busy)return;busy=true;try{ensureOnline();await f
 async function startPlay(id,deviceId){return runLocked(async()=>{
   const now=Date.now();await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
+    if(videoStartedMillis(p)>0)throw Error('動画視聴中です。先に動画を終了してください。');
     if(p.activeStart>0)throw Error('すでにゲーム中です。');if(now<restEnd(p))throw Error('まだ待ち時間が残っています。');
     tx.update(ref,{activeStart:now,deviceId,startedAt:dbApi.serverTimestamp(),endedAt:null,updatedAt:dbApi.serverTimestamp()});
-    appendAudit(tx,'start',id,'ゲーム可能',`${deviceName(deviceId)}で開始`);
-  });$('device-dialog').close();toast(`${playerLabel(id)}：ゲームをスタート！`);
+    appendAudit(tx,'start',id,'ゲーム可能','ゲーム開始');
+  });toast(`${playerLabel(id)}：ゲームをスタート！`);
  });
 }
 async function endPlay(id){return runLocked(async()=>{
@@ -543,17 +612,19 @@ async function endPlay(id){return runLocked(async()=>{
     tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
     tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
       undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}});
-    appendAudit(tx,'end',id,`${deviceName(p.deviceId)}でゲーム中`,`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
+    appendAudit(tx,'end',id,'ゲーム中',`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
     return dur;
   });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
  });
 }
-function chooseStart(id){const p=model.profiles[id];if(!p||p.activeStart||Date.now()<restEnd(p))return toast('まだ休憩中だよ');pendingStart=id;
- $('device-title').textContent=`${p.name}：どのSwitchであそぶ？`;
- $('device-buttons').innerHTML=['sw1','sw2'].map(d=>{const players=ids.filter(i=>model.profiles[i]?.deviceId===d&&model.profiles[i]?.activeStart>0);return `<button class="device-select" data-device="${d}">🎮 ${safe(deviceName(d))}<span>${players.length?`${safe(players.map(i=>playerLabel(i)).join('・'))}といっしょに遊ぶ`:'いま、あいてるよ！'}</span></button>`;}).join('');$('device-dialog').showModal();
+function chooseStart(id){
+  const p=model.profiles[id];
+  if(!p||p.activeStart||Date.now()<restEnd(p))return toast('まだ休憩中だよ');
+  if(videoStartedMillis(p)>0)return toast('動画を見ている間はゲームを開始できません。');
+  startPlay(id,'sw1'); // 旧データ・Firestoreルールとの互換性のため固定値を保持（画面には表示しない）。
 }
 function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
- $('end-confirm-text').innerHTML=`<div>${safe(p.name)}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
+ $('end-confirm-text').innerHTML=`<div>${safe(playerLabel(id))}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('end-dialog').showModal();}
 
 // 30秒以内の誤操作取り消し。終了取り消しは履歴削除とプロフィール復元を同一transactionで実行する。
 async function undoRecent(id){
@@ -664,7 +735,7 @@ function openManualWait(id){
   if(!ids.includes(id)||!p)return;
   if(p.activeStart>0)return toast('ゲーム中は待ち時間を変更できません。');
   pendingManual=id;
-  $('manual-title').textContent=`${p.name}の待ち時間を設定`;
+  $('manual-title').textContent=`${playerLabel(id)}の待ち時間を設定`;
   $('manual-current').textContent=`いまの待ち時間：${waitingRemaining(p)>0?brief(waitingRemaining(p)):'なし'} ／ 通常の休憩：${normalWaitRemaining(p)>0?brief(normalWaitRemaining(p)):'なし'}`;
   $('manual-minutes').value='30';
   $('manual-policy').textContent=isParentPage
@@ -741,8 +812,9 @@ async function saveSettings(event){event.preventDefault();await runLocked(async(
   const names=ids.map(id=>$('name-'+id).value.trim());
   const births=ids.map(id=>$('birth-'+id).value);
   const genders=ids.map(id=>$('gender-'+id).value);
-  const devices={sw1:$('device-sw1').value.trim(),sw2:$('device-sw2').value.trim()};
-  if(!names.every(Boolean)||!Object.values(devices).every(Boolean))throw Error('名前を入力してください');
+  if(!names.every(Boolean))throw Error('名前を入力してください');
+  const videoLimitMinutes=Number($('video-limit').value);
+  if(!Number.isInteger(videoLimitMinutes)||videoLimitMinutes<1||videoLimitMinutes>240)throw Error('動画のお知らせ時間は1〜240分で設定してください。');
   if(!births.every(validBirthDate))throw Error('生年月日を正しく入力してください（未来の日付は登録できません）。');
   if(!genders.every(g=>['female','male','neutral'].includes(g)))throw Error('性別を選択してください。');
  const enabled=$('night-enabled').checked,start=$('night-start').value,end=$('night-end').value;
@@ -752,10 +824,10 @@ async function saveSettings(event){event.preventDefault();await runLocked(async(
   const changed=oldPause.enabled!==enabled||oldPause.start!==start||oldPause.end!==end;
   const nightPause={enabled,start,end,startMinutes:a,endMinutes:z,enabledAt:enabled?(changed?Date.now():(oldPause.enabledAt||Date.now())):0};
   const oldDesc=`夜間 ${oldPause.enabled?'ON':'OFF'} ${oldPause.start||'22:00'}〜${oldPause.end||'07:00'}`;
-  const newDesc=`夜間 ${enabled?'ON':'OFF'} ${start}〜${end}`;
+  const newDesc=`夜間 ${enabled?'ON':'OFF'} ${start}〜${end}／動画タイマー${videoLimitMinutes}分`;
   const b=dbApi.writeBatch(db);
   ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),birthDate:births[i],gender:genders[i],updatedAt:dbApi.serverTimestamp()}));
-  b.set(refSettings(),{devices,reminderMinutes:Number($('reminder').value)||60,nightPause,updatedAt:dbApi.serverTimestamp()},{merge:true});
+  b.set(refSettings(),{reminderMinutes:Number($('reminder').value)||60,videoLimitMinutes,nightPause,updatedAt:dbApi.serverTimestamp()},{merge:true});
   appendAudit(b,'settings_update','all',oldDesc,newDesc);
   await b.commit();toast('設定を保存しました');
  });}
@@ -784,7 +856,7 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
  if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const data={version:3,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
- else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','本体','開始日時','終了日時','ゲーム時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),deviceName(s.deviceId),new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
+ else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','開始日時','終了日時','ゲーム時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
 async function exportAuditCsv(){
@@ -819,7 +891,8 @@ function initUiEvents(){
    if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
-   if(btn.dataset.device&&pendingStart)startPlay(pendingStart,btn.dataset.device);
+   if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
+   if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
    if(btn.dataset.manual)openManualWait(btn.dataset.manual);
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
