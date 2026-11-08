@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.11.6';
+const version = 'v3.12.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -24,6 +24,9 @@ const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDa
 const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
+// v3.12.0 UI state: no Firestore write, shared selection across the collection views.
+let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
+let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -727,7 +730,7 @@ function renderBonuses(){
     target.innerHTML='<p class="empty">特別ボーナスを確認中…</p>';return;
   }
   if(child){
-    child.innerHTML=displayIds().map(id=>{
+    child.innerHTML=displayIds().filter(id=>id===focusChild).map(id=>{
       const count=availableBonusGrants(id).length,junior=ageModeForChild(id)==='junior';
       const message=junior?(count?`🎁 あと ${count}かい もらえるよ`:'いまは プレゼントなし'):(count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし');
       return `<div class="bonus-person ${junior?'age-junior':''}"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${message}</span></div>`+
@@ -867,7 +870,7 @@ function renderActivities(){
   const hasExisting=existing.length>0;
   const expanded=new Set([...root.querySelectorAll('details.activity-person[open]')].map(el=>el.dataset.child));
   if(!model.ready||!model.activityLoaded||!model.rewardsLoaded){root.innerHTML='<p class="empty">ごほうびを読み込み中…</p>';return;}
-  root.innerHTML=displayIds().map(id=>{
+  root.innerHTML=displayIds().filter(id=>isParentPage||id===focusChild).map(id=>{
     const junior=!isParentPage&&ageModeForChild(id)==='junior';
     const used=dailyActivityActive(id),remaining=Math.max(0,ACTIVITY_DAILY_MAX-used);
     const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
@@ -888,7 +891,7 @@ function renderActivities(){
       if(junior)return `<div class="activity-item activity-junior-item"><div class="activity-junior-icon" aria-hidden="true">${display.icon}</div><div class="activity-junior-text"><strong>${safe(display.label)}</strong><small>${safe(status)}</small>${detail}</div><button type="button" class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button></div>`;
       return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
     }).join('');
-    const opened=expanded.has(id)||(!hasExisting&&junior);
+    const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
     const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの できた：${used} / ${ACTIVITY_DAILY_MAX}　あと ${remaining}かい</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span>`;
     const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
     return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p><div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
@@ -1304,7 +1307,7 @@ function renderPlayers(now=Date.now()){
     const videoToday=Math.max(0,today-gameToday);
     const age = ageOf(p, now);
     const subtitle = age === null ? '年齢未設定' : `${age}さい`;
-    return `<article class="player ${themeFor(p)} ${junior?'age-junior':''}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
+    return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
       <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${penaltyBanner}${pokemonReward}
@@ -1341,14 +1344,156 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
-function render(now=Date.now()){
-  if(isParentPage && Math.floor(now/1000)%5===0)renderHonestyAdmin();
- currentDateTick();renderNightPolicy();renderSync();if(!model.ready)return;renderAlerts(now);renderPlayers(now);checkRestNotices(now);checkVideoNotices(now);
- if(isParentPage){if(Math.floor(now/1000)%5===0){renderWeek();renderHistory();}}
- else if(historyTab==='history'&&Math.floor(now/1000)%5===0){renderWeek();renderHistory();}
+// v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
+const KID_VIEWS=['time','challenge','pokemon','more'];
+const PARENT_VIEWS=['home','actions','reports','more'];
+const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて マイチームを つくろう',more:'きろくと おしらせを かくにんしよう'};
+function revealNavigation(){
+  const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
+  if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();if(model.ready){renderWeek();renderHistory();}}
-function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');}
+function setKidView(view,scroll=true){
+  if(isParentPage||!KID_VIEWS.includes(view))return;
+  kidView=view;historyTab=view==='more'?'history':'home';
+  for(const v of KID_VIEWS)$('kid-pane-'+v)?.classList.toggle('hidden',v!==view);
+  document.querySelectorAll('[data-kid-view]').forEach(button=>{
+    const active=button.dataset.kidView===view;
+    button.classList.toggle('is-active',active);
+    button.setAttribute('aria-current',active?'page':'false');
+  });
+  const caption=$('kid-view-caption');if(caption)caption.textContent=VIEW_CAPTIONS[view];
+  if(view==='more'&&model.ready){renderWeek();renderHistory();}
+  if(scroll)revealNavigation();
+}
+function setParentView(view,scroll=true,targetId=''){
+  if(!isParentPage||!PARENT_VIEWS.includes(view))return;
+  parentView=view;
+  for(const v of PARENT_VIEWS)$('parent-pane-'+v)?.classList.toggle('hidden',v!==view);
+  document.querySelectorAll('[data-parent-view]').forEach(button=>{
+    if(!button.classList.contains('ui-nav-button'))return;
+    const active=button.dataset.parentView===view;
+    button.classList.toggle('is-active',active);
+    button.setAttribute('aria-current',active?'page':'false');
+  });
+  if(view==='reports'&&model.ready){renderWeek();renderHistory();}
+  if(view==='home')renderParentDashboard();
+  if(scroll){
+    if(targetId){const target=$(targetId);if(target){const details=target.closest('details');if(details)details.open=true;target.scrollIntoView({behavior:'auto',block:'start'});}else revealNavigation();}
+    else revealNavigation();
+  }
+}
+function setFocusChild(id,syncApprovals=true){
+  if(!ids.includes(id))return;
+  if((isParentPage?parentFocusChild:focusChild)!==id&&$('team-picker')?.open){ // A picker must not silently switch to the other child's Pokémon.
+    $('team-picker').close();editingTeamSlot=null;
+  }
+  if(isParentPage)parentFocusChild=id;else focusChild=id;
+  favoriteTeamChild=id;effortCalendarChild=id;
+  for(const selectId of ['team-child','effort-calendar-child','pokedex-child','parent-focus-child']){
+    const el=$(selectId);if(!el)continue;
+    for(const option of el.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
+    el.value=id;
+  }
+  const heading=$('kid-focus-name');if(heading)heading.textContent=`${playerLabel(id)}の チャレンジと ポケモン`;
+  if(!isParentPage)document.querySelectorAll('#players [data-player-id]').forEach(card=>card.classList.toggle('ui-player-focused',card.dataset.playerId===id));
+  document.querySelectorAll('[data-focus-child]').forEach(button=>{
+    button.textContent=playerLabel(button.dataset.focusChild);
+    button.setAttribute('aria-pressed',String(button.dataset.focusChild===id));
+  });
+  // Parent approvals default to all; switching the global child selector sets a focused filter.
+  if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
+  renderActivities();renderBonuses();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
+}
+function renderKidSpotlight(){
+  const box=$('kid-spotlight-message');if(!box||!model.ready)return;
+  const id=focusChild,p=model.profiles[id];
+  if(!model.bonusLoaded||!model.rewardsLoaded){box.textContent='ポケモンのごほうびを かくにん中…';return;}
+  const count=availableBonusGrants(id).length;
+  const waiting=model.activityRequests.filter(x=>x.childId===id&&x.status==='pending').length;
+  const result=claimEligibility(id);
+  const pieces=[];
+  if(count)pieces.push(`とくべつボーナス ${count}ひき`);
+  if(result.ok)pieces.push('ゲームのポケモンを ゲットできるよ');
+  if(waiting)pieces.push(`チャレンジ ${waiting}けん かくにんまち`);
+  box.textContent=pieces.length?pieces.join('　・　'):'きょうも じぶんのペースで たのしもう！';
+}
+function renderParentDashboard(now=Date.now()){
+  if(!isParentPage||!$('parent-dashboard-cards'))return;
+  const container=$('parent-dashboard-cards');
+  const pending=model.activityRequests.filter(a=>a.status==='pending');
+  const stale=pending.filter(a=>stampMillis(a.requestedAt)>0&&now-stampMillis(a.requestedAt)>=DAY).length;
+  const total=pending.length;
+  $('parent-action-summary').textContent=!model.activityLoaded?'チャレンジの申請状況を確認中…':total?`チャレンジの承認待ち ${total}件${stale?`（24時間以上 ${stale}件）`:''}`:'今のところ承認待ちはありません';
+  $('dashboard-sync-status').textContent=canOperate()?'クラウド確認済み':'通信・同期を確認中';
+  if(!model.ready){container.innerHTML='<p class="empty">家族の情報を読み込み中…</p>';return;}
+  container.innerHTML=ids.map(id=>{
+    const p=model.profiles[id]||playerBase(id),st=status(p,now);
+    const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
+    const state=names[st]||'確認中';
+    const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
+    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small><small>今日の合計 ${brief(todayTotal(id,now))}</small></article>`;
+  }).join('');
+}
+function playerLayoutSignature(now=Date.now()){
+  if(!model.ready)return '';
+  return JSON.stringify({online:canOperate(),busy,day:rewardDayIndex(now),kids:ids.map(id=>{
+    const p=model.profiles[id]||{};
+    return [id,status(p,now),ageModeFor(p,now),p.activeStart,videoStartedMillis(p),videoDueMillis(p)<=now,
+      p.restUntil,p.restStart,p.lastDuration,p.manualRestUntil,p.manualRestMinutes,
+      p.lastSessionId,p.rewardLastDayIndex,p.rewardBlockedSessionId,p.rewardLastSessionId,
+      p.rewardSuspendedUntil,stampMillis(p.updatedAt),
+      undoKind(p,now),canEarlyResume(p,now),claimEligibility(id,now).label];
+  })});
+}
+function updatePlayerTimes(now=Date.now()){
+  for(const id of ids){
+    const p=model.profiles[id],card=document.querySelector(`[data-player-id="${id}"]`);
+    if(!p||!card)continue;
+    const st=status(p,now),junior=!isParentPage&&ageModeFor(p,now)==='junior';
+    const digits=card.querySelector('.big-time .digits');
+    if(digits)digits.textContent=hms(summaryFor(p,now));
+    const line=card.querySelector('.forecast-line');
+    if(line){
+      if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(now-videoStartedMillis(p))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
+      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(now-videoStartedMillis(p))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
+    }
+    const prog=card.querySelector('.progress i');
+    if(prog){
+      let progress=100;
+      if(st==='resting'){
+        const manual=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
+        const start=manual?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
+        const duration=Math.max(1,manual?(p.manualRestMinutes||1)*MIN:(p.lastDuration||1));
+        progress=Math.min(100,Math.max(0,eligibleElapsed(start,now,manual&&start<(pausePolicy()?.enabledAt||0)?null:pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/duration*100));
+      }
+      prog.style.width=progress.toFixed(1)+'%';
+    }
+    const video=card.querySelector('.video-countdown');
+    if(video){const remaining=Math.max(0,videoDueMillis(p)-now);video.textContent=remaining>0?`あと ${hms(remaining)}`:'時間になったよ！';}
+    const undo=card.querySelector('button.undo-action');
+    const kind=undoKind(p,now);
+    if(undo&&kind){const sec=Math.max(1,Math.ceil((30000-(now-stampMillis(kind==='start'?p.startedAt:p.endedAt)))/1000));undo.textContent=`↩️ まちがえた！ あと${sec}秒`;}
+  }
+}
+
+function render(now=Date.now()){
+  // Timer labels update each second. Big cards and hidden panes are not reconstructed unnecessarily.
+  if(isParentPage&&Math.floor(now/1000)%30===0)renderHonestyAdmin();
+  renderNightPolicy();renderSync();if(!model.ready)return;
+  if(Math.floor(now/1000)%5===0)renderAlerts(now);
+  const signature=playerLayoutSignature(now);
+  if(signature!==playerRenderSignature||now-playerRenderedAt>=30000||!$('players')?.querySelector('.player')){
+    renderPlayers(now);playerRenderSignature=signature;playerRenderedAt=now;
+  }
+  updatePlayerTimes(now);
+  if(isParentPage){
+    if(Math.floor(now/1000)%10===0){renderParentDashboard(now);}
+    if(parentView==='reports'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
+  }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
+  checkRestNotices(now);checkVideoNotices(now);
+}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
   console.error('Firestore listener',e);
@@ -1417,17 +1562,17 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();
+   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
    model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
    model.bonusLoaded=true;model.bonusServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderBonuses();
+   renderBonuses();renderKidSpotlight();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();
+   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -1740,6 +1885,9 @@ function initUiEvents(){
  document.addEventListener('click',e=>{
    const btn=e.target.closest('button');if(!btn)return;
    if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
+   if(btn.dataset.focusChild){setFocusChild(btn.dataset.focusChild);return;}
+   if(btn.dataset.kidView){setKidView(btn.dataset.kidView);return;}
+   if(btn.dataset.parentView){setParentView(btn.dataset.parentView,true,btn.dataset.focusTarget);return;}
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
    if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
@@ -1762,18 +1910,19 @@ function initUiEvents(){
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
  document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if(e.target===d)d.close();}));
- $('effort-calendar-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value)){effortCalendarChild=e.target.value;renderEffortCalendar();}});
+ $('effort-calendar-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
   $('effort-calendar-prev')?.addEventListener('click',()=>effortCalendarMonthShift(-1));
   $('effort-calendar-next')?.addEventListener('click',()=>effortCalendarMonthShift(1));
-  $('approval-filter')?.addEventListener('change',e=>{approvalFilter=e.target.value;renderApprovals();});
+  $('approval-filter')?.addEventListener('change',e=>{approvalFilter=e.target.value;if(ids.includes(e.target.value))setFocusChild(e.target.value);else renderApprovals();});
   $('honesty-kind')?.addEventListener('change',updateHonestyImpact);
   $('honesty-form')?.addEventListener('submit',saveHonestyCorrection);
   $('honesty-dialog')?.addEventListener('close',()=>{honestyPendingChild=null;});
-  $('team-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value)){favoriteTeamChild=e.target.value;renderFavoriteTeam();}});
+  $('team-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('team-search')?.addEventListener('input',renderTeamPicker);
  $('team-remove')?.addEventListener('click',()=>saveTeamChoice(0));
  $('team-picker')?.addEventListener('close',()=>{editingTeamSlot=null;});
- $('pokedex-child')?.addEventListener('change',renderPokedex);
+ $('parent-focus-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
+ $('pokedex-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
  $('finish-actually-stopped')?.addEventListener('change',e=>{$('confirm-end').disabled=!e.target.checked;});
  $('confirm-end')?.addEventListener('click',()=>{if(!$('finish-actually-stopped')?.checked)return;pendingEnd&&endPlay(pendingEnd);});
@@ -1794,8 +1943,8 @@ function initUiEvents(){
 
  $('history-date').value=dateKey(selectedDay);$('history-date').max=dateKey(Date.now());
  $('history-date').addEventListener('change',e=>{const d=new Date(e.target.value+'T00:00:00').getTime();if(!Number.isFinite(d)||d>dayStart(Date.now()))return;selectedDay=d;model.historyExtra=null;renderHistory();loadSelectedDay();});
- $('tab-home')?.addEventListener('click',()=>{historyTab='home';$('history').classList.add('hidden');$('tab-home').classList.add('subnav-active');$('tab-history').classList.remove('subnav-active');});
- $('tab-history')?.addEventListener('click',()=>{historyTab='history';$('history').classList.remove('hidden');$('tab-home').classList.remove('subnav-active');$('tab-history').classList.add('subnav-active');renderWeek();renderHistory();});
+ // The old in-page history tab is now the lightweight 'そのほか・きろく' pane.
+ if(isParentPage){setParentView(parentView,false);setFocusChild(parentFocusChild,false);}else{setKidView(kidView,false);setFocusChild(focusChild,false);}
  document.addEventListener('visibilitychange',()=>{if(!document.hidden){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();recheckConnection().then(heartbeat);}});
  window.addEventListener('online',()=>{model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();recheckConnection().then(heartbeat);});
   window.addEventListener('offline',()=>{model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();});
