@@ -447,30 +447,44 @@ function hashReward(value){
   for(let i=0;i<value.length;i++)hash=Math.imul(hash^value.charCodeAt(i),16777619)>>>0;
   return hash>>>0;
 }
-// 旧版の獲得結果を保持。v3.9以降は「まだ持っていない番号」からだけ選ぶ。
-// 図鑑の表示はクライアント側で確定済みのサーバー記録を同順に再計算する。
+// 図鑑番号は報酬履歴の取得時点順に確定する。将来の「逃がす」操作で
+// 既存の番号は変化させず、逃がした後に獲得する報酬の抽選候補だけを広げる。
 function assignedPokemon(id,additional=[]){
   const docs=[...rewardClaims(id),...additional].sort(claimOrder);
-  const result=new Map(), owned=new Set();
+  const result=new Map(),everOwned=new Set(),activeCounts=new Map(),pendingReleases=[];
   for(const c of docs){
+    const claimed=stampMillis(c.claimedAt);
+    // 過去の捕獲時点ではまだ所持していた個体を、逃走後の抽選からだけ除外する。
+    for(let i=pendingReleases.length-1;i>=0;i--){
+      const release=pendingReleases[i];
+      if(release.at>claimed)continue;
+      const remain=(activeCounts.get(release.no)||0)-1;
+      if(remain>0)activeCounts.set(release.no,remain);
+      else activeCounts.delete(release.no);
+      pendingReleases.splice(i,1);
+    }
     const rewardId=claimIdOf(c);
     let no;
-    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)) {
+    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)){
       no=c.pokemonNo;
     }else if(c.catalogVersion===2){
-      const gen=generationFor(owned.size),max=GENERATIONS[gen].end;
+      // 世代解放に必要な歴代獲得種類数は、逃走によって遡って変更しない。
+      const gen=generationFor(everOwned.size),max=GENERATIONS[gen].end;
       const candidates=[];
-      for(let i=1;i<=max;i++)if(!owned.has(i))candidates.push(i);
-      if(candidates.length){no=candidates[hashReward(rewardId)%candidates.length];}
-      else {
-        // 全1025匹をコンプリートした場合だけ重複を許す。
-        no=1+hashReward(rewardId)%POKEDEX_TOTAL;
-      }
+      for(let i=1;i<=max;i++)if(!activeCounts.has(i))candidates.push(i);
+      no=candidates.length?candidates[hashReward(rewardId)%candidates.length]
+        :1+hashReward(rewardId)%POKEDEX_TOTAL;
     }else{
       no=pokemonNoFromClaim(c); // v3.7-v3.8の従来結果を保存
     }
     result.set(rewardId,no);
-    owned.add(no);
+    everOwned.add(no);
+    activeCounts.set(no,(activeCounts.get(no)||0)+1);
+    // ズル判定による取消は従来の抽選仕様を維持し、escape（逃走）だけを再抽選対象とする。
+    if(c.revoked===true&&c.revokedReason==='released'){
+      const released=stampMillis(c.revokedAt);
+      if(released>claimed)pendingReleases.push({at:released,no});
+    }
   }
   return result;
 }
