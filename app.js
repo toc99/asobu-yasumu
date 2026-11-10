@@ -660,13 +660,13 @@ function renderReleaseAdmin(){
   if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
   root.innerHTML=displayIds().map(id=>{
     const count=releaseCandidatesFor(id).length;
-    const disabled=count<3||busy||!model.rewardsServerConfirmed||!canOperate();
+    const disabled=count<3||busy||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
     return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹（重複を含む）</small></div>'+
       '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>ランダムで3匹逃がす</button></div>';
   }).join('');
 }
 async function releaseThreePokemon(id){
-  if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed)return;
+  if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed)return;
   const choices=releaseCandidatesFor(id);
   if(choices.length<3)return toast('所持が3匹未満のため、逃がすことはできません。');
   if(!confirm(playerLabel(id)+'のポケモンからランダムで3匹逃がします。\n選ばれた3匹は図鑑の所持数から減り、マイチームからも外れます。\nこの画面から元に戻すことはできません。実行しますか？'))return;
