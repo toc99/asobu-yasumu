@@ -1711,7 +1711,7 @@ async function runLocked(fn){if(busy)return;busy=true;renderBonuses();try{ensure
 const RETRO_KID_MS=180*MIN,RETRO_PARENT_MS=24*60*MIN;
 let retroStartChild=null;
 function retroEarliest(p,now=Date.now()){
-  return Math.max(now-(isParentPage?RETRO_PARENT_MS:RETRO_KID_MS),Number(p.restUntil)||0,Number(p.manualRestUntil)||0);
+  return Math.max(now-(isParentPage?RETRO_PARENT_MS:RETRO_KID_MS),restEnd(p));
 }
 function openRetroStart(id){
   const p=model.profiles[id],now=Date.now();
