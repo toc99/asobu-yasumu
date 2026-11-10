@@ -696,7 +696,7 @@ async function releaseThreePokemon(id){
         revoked:true,revokedReason:'released',revokedAt:dbApi.serverTimestamp(),revokedBy:uid,releaseEventId:eventRef.id
       });
       tx.set(eventRef,{
-        childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),
+        childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),reason:'rules_violation',
         rewardIds:selected.map(c=>c.rewardId),pokemon:details,count:3
       });
       const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
