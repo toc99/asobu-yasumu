@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.0';
+const version = 'v3.13.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -1299,6 +1299,7 @@ function renderPlayers(now=Date.now()){
     const videoAction=renderVideoAction(id,p,now);
     const undo=undoKind(p,now);
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
+    const retroAction=(st==='ready'||st==='playing')?`<button class="btn outline retro-start" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>${st==='playing'?'⏮️ 開始時刻を修正':'⏮️ 開始忘れ・時刻を指定'}</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const pokemonReward=rewardActionFor(id,now);
     const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
@@ -1310,10 +1311,10 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
-        <div class="player-tools-content">${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
+        <div class="player-tools-content">${retroAction}${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
       </details><div class="mini screen-summary"><div>今日の合計<strong>${brief(today)}</strong></div><div>ゲーム<strong>${brief(gameToday)}</strong></div><div>動画<strong>${brief(videoToday)}</strong></div><div>今日の終了<strong>${count}回</strong></div></div></article>`;
   }).join('');
 }
@@ -1431,7 +1432,7 @@ function renderParentDashboard(now=Date.now()){
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
     const state=names[st]||'確認中';
     const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
-    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small><small>今日の合計 ${brief(todayTotal(id,now))}</small></article>`;
+    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small><small>今日の合計 ${brief(todayTotal(id,now))}</small>${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
   }).join('');
 }
 function playerLayoutSignature(now=Date.now()){
@@ -1589,6 +1590,66 @@ function refSettings(){return dbApi.doc(db,'households',householdId,'settings','
 function sessionsRef(){return dbApi.collection(db,'households',householdId,'sessions')}
 function ensureOnline(){if(!navigator.onLine)throw Error('インターネット接続が必要です。通信を確認してから操作してください。');if(!canOperate())throw Error('クラウドの最新状態を確認中です。再接続後に操作してください。');}
 async function runLocked(fn){if(busy)return;busy=true;renderBonuses();try{ensureOnline();await fn();}catch(e){console.error(e);toast(errorText(e));}finally{busy=false;renderBonuses();render();}}
+
+/* v3.13: Backdate a forgotten start, including correction of an ongoing session. */
+const RETRO_KID_MS=180*MIN,RETRO_PARENT_MS=24*60*MIN;
+let retroStartChild=null;
+function retroEarliest(p,now=Date.now()){
+  return Math.max(now-(isParentPage?RETRO_PARENT_MS:RETRO_KID_MS),Number(p.restUntil)||0,Number(p.manualRestUntil)||0);
+}
+function openRetroStart(id){
+  const p=model.profiles[id],now=Date.now();
+  if(!ids.includes(id)||!p||!canOperate())return toast('最新の記録を確認できません。');
+  if(videoStartedMillis(p)>0)return toast('動画視聴中は変更できません。');
+  if(!p.activeStart&&restEnd(p)>now)return toast('休憩中は開始できません。');
+  const min=retroEarliest(p,now),max=p.activeStart>0?p.activeStart-1000:now-1000;
+  if(min>=max)return toast('遡って設定できる時間がありません。');
+  retroStartChild=id;
+  const inp=$('retro-start-at'),sel=$('retro-start-device');
+  $('retro-start-title').textContent=playerLabel(id)+(p.activeStart>0?'：開始時刻を訂正':'：開始忘れを記録');
+  $('retro-start-help').textContent=p.activeStart>0
+    ?'現在の開始時刻より前の実際の時刻を指定します。'
+    :'実際にゲームを始めた時刻を指定します。終了操作はいつもどおり行ってください。';
+  inp.min=preciseDateInput(min);inp.max=preciseDateInput(max);
+  const suggested=p.activeStart>0?p.activeStart-5*MIN:now-5*MIN;
+  inp.value=preciseDateInput(Math.max(min,Math.min(max,suggested)));
+  for(const opt of sel.options)opt.textContent=model.settings.devices?.[opt.value]||({sw1:'Switch',sw2:'Switch 2'}[opt.value]);
+  sel.value=p.activeStart>0?(p.deviceId||'sw1'):'sw1';sel.disabled=p.activeStart>0;
+  updateRetroPreview();$('retro-start-dialog').showModal();
+}
+function updateRetroPreview(){
+  const p=model.profiles[retroStartChild],node=$('retro-start-preview');if(!p||!node)return;
+  const start=new Date($('retro-start-at').value).getTime();
+  const max=p.activeStart>0?p.activeStart-1000:Date.now()-1000;
+  node.textContent=(!Number.isFinite(start)||start<retroEarliest(p)||start>max)
+    ?'設定可能な開始時刻を入力してください。'
+    :'開始 '+dateTime(start)+' ／ プレイ '+brief(Date.now()-start)+' ／ 今終了なら休憩 '+brief(Date.now()-start);
+}
+async function saveRetroStart(event){
+  event.preventDefault();
+  const id=retroStartChild,start=new Date($('retro-start-at').value).getTime(),deviceId=$('retro-start-device').value;
+  if(!ids.includes(id)||!Number.isFinite(start)||!['sw1','sw2'].includes(deviceId))return toast('入力内容を確認してください。');
+  if(!confirm(playerLabel(id)+'の開始時刻を '+dateTime(start)+' に設定しますか？'))return;
+  await runLocked(async()=>{
+    const mode=await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('プロフィールがありません。');
+      const p=snap.data(),now=Date.now();
+      if(videoStartedMillis(p)>0)throw Error('動画視聴中のため変更できません。');
+      const min=retroEarliest(p,now),max=p.activeStart>0?p.activeStart-1000:now-1000;
+      if(start<min||start>max)throw Error('開始時刻が設定可能な範囲外です。');
+      if(p.activeStart>0){
+        tx.update(ref,{activeStart:start,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'start_corrected',id,dateTime(p.activeStart),dateTime(start));return 'corrected';
+      }
+      if(restEnd(p)>now)throw Error('まだ休憩中なので開始できません。');
+      tx.update(ref,{activeStart:start,deviceId,startedAt:dbApi.serverTimestamp(),endedAt:null,updatedAt:dbApi.serverTimestamp()});
+      appendAudit(tx,'start_backdated',id,'開始押し忘れ',dateTime(start)+'にゲーム開始');return 'started';
+    });
+    $('retro-start-dialog').close();retroStartChild=null;
+    toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
+  });
+}
+
 async function startPlay(id,deviceId){return runLocked(async()=>{
   const now=Date.now();await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データが見つかりません');const p=snap.data();
@@ -1906,6 +1967,7 @@ function initUiEvents(){
    if(btn.dataset.manual)openManualWait(btn.dataset.manual);
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
+    if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
    if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
@@ -1930,7 +1992,10 @@ function initUiEvents(){
   $('manual-minutes')?.addEventListener('input',updateManualPreview);
   $('manual-clear')?.addEventListener('click',clearManualWait);
   $('manual-dialog')?.addEventListener('close',()=>{pendingManual=null;});
-  $('correct-form')?.addEventListener('submit',correctForgottenEnd);
+  $('retro-start-form')?.addEventListener('submit',saveRetroStart);
+   $('retro-start-at')?.addEventListener('input',updateRetroPreview);
+   $('retro-start-dialog')?.addEventListener('close',()=>{retroStartChild=null;});
+   $('correct-form')?.addEventListener('submit',correctForgottenEnd);
   $('correct-dialog')?.addEventListener('close',()=>{pendingCorrection=null;});
   $('retry-connect')?.addEventListener('click',()=>recheckConnection());
   $('export-audit')?.addEventListener('click',exportAuditCsv);
