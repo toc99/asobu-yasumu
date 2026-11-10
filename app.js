@@ -1680,7 +1680,11 @@ function listen(){
    model.pokemonReleaseLoaded=true;
    model.pokemonReleaseServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
    showReleaseNotice();
- },listenerError));
+ },e=>{
+   console.warn('Pokemon release notification listener',e);
+   model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;
+   if(isParentPage&&$('pokemon-release-actions'))$('pokemon-release-actions').textContent='Firestore Rules未適用などにより、ポケモンを逃がす機能は利用できません。';
+ }));
  cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
    model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
    model.bonusLoaded=true;model.bonusServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
