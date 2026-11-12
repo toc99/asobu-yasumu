@@ -396,3 +396,7 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .night-carryover-resumed{border-color:#a3d8cf;background:#effbf8;color:#216456}
 .night-carryover-summary{background:#fff7df;color:#795319;padding:7px 9px;border-radius:9px;font-weight:700;line-height:1.6}
 @media(max-width:650px){.night-policy-carryover{padding:12px}.night-carryover-badge{font-size:13px}}
+
+/* v3.12.2: 過去のゲーム開始時刻を入力するダイアログ */
+#retro-start-preview{border:1px solid #dbe8f8;background:#f3f9ff;border-radius:12px;padding:12px;font-weight:700;line-height:1.6}
+.player .retro-start{margin-top:8px}
