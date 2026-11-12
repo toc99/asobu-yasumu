@@ -27,6 +27,7 @@ let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, famil
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
+let lastUpstairsCutoffState='';
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -1527,6 +1528,9 @@ function render(now=Date.now()){
   // Timer labels update each second. Big cards and hidden panes are not reconstructed unnecessarily.
   if(isParentPage&&Math.floor(now/1000)%30===0)renderHonestyAdmin();
   renderNightPolicy();renderSync();if(!model.ready)return;
+  // 日付変更と21:00到来時にチャレンジの締切表示を即時更新する。
+  const activityCutoffState=`${rewardDayIndex(now)}:${upstairsBeforeDeadline(now)}`;
+  if(lastUpstairsCutoffState!==activityCutoffState){lastUpstairsCutoffState=activityCutoffState;renderActivities();}
   if(Math.floor(now/1000)%5===0)renderAlerts(now);
   const signature=playerLayoutSignature(now);
   if(signature!==playerRenderSignature||now-playerRenderedAt>=30000||!$('players')?.querySelector('.player')){
