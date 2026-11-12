@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.2';
+const version = 'v3.12.3';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -21,7 +21,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
@@ -179,7 +179,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
   writer.set(auditRef(),{action,childId,actorUid:uid,actorRole:role,createdAt:dbApi.serverTimestamp(),
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
-const AUDIT_ACTIONS={start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
+const AUDIT_ACTIONS={pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
   history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
@@ -488,30 +488,44 @@ function hashReward(value){
   for(let i=0;i<value.length;i++)hash=Math.imul(hash^value.charCodeAt(i),16777619)>>>0;
   return hash>>>0;
 }
-// 旧版の獲得結果を保持。v3.9以降は「まだ持っていない番号」からだけ選ぶ。
-// 図鑑の表示はクライアント側で確定済みのサーバー記録を同順に再計算する。
+// 図鑑番号は報酬履歴の取得時点順に確定する。将来の「逃がす」操作で
+// 既存の番号は変化させず、逃がした後に獲得する報酬の抽選候補だけを広げる。
 function assignedPokemon(id,additional=[]){
   const docs=[...rewardClaims(id),...additional].sort(claimOrder);
-  const result=new Map(), owned=new Set();
+  const result=new Map(),everOwned=new Set(),activeCounts=new Map(),pendingReleases=[];
   for(const c of docs){
+    const claimed=stampMillis(c.claimedAt);
+    // 過去の捕獲時点ではまだ所持していた個体を、逃走後の抽選からだけ除外する。
+    for(let i=pendingReleases.length-1;i>=0;i--){
+      const release=pendingReleases[i];
+      if(release.at>claimed)continue;
+      const remain=(activeCounts.get(release.no)||0)-1;
+      if(remain>0)activeCounts.set(release.no,remain);
+      else activeCounts.delete(release.no);
+      pendingReleases.splice(i,1);
+    }
     const rewardId=claimIdOf(c);
     let no;
-    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)) {
+    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)){
       no=c.pokemonNo;
     }else if(c.catalogVersion===2){
-      const gen=generationFor(owned.size),max=GENERATIONS[gen].end;
+      // 世代解放に必要な歴代獲得種類数は、逃走によって遡って変更しない。
+      const gen=generationFor(everOwned.size),max=GENERATIONS[gen].end;
       const candidates=[];
-      for(let i=1;i<=max;i++)if(!owned.has(i))candidates.push(i);
-      if(candidates.length){no=candidates[hashReward(rewardId)%candidates.length];}
-      else {
-        // 全1025匹をコンプリートした場合だけ重複を許す。
-        no=1+hashReward(rewardId)%POKEDEX_TOTAL;
-      }
+      for(let i=1;i<=max;i++)if(!activeCounts.has(i))candidates.push(i);
+      no=candidates.length?candidates[hashReward(rewardId)%candidates.length]
+        :1+hashReward(rewardId)%POKEDEX_TOTAL;
     }else{
       no=pokemonNoFromClaim(c); // v3.7-v3.8の従来結果を保存
     }
     result.set(rewardId,no);
-    owned.add(no);
+    everOwned.add(no);
+    activeCounts.set(no,(activeCounts.get(no)||0)+1);
+    // ズル判定による取消は従来の抽選仕様を維持し、escape（逃走）だけを再抽選対象とする。
+    if(c.revoked===true&&c.revokedReason==='released'){
+      const released=stampMillis(c.revokedAt);
+      if(released>claimed)pendingReleases.push({at:released,no});
+    }
   }
   return result;
 }
@@ -677,6 +691,115 @@ function rewardActionFor(id,now=Date.now()){
     ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>${claimLabel}</button>`
     : `<small>${safe(stateLabel)}</small>`}</div>`;
 }
+/* v3.13: release three captured Pokemon without deleting historic claims. */
+const releaseSeenFallback=new Set();
+let pokemonReleasePending=null;
+function releaseCandidatesFor(id){
+  const assigned=assignedPokemon(id);
+  return rewardClaims(id).filter(c=>c.revoked!==true).map(c=>({
+    rewardId:claimIdOf(c),no:assigned.get(claimIdOf(c))
+  })).filter(c=>Number.isInteger(c.no)&&c.no>0&&c.no<=POKEDEX_TOTAL);
+}
+function chooseThreeRandom(items){
+  const pool=[...items];
+  for(let i=pool.length-1;i>0;i--){
+    const random=new Uint32Array(1);crypto.getRandomValues(random);
+    const j=random[0]%(i+1);
+    [pool[i],pool[j]]=[pool[j],pool[i]];
+  }
+  return pool.slice(0,3);
+}
+function renderReleaseAdmin(){
+  const root=$('pokemon-release-actions');if(!root||!isParentPage)return;
+  if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
+  root.innerHTML=displayIds().map(id=>{
+    const count=releaseCandidatesFor(id).length;
+    const disabled=count<3||busy||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
+    return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹（重複を含む）</small></div>'+
+      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>ランダムで3匹逃がす</button></div>';
+  }).join('');
+}
+async function releaseThreePokemon(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed)return;
+  const choices=releaseCandidatesFor(id);
+  if(choices.length<3)return toast('所持が3匹未満のため、逃がすことはできません。');
+  if(!confirm(playerLabel(id)+'のポケモンからランダムで3匹逃がします。\n選ばれた3匹は図鑑の所持数から減り、マイチームからも外れます。\nこの画面から元に戻すことはできません。実行しますか？'))return;
+  await runLocked(async()=>{
+    const selected=chooseThreeRandom(choices);
+    const details=selected.map(c=>({rewardId:c.rewardId,no:c.no,name:pokemonName(c.no)}));
+    const eventRef=dbApi.doc(dbApi.collection(db,'households',householdId,'pokemonReleases'));
+    const refList=selected.map(c=>dbApi.doc(db,'households',householdId,'rewards',c.rewardId));
+    const priorMarker=model.profiles[id]?.pokemonLastReleaseEventId||'';
+    await dbApi.runTransaction(db,async tx=>{
+      const profileRef=refProfile(id),profileSnap=await tx.get(profileRef);
+      const rewardSnaps=[];
+      for(const ref of refList)rewardSnaps.push(await tx.get(ref));
+      if(!profileSnap.exists())throw Error('プロフィールがありません。');
+      const profile=profileSnap.data();
+      if((profile.pokemonLastReleaseEventId||'')!==priorMarker)
+        throw Error('別の操作で所持状況が変わりました。画面を確認してやり直してください。');
+      for(let i=0;i<selected.length;i++){
+        if(!rewardSnaps[i].exists()||rewardSnaps[i].data().childId!==id||rewardSnaps[i].data().revoked===true)
+          throw Error('獲得記録が更新されました。もう一度確認してください。');
+      }
+      const taken=new Set(selected.map(c=>c.rewardId));
+      const remaining=new Set(choices.filter(c=>!taken.has(c.rewardId)).map(c=>c.no));
+      const oldTeam=teamFromProfile(profile);
+      const newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
+      for(const ref of refList)tx.update(ref,{
+        revoked:true,revokedReason:'released',revokedAt:dbApi.serverTimestamp(),revokedBy:uid,releaseEventId:eventRef.id
+      });
+      tx.set(eventRef,{
+        childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),reason:'rules_violation',
+        rewardIds:selected.map(c=>c.rewardId),pokemon:details,count:3
+      });
+      const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
+      if(newTeam.some((n,i)=>n!==oldTeam[i])){
+        changes.favoriteTeam=newTeam;changes.teamUpdatedAt=dbApi.serverTimestamp();
+      }
+      tx.update(profileRef,changes);
+      appendAudit(tx,'pokemon_release',id,'所持ポケモンから3匹抽選',
+        details.map(c=>c.name).join('・')+' が逃げた',eventRef.id);
+    });
+    toast(playerLabel(id)+'：'+details.map(c=>c.name).join('、')+'が逃げていきました。');
+    renderReleaseAdmin();
+  });
+}
+function releaseSeenKey(){return 'asobu-yasumu-release-seen-'+householdId;}
+function readSeenReleases(){
+  try{
+    const items=JSON.parse(localStorage.getItem(releaseSeenKey())||'[]');
+    return Array.isArray(items)?items.filter(x=>typeof x==='string'):[];
+  }catch{return [...releaseSeenFallback];}
+}
+function markReleaseSeen(eventId){
+  const ids=[...new Set([...readSeenReleases(),eventId])].slice(-200);
+  releaseSeenFallback.add(eventId);
+  try{localStorage.setItem(releaseSeenKey(),JSON.stringify(ids));}catch{}
+}
+function showReleaseNotice(){
+  const dialog=$('pokemon-release-dialog');
+  if(isParentPage||!dialog||dialog.open||document.hidden||!model.pokemonReleaseServerConfirmed||!model.ready)return;
+  const seen=new Set([...readSeenReleases(),...releaseSeenFallback]);
+  const cutoff=Date.now()-30*DAY;
+  const next=[...model.pokemonReleaseEvents].reverse().find(e=>
+    !seen.has(e.eventId)&&stampMillis(e.createdAt)>=cutoff&&ids.includes(e.childId));
+  if(!next)return;
+  pokemonReleasePending=next.eventId;
+  $('pokemon-release-title').textContent=playerLabel(next.childId)+'へ おしらせ';
+  const pokemon=Array.isArray(next.pokemon)?next.pokemon:[];
+  $('pokemon-release-message').textContent='ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
+  $('pokemon-release-names').textContent=pokemon.map(p=>p.name||pokemonName(p.no)).join('・');
+  dialog.showModal();
+}
+function acknowledgeRelease(){
+  if(!pokemonReleasePending)return;
+  markReleaseSeen(pokemonReleasePending);
+  pokemonReleasePending=null;
+  $('pokemon-release-dialog')?.close();
+  showReleaseNotice();
+}
+
 function renderPokedex(){
   const target=$('pokedex-grid');if(!target)return;
   const select=$('pokedex-child'),filter=$('pokedex-filter');
@@ -1542,9 +1665,9 @@ function render(now=Date.now()){
     if(Math.floor(now/1000)%10===0){renderParentDashboard(now);}
     if(parentView==='reports'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
   }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
-  checkRestNotices(now);checkVideoNotices(now);
+  checkRestNotices(now);checkVideoNotices(now);showReleaseNotice();
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1553,7 +1676,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -1614,8 +1737,18 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();
+   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();
  },listenerError));
+ cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
+   model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
+   model.pokemonReleaseLoaded=true;
+   model.pokemonReleaseServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
+   renderReleaseAdmin();showReleaseNotice();
+ },e=>{
+   console.warn('Pokemon release notification listener',e);
+   model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;
+   if(isParentPage&&$('pokemon-release-actions'))$('pokemon-release-actions').textContent='Firestore Rules未適用などにより、ポケモンを逃がす機能は利用できません。';
+ }));
  cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
    model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
    model.bonusLoaded=true;model.bonusServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
@@ -2019,6 +2152,7 @@ function initUiEvents(){
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
+   if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
    if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
@@ -2043,7 +2177,8 @@ function initUiEvents(){
   $('manual-minutes')?.addEventListener('input',updateManualPreview);
   $('manual-clear')?.addEventListener('click',clearManualWait);
   $('manual-dialog')?.addEventListener('close',()=>{pendingManual=null;});
-  $('retro-start-form')?.addEventListener('submit',saveRetroStart);
+  $('pokemon-release-ack')?.addEventListener('click',acknowledgeRelease);
+   $('retro-start-form')?.addEventListener('submit',saveRetroStart);
    $('retro-start-at')?.addEventListener('input',updateRetroPreview);
    $('retro-start-dialog')?.addEventListener('close',()=>{retroStartChild=null;});
    $('correct-form')?.addEventListener('submit',correctForgottenEnd);
