@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.13.0';
+const version = 'v3.12.2';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -21,12 +21,13 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
+let lastUpstairsCutoffState='';
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -131,11 +132,46 @@ function normalRestEnd(p){
   if(!policy||raw<=start||raw<=policy.enabledAt)return raw;
   return Math.max(raw,advanceEligible(start,raw-start,policy,nightResumeMillis(p),Number(p?.nightResumeWindowEnd)||0));
 }
+
+/* v3.12.1: 夜間の持ち越し休憩を、既存の時間計算を変えずに可視化する。 */
+function nightCarryoverInfo(p,now=Date.now()){
+  const policy=pausePolicy();
+  if(!policy||!p||p.activeStart>0||videoStartedMillis(p)>0||waitingRemaining(p,now)<=0)return null;
+  const start=Number(p.restStart)||0,rawEnd=Number(p.restUntil)||0;
+  const normalCarry=start>=policy.enabledAt&&rawEnd>start&&normalWaitRemaining(p,now)>0
+    && normalRestEnd(p)>rawEnd+1000;
+  const manualStart=stampMillis(p.manualRestSetAt),manualMinutes=Number(p.manualRestMinutes)||0;
+  const manualCarry=manualStart>=policy.enabledAt&&manualMinutes>0&&manualWaitRemaining(p,now)>0
+    && Number(p.manualRestUntil)>manualStart+manualMinutes*MIN+1000;
+  if(!normalCarry&&!manualCarry)return null;
+  const remain=brief(waitingRemaining(p,now)),end=dateTime(restEnd(p));
+  const paused=isNightPaused(now,policy),resumed=resumedThisNight(p,now,policy);
+  if(paused&&!resumed){
+    const morning=nightWindow(now,policy).until;
+    return {phase:'paused',message:'🌙 夜間停止中（休憩を翌朝へ持ち越し）：残り '+remain+' ／ '+dateTime(morning)+' から消化再開 ／ 次の利用 '+end};
+  }
+  if(paused&&resumed){
+    return {phase:'resumed',message:'🌅 夜間停止を前倒し解除・休憩消化中：残り '+remain+' ／ 次の利用 '+end};
+  }
+  const nextStop=nightWindow(now,policy).until;
+  const futureCarry=restEnd(p)>nextStop&&now<nextStop &&
+    ((normalCarry&&start>=now-DAY&&start<nextStop)||(manualCarry&&manualStart>=now-DAY&&manualStart<nextStop));
+  if(futureCarry)return {phase:'scheduled',message:'🌙 今夜の休憩は翌朝へ持ち越し予定：残り '+remain+' ／ 次の利用 '+end};
+  return {phase:'resumed',message:'🌅 前夜からの持ち越し休憩を消化中：残り '+remain+' ／ 次の利用 '+end};
+}
+
 function displayTimeRange(){const p=pausePolicy();return p?`${model.settings.nightPause.start}〜${model.settings.nightPause.end}`:'';}
 function renderNightPolicy(){const e=$('night-policy');if(!e)return;
-  const p=pausePolicy();
-  e.classList.toggle('hidden',!p);
-  if(p)e.textContent=`夜間持ち越し：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
+  const p=pausePolicy();e.classList.toggle('hidden',!p);
+  if(!p)return;
+  const entries=ids.map(id=>({id,info:nightCarryoverInfo(model.profiles[id])})).filter(x=>x.info);
+  if(entries.length){
+    e.classList.add('night-policy-carryover');
+    e.innerHTML='<strong>🌙 夜間休憩の持ち越し</strong>'+entries.map(x=>'<p>'+safe(playerLabel(x.id))+'：'+safe(x.info.message)+'</p>').join('')+'<small>夜間停止の設定 '+safe(displayTimeRange())+'</small>';
+  }else{
+    e.classList.remove('night-policy-carryover');
+    e.textContent=`夜間持ち越し設定：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
+  }
 }
 function auditRef(){return dbApi.doc(dbApi.collection(db,'households',householdId,'auditLogs'));}
 function appendAudit(writer,action,childId,before,after,sessionId=''){
@@ -143,7 +179,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
   writer.set(auditRef(),{action,childId,actorUid:uid,actorRole:role,createdAt:dbApi.serverTimestamp(),
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
-const AUDIT_ACTIONS={start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',pokemon_release:'ポケモンを3匹逃がす',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
+const AUDIT_ACTIONS={start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
   history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
@@ -216,7 +252,8 @@ const JUNIOR_ACTIVITIES = Object.freeze({
   practicing:{icon:'🎵',label:'れんしゅうを した'},
   trying:{icon:'🌟',label:'あたらしい ことに ちょうせん'},
   persevering:{icon:'💪',label:'さいごまで がんばった'},
-  kindness:{icon:'🤝',label:'だれかを たすけた'}
+  kindness:{icon:'🤝',label:'だれかを たすけた'},
+  upstairs21:{icon:'🏠',label:'よる9じまでに 2かいへ あがる'}
 });
 function ageModeFor(profile,now=Date.now()){
   const age=ageOf(profile,now);
@@ -396,9 +433,13 @@ const GENERATIONS = Object.freeze([
 const ACTIVITY_KINDS = Object.freeze({
   study:'勉強した', reading:'本を読んだ', exercise:'体を動かした',
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
-  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた'
+  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
 });
 const ACTIVITY_DAILY_MAX = 3;
+const UPSTAIRS_ACTIVITY_ID='upstairs21';
+function upstairsBeforeDeadline(now=Date.now()){
+  return ((now+JST_OFFSET)%DAY)<21*60*MIN;
+}
 const activitySlotId = (id,day,slot) => `${id}_${day}_${slot}`;
 const activitySlotRef = (id,day,slot) => dbApi.doc(db,'households',householdId,'activitySlots',activitySlotId(id,day,slot));
 function dailyRequests(id,day=rewardDayIndex()){
@@ -447,44 +488,30 @@ function hashReward(value){
   for(let i=0;i<value.length;i++)hash=Math.imul(hash^value.charCodeAt(i),16777619)>>>0;
   return hash>>>0;
 }
-// 図鑑番号は報酬履歴の取得時点順に確定する。将来の「逃がす」操作で
-// 既存の番号は変化させず、逃がした後に獲得する報酬の抽選候補だけを広げる。
+// 旧版の獲得結果を保持。v3.9以降は「まだ持っていない番号」からだけ選ぶ。
+// 図鑑の表示はクライアント側で確定済みのサーバー記録を同順に再計算する。
 function assignedPokemon(id,additional=[]){
   const docs=[...rewardClaims(id),...additional].sort(claimOrder);
-  const result=new Map(),everOwned=new Set(),activeCounts=new Map(),pendingReleases=[];
+  const result=new Map(), owned=new Set();
   for(const c of docs){
-    const claimed=stampMillis(c.claimedAt);
-    // 過去の捕獲時点ではまだ所持していた個体を、逃走後の抽選からだけ除外する。
-    for(let i=pendingReleases.length-1;i>=0;i--){
-      const release=pendingReleases[i];
-      if(release.at>claimed)continue;
-      const remain=(activeCounts.get(release.no)||0)-1;
-      if(remain>0)activeCounts.set(release.no,remain);
-      else activeCounts.delete(release.no);
-      pendingReleases.splice(i,1);
-    }
     const rewardId=claimIdOf(c);
     let no;
-    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)){
+    if(c.catalogVersion===3 && Number.isInteger(c.pokemonNo)) {
       no=c.pokemonNo;
     }else if(c.catalogVersion===2){
-      // 世代解放に必要な歴代獲得種類数は、逃走によって遡って変更しない。
-      const gen=generationFor(everOwned.size),max=GENERATIONS[gen].end;
+      const gen=generationFor(owned.size),max=GENERATIONS[gen].end;
       const candidates=[];
-      for(let i=1;i<=max;i++)if(!activeCounts.has(i))candidates.push(i);
-      no=candidates.length?candidates[hashReward(rewardId)%candidates.length]
-        :1+hashReward(rewardId)%POKEDEX_TOTAL;
+      for(let i=1;i<=max;i++)if(!owned.has(i))candidates.push(i);
+      if(candidates.length){no=candidates[hashReward(rewardId)%candidates.length];}
+      else {
+        // 全1025匹をコンプリートした場合だけ重複を許す。
+        no=1+hashReward(rewardId)%POKEDEX_TOTAL;
+      }
     }else{
       no=pokemonNoFromClaim(c); // v3.7-v3.8の従来結果を保存
     }
     result.set(rewardId,no);
-    everOwned.add(no);
-    activeCounts.set(no,(activeCounts.get(no)||0)+1);
-    // ズル判定による取消は従来の抽選仕様を維持し、escape（逃走）だけを再抽選対象とする。
-    if(c.revoked===true&&c.revokedReason==='released'){
-      const released=stampMillis(c.revokedAt);
-      if(released>claimed)pendingReleases.push({at:released,no});
-    }
+    owned.add(no);
   }
   return result;
 }
@@ -650,116 +677,6 @@ function rewardActionFor(id,now=Date.now()){
     ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>${claimLabel}</button>`
     : `<small>${safe(stateLabel)}</small>`}</div>`;
 }
-
-/* v3.13: release three captured Pokemon without deleting historic claims. */
-const releaseSeenFallback=new Set();
-let pokemonReleasePending=null;
-function releaseCandidatesFor(id){
-  const assigned=assignedPokemon(id);
-  return rewardClaims(id).filter(c=>c.revoked!==true).map(c=>({
-    rewardId:claimIdOf(c),no:assigned.get(claimIdOf(c))
-  })).filter(c=>Number.isInteger(c.no)&&c.no>0&&c.no<=POKEDEX_TOTAL);
-}
-function chooseThreeRandom(items){
-  const pool=[...items];
-  for(let i=pool.length-1;i>0;i--){
-    const random=new Uint32Array(1);crypto.getRandomValues(random);
-    const j=random[0]%(i+1);
-    [pool[i],pool[j]]=[pool[j],pool[i]];
-  }
-  return pool.slice(0,3);
-}
-function renderReleaseAdmin(){
-  const root=$('pokemon-release-actions');if(!root||!isParentPage)return;
-  if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
-  root.innerHTML=displayIds().map(id=>{
-    const count=releaseCandidatesFor(id).length;
-    const disabled=count<3||busy||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
-    return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹（重複を含む）</small></div>'+
-      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>ランダムで3匹逃がす</button></div>';
-  }).join('');
-}
-async function releaseThreePokemon(id){
-  if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed)return;
-  const choices=releaseCandidatesFor(id);
-  if(choices.length<3)return toast('所持が3匹未満のため、逃がすことはできません。');
-  if(!confirm(playerLabel(id)+'のポケモンからランダムで3匹逃がします。\n選ばれた3匹は図鑑の所持数から減り、マイチームからも外れます。\nこの画面から元に戻すことはできません。実行しますか？'))return;
-  await runLocked(async()=>{
-    const selected=chooseThreeRandom(choices);
-    const details=selected.map(c=>({rewardId:c.rewardId,no:c.no,name:pokemonName(c.no)}));
-    const eventRef=dbApi.doc(dbApi.collection(db,'households',householdId,'pokemonReleases'));
-    const refList=selected.map(c=>dbApi.doc(db,'households',householdId,'rewards',c.rewardId));
-    const priorMarker=model.profiles[id]?.pokemonLastReleaseEventId||'';
-    await dbApi.runTransaction(db,async tx=>{
-      const profileRef=refProfile(id),profileSnap=await tx.get(profileRef);
-      const rewardSnaps=[];
-      for(const ref of refList)rewardSnaps.push(await tx.get(ref));
-      if(!profileSnap.exists())throw Error('プロフィールがありません。');
-      const profile=profileSnap.data();
-      if((profile.pokemonLastReleaseEventId||'')!==priorMarker)
-        throw Error('別の操作で所持状況が変わりました。画面を確認してやり直してください。');
-      for(let i=0;i<selected.length;i++){
-        if(!rewardSnaps[i].exists()||rewardSnaps[i].data().childId!==id||rewardSnaps[i].data().revoked===true)
-          throw Error('獲得記録が更新されました。もう一度確認してください。');
-      }
-      const taken=new Set(selected.map(c=>c.rewardId));
-      const remaining=new Set(choices.filter(c=>!taken.has(c.rewardId)).map(c=>c.no));
-      const oldTeam=teamFromProfile(profile);
-      const newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
-      for(const ref of refList)tx.update(ref,{
-        revoked:true,revokedReason:'released',revokedAt:dbApi.serverTimestamp(),revokedBy:uid,releaseEventId:eventRef.id
-      });
-      tx.set(eventRef,{
-        childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),reason:'rules_violation',
-        rewardIds:selected.map(c=>c.rewardId),pokemon:details,count:3
-      });
-      const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
-      if(newTeam.some((n,i)=>n!==oldTeam[i])){
-        changes.favoriteTeam=newTeam;changes.teamUpdatedAt=dbApi.serverTimestamp();
-      }
-      tx.update(profileRef,changes);
-      appendAudit(tx,'pokemon_release',id,'所持ポケモンから3匹抽選',
-        details.map(c=>c.name).join('・')+' が逃げた',eventRef.id);
-    });
-    toast(playerLabel(id)+'：'+details.map(c=>c.name).join('、')+'が逃げていきました。');
-    renderReleaseAdmin();
-  });
-}
-function releaseSeenKey(){return 'asobu-yasumu-release-seen-'+householdId;}
-function readSeenReleases(){
-  try{
-    const items=JSON.parse(localStorage.getItem(releaseSeenKey())||'[]');
-    return Array.isArray(items)?items.filter(x=>typeof x==='string'):[];
-  }catch{return [...releaseSeenFallback];}
-}
-function markReleaseSeen(eventId){
-  const ids=[...new Set([...readSeenReleases(),eventId])].slice(-200);
-  releaseSeenFallback.add(eventId);
-  try{localStorage.setItem(releaseSeenKey(),JSON.stringify(ids));}catch{}
-}
-function showReleaseNotice(){
-  const dialog=$('pokemon-release-dialog');
-  if(isParentPage||!dialog||dialog.open||document.hidden||!model.pokemonReleaseServerConfirmed||!model.ready)return;
-  const seen=new Set([...readSeenReleases(),...releaseSeenFallback]);
-  const cutoff=Date.now()-30*DAY;
-  const next=[...model.pokemonReleaseEvents].reverse().find(e=>
-    !seen.has(e.eventId)&&stampMillis(e.createdAt)>=cutoff&&ids.includes(e.childId));
-  if(!next)return;
-  pokemonReleasePending=next.eventId;
-  $('pokemon-release-title').textContent=playerLabel(next.childId)+'へ おしらせ';
-  const pokemon=Array.isArray(next.pokemon)?next.pokemon:[];
-  $('pokemon-release-message').textContent='ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
-  $('pokemon-release-names').textContent=pokemon.map(p=>p.name||pokemonName(p.no)).join('・');
-  dialog.showModal();
-}
-function acknowledgeRelease(){
-  if(!pokemonReleasePending)return;
-  markReleaseSeen(pokemonReleasePending);
-  pokemonReleasePending=null;
-  $('pokemon-release-dialog')?.close();
-  showReleaseNotice();
-}
-
 function renderPokedex(){
   const target=$('pokedex-grid');if(!target)return;
   const select=$('pokedex-child'),filter=$('pokedex-filter');
@@ -1007,10 +924,11 @@ function renderActivities(){
         ?(req?.status==='approved'?'できた！ ポケモン ゲット！':retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち':'まだ おくってないよ')
         :(req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
-      const unavailable=alreadyDone||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
+      const deadlinePassed=kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline();
+      const unavailable=alreadyDone||deadlinePassed||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
-        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
-        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
+        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':deadlinePassed?'9じを すぎたよ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
+        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':deadlinePassed?'受付は21:00まで':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
       const display=junior?(JUNIOR_ACTIVITIES[kind]||{icon:'⭐',label:name}):null;
       if(junior)return `<div class="activity-item activity-junior-item"><div class="activity-junior-icon" aria-hidden="true">${display.icon}</div><div class="activity-junior-text"><strong>${safe(display.label)}</strong><small>${safe(status)}</small>${detail}</div><button type="button" class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button></div>`;
       return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
@@ -1053,6 +971,7 @@ function renderApprovals(){
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
+  if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())return toast('21時までに2階に上がるチャレンジは、本日21:00で受付終了しました。');
   if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const existing=requestFor(id,kind);
@@ -1070,6 +989,7 @@ async function requestActivity(id,kind){
     const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
+      if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
       const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
       if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
@@ -1097,6 +1017,7 @@ async function reviewActivity(requestId,action){
   if(!req||req.status!=='pending')return;
   if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))return toast('ポケモン獲得停止中です。停止が終わってから承認してください。');
   const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
+  if(action==='approve'&&req.activityKind===UPSTAIRS_ACTIVITY_ID&&!confirm('21時までに実際に2階に上がったことを確認しましたか？'))return;
   if(!confirm(`${label}を${action==='approve'?'承認して仮ゲットを正式獲得にし':'見送りにし、仮ゲットを取り消し'}ますか？`))return;
   await runLocked(async()=>{
     const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId),rewardRef=activityRewardRef(requestId);
@@ -1426,6 +1347,8 @@ function renderPlayers(now=Date.now()){
     const retroAction=(st==='ready'||st==='playing')?`<button class="btn outline retro-start" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>${st==='playing'?'⏮️ 開始時刻を修正':'⏮️ 開始忘れ・時刻を指定'}</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const pokemonReward=rewardActionFor(id,now);
+    const carry=nightCarryoverInfo(p,now);
+    const carryBadge=carry?`<div class="night-carryover-badge night-carryover-${carry.phase}" role="status">${safe(carry.message)}</div>`:'';
     const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
     const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
@@ -1435,7 +1358,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${videoAction}</div>${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${retroAction}${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -1556,7 +1479,8 @@ function renderParentDashboard(now=Date.now()){
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
     const state=names[st]||'確認中';
     const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
-    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small><small>今日の合計 ${brief(todayTotal(id,now))}</small>${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
+    const carry=nightCarryoverInfo(p,now);
+    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small>${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
   }).join('');
 }
 function playerLayoutSignature(now=Date.now()){
@@ -1567,7 +1491,7 @@ function playerLayoutSignature(now=Date.now()){
       p.restUntil,p.restStart,p.lastDuration,p.manualRestUntil,p.manualRestMinutes,
       p.lastSessionId,p.rewardLastDayIndex,p.rewardBlockedSessionId,p.rewardLastSessionId,
       p.rewardSuspendedUntil,stampMillis(p.updatedAt),
-      undoKind(p,now),canEarlyResume(p,now),claimEligibility(id,now).label];
+      undoKind(p,now),canEarlyResume(p,now),nightCarryoverInfo(p,now)?.phase||'',claimEligibility(id,now).label];
   })});
 }
 function updatePlayerTimes(now=Date.now()){
@@ -1605,6 +1529,9 @@ function render(now=Date.now()){
   // Timer labels update each second. Big cards and hidden panes are not reconstructed unnecessarily.
   if(isParentPage&&Math.floor(now/1000)%30===0)renderHonestyAdmin();
   renderNightPolicy();renderSync();if(!model.ready)return;
+  // 日付変更と21:00到来時にチャレンジの締切表示を即時更新する。
+  const activityCutoffState=`${rewardDayIndex(now)}:${upstairsBeforeDeadline(now)}`;
+  if(lastUpstairsCutoffState!==activityCutoffState){lastUpstairsCutoffState=activityCutoffState;renderActivities();}
   if(Math.floor(now/1000)%5===0)renderAlerts(now);
   const signature=playerLayoutSignature(now);
   if(signature!==playerRenderSignature||now-playerRenderedAt>=30000||!$('players')?.querySelector('.player')){
@@ -1615,9 +1542,9 @@ function render(now=Date.now()){
     if(Math.floor(now/1000)%10===0){renderParentDashboard(now);}
     if(parentView==='reports'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
   }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
-  checkRestNotices(now);checkVideoNotices(now);showReleaseNotice();
+  checkRestNotices(now);checkVideoNotices(now);
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1626,7 +1553,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;retroStartChild=null;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -1687,18 +1614,8 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();
+   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();
  },listenerError));
- cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
-   model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
-   model.pokemonReleaseLoaded=true;
-   model.pokemonReleaseServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   showReleaseNotice();
- },e=>{
-   console.warn('Pokemon release notification listener',e);
-   model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;
-   if(isParentPage&&$('pokemon-release-actions'))$('pokemon-release-actions').textContent='Firestore Rules未適用などにより、ポケモンを逃がす機能は利用できません。';
- }));
  cleanups.push(dbApi.onSnapshot(bonusCollection(),{includeMetadataChanges:true},snap=>{
    model.bonusGrants=snap.docs.map(d=>({...d.data(),grantId:d.id}));
    model.bonusLoaded=true;model.bonusServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
@@ -1724,7 +1641,6 @@ function refSettings(){return dbApi.doc(db,'households',householdId,'settings','
 function sessionsRef(){return dbApi.collection(db,'households',householdId,'sessions')}
 function ensureOnline(){if(!navigator.onLine)throw Error('インターネット接続が必要です。通信を確認してから操作してください。');if(!canOperate())throw Error('クラウドの最新状態を確認中です。再接続後に操作してください。');}
 async function runLocked(fn){if(busy)return;busy=true;renderBonuses();try{ensureOnline();await fn();}catch(e){console.error(e);toast(errorText(e));}finally{busy=false;renderBonuses();render();}}
-
 /* v3.13: Backdate a forgotten start, including correction of an ongoing session. */
 const RETRO_KID_MS=180*MIN,RETRO_PARENT_MS=24*60*MIN;
 let retroStartChild=null;
@@ -1783,6 +1699,7 @@ async function saveRetroStart(event){
     toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
   });
 }
+
 
 async function startPlay(id,deviceId){return runLocked(async()=>{
   const now=Date.now();await dbApi.runTransaction(db,async tx=>{
@@ -2102,7 +2019,6 @@ function initUiEvents(){
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
-    if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
    if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
@@ -2127,8 +2043,7 @@ function initUiEvents(){
   $('manual-minutes')?.addEventListener('input',updateManualPreview);
   $('manual-clear')?.addEventListener('click',clearManualWait);
   $('manual-dialog')?.addEventListener('close',()=>{pendingManual=null;});
-  $('pokemon-release-ack')?.addEventListener('click',acknowledgeRelease);
-   $('retro-start-form')?.addEventListener('submit',saveRetroStart);
+  $('retro-start-form')?.addEventListener('submit',saveRetroStart);
    $('retro-start-at')?.addEventListener('input',updateRetroPreview);
    $('retro-start-dialog')?.addEventListener('close',()=>{retroStartChild=null;});
    $('correct-form')?.addEventListener('submit',correctForgottenEnd);
