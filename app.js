@@ -131,11 +131,46 @@ function normalRestEnd(p){
   if(!policy||raw<=start||raw<=policy.enabledAt)return raw;
   return Math.max(raw,advanceEligible(start,raw-start,policy,nightResumeMillis(p),Number(p?.nightResumeWindowEnd)||0));
 }
+
+/* v3.12.1: 夜間の持ち越し休憩を、既存の時間計算を変えずに可視化する。 */
+function nightCarryoverInfo(p,now=Date.now()){
+  const policy=pausePolicy();
+  if(!policy||!p||p.activeStart>0||videoStartedMillis(p)>0||waitingRemaining(p,now)<=0)return null;
+  const start=Number(p.restStart)||0,rawEnd=Number(p.restUntil)||0;
+  const normalCarry=start>=policy.enabledAt&&rawEnd>start&&normalWaitRemaining(p,now)>0
+    && normalRestEnd(p)>rawEnd+1000;
+  const manualStart=stampMillis(p.manualRestSetAt),manualMinutes=Number(p.manualRestMinutes)||0;
+  const manualCarry=manualStart>=policy.enabledAt&&manualMinutes>0&&manualWaitRemaining(p,now)>0
+    && Number(p.manualRestUntil)>manualStart+manualMinutes*MIN+1000;
+  if(!normalCarry&&!manualCarry)return null;
+  const remain=brief(waitingRemaining(p,now)),end=dateTime(restEnd(p));
+  const paused=isNightPaused(now,policy),resumed=resumedThisNight(p,now,policy);
+  if(paused&&!resumed){
+    const morning=nightWindow(now,policy).until;
+    return {phase:'paused',message:'🌙 夜間停止中（休憩を翌朝へ持ち越し）：残り '+remain+' ／ '+dateTime(morning)+' から消化再開 ／ 次の利用 '+end};
+  }
+  if(paused&&resumed){
+    return {phase:'resumed',message:'🌅 夜間停止を前倒し解除・休憩消化中：残り '+remain+' ／ 次の利用 '+end};
+  }
+  const nextStop=nightWindow(now,policy).until;
+  const futureCarry=restEnd(p)>nextStop&&now<nextStop &&
+    ((normalCarry&&start>=now-DAY&&start<nextStop)||(manualCarry&&manualStart>=now-DAY&&manualStart<nextStop));
+  if(futureCarry)return {phase:'scheduled',message:'🌙 今夜の休憩は翌朝へ持ち越し予定：残り '+remain+' ／ 次の利用 '+end};
+  return {phase:'resumed',message:'🌅 前夜からの持ち越し休憩を消化中：残り '+remain+' ／ 次の利用 '+end};
+}
+
 function displayTimeRange(){const p=pausePolicy();return p?`${model.settings.nightPause.start}〜${model.settings.nightPause.end}`:'';}
 function renderNightPolicy(){const e=$('night-policy');if(!e)return;
-  const p=pausePolicy();
-  e.classList.toggle('hidden',!p);
-  if(p)e.textContent=`夜間持ち越し：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
+  const p=pausePolicy();e.classList.toggle('hidden',!p);
+  if(!p)return;
+  const entries=ids.map(id=>({id,info:nightCarryoverInfo(model.profiles[id])})).filter(x=>x.info);
+  if(entries.length){
+    e.classList.add('night-policy-carryover');
+    e.innerHTML='<strong>🌙 夜間休憩の持ち越し</strong>'+entries.map(x=>'<p>'+safe(playerLabel(x.id))+'：'+safe(x.info.message)+'</p>').join('')+'<small>夜間停止の設定 '+safe(displayTimeRange())+'</small>';
+  }else{
+    e.classList.remove('night-policy-carryover');
+    e.textContent=`夜間持ち越し設定：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
+  }
 }
 function auditRef(){return dbApi.doc(dbApi.collection(db,'households',householdId,'auditLogs'));}
 function appendAudit(writer,action,childId,before,after,sessionId=''){
@@ -1310,6 +1345,8 @@ function renderPlayers(now=Date.now()){
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
     const correction=isParentPage&&st==='playing'&&!!$('correct-dialog')?`<button class="btn outline correction-action" data-correct="${id}" ${busy||!canOperate()?'disabled':''}>終了忘れを修正</button>`:'';
     const pokemonReward=rewardActionFor(id,now);
+    const carry=nightCarryoverInfo(p,now);
+    const carryBadge=carry?`<div class="night-carryover-badge night-carryover-${carry.phase}" role="status">${safe(carry.message)}</div>`:'';
     const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
     const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
@@ -1319,7 +1356,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${undoAction}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${videoAction}</div>${carryBadge}${undoAction}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -1440,7 +1477,8 @@ function renderParentDashboard(now=Date.now()){
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
     const state=names[st]||'確認中';
     const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
-    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small><small>今日の合計 ${brief(todayTotal(id,now))}</small></article>`;
+    const carry=nightCarryoverInfo(p,now);
+    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small></article>`;
   }).join('');
 }
 function playerLayoutSignature(now=Date.now()){
@@ -1451,7 +1489,7 @@ function playerLayoutSignature(now=Date.now()){
       p.restUntil,p.restStart,p.lastDuration,p.manualRestUntil,p.manualRestMinutes,
       p.lastSessionId,p.rewardLastDayIndex,p.rewardBlockedSessionId,p.rewardLastSessionId,
       p.rewardSuspendedUntil,stampMillis(p.updatedAt),
-      undoKind(p,now),canEarlyResume(p,now),claimEligibility(id,now).label];
+      undoKind(p,now),canEarlyResume(p,now),nightCarryoverInfo(p,now)?.phase||'',claimEligibility(id,now).label];
   })});
 }
 function updatePlayerTimes(now=Date.now()){
