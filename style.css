@@ -386,3 +386,13 @@ body[data-role="parent"] .effort-calendar-toolbar > label{display:none}
 body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0 12px 30px #4774a122}
 
 .ui-preview-banner{background:#233a57;color:#fff;text-align:center;font-weight:850;font-size:13px;padding:10px 12px}
+
+/* v3.12.1: overnight-rest carryover emphasis on both screens */
+.night-policy-carryover{border:2px solid #f3c873;background:#fff8e9;color:#714d14;border-radius:14px;padding:14px 16px}
+.night-policy-carryover strong{display:block;font-size:16px;margin-bottom:7px}
+.night-policy-carryover p{font-size:14px;font-weight:700;line-height:1.6;margin:5px 0}
+.night-policy-carryover small{font-size:12px;opacity:.8}
+.night-carryover-badge{border:1px solid #f0ce91;background:#fff9e9;border-radius:12px;padding:11px 12px;margin:10px 0;color:#735116;font-size:14px;line-height:1.65;font-weight:750}
+.night-carryover-resumed{border-color:#a3d8cf;background:#effbf8;color:#216456}
+.night-carryover-summary{background:#fff7df;color:#795319;padding:7px 9px;border-radius:9px;font-weight:700;line-height:1.6}
+@media(max-width:650px){.night-policy-carryover{padding:12px}.night-carryover-badge{font-size:13px}}
