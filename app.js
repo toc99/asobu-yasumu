@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.0';
+const version = 'v3.12.1';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -216,7 +216,8 @@ const JUNIOR_ACTIVITIES = Object.freeze({
   practicing:{icon:'🎵',label:'れんしゅうを した'},
   trying:{icon:'🌟',label:'あたらしい ことに ちょうせん'},
   persevering:{icon:'💪',label:'さいごまで がんばった'},
-  kindness:{icon:'🤝',label:'だれかを たすけた'}
+  kindness:{icon:'🤝',label:'だれかを たすけた'},
+  upstairs21:{icon:'🏠',label:'よる9じまでに 2かいへ あがる'}
 });
 function ageModeFor(profile,now=Date.now()){
   const age=ageOf(profile,now);
@@ -396,9 +397,13 @@ const GENERATIONS = Object.freeze([
 const ACTIVITY_KINDS = Object.freeze({
   study:'勉強した', reading:'本を読んだ', exercise:'体を動かした',
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
-  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた'
+  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
 });
 const ACTIVITY_DAILY_MAX = 3;
+const UPSTAIRS_ACTIVITY_ID='upstairs21';
+function upstairsBeforeDeadline(now=Date.now()){
+  return ((now+JST_OFFSET)%DAY)<21*60*MIN;
+}
 const activitySlotId = (id,day,slot) => `${id}_${day}_${slot}`;
 const activitySlotRef = (id,day,slot) => dbApi.doc(db,'households',householdId,'activitySlots',activitySlotId(id,day,slot));
 function dailyRequests(id,day=rewardDayIndex()){
@@ -883,10 +888,11 @@ function renderActivities(){
         ?(req?.status==='approved'?'できた！ ポケモン ゲット！':retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち':'まだ おくってないよ')
         :(req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
-      const unavailable=alreadyDone||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
+      const deadlinePassed=kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline();
+      const unavailable=alreadyDone||deadlinePassed||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
-        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
-        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
+        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':deadlinePassed?'9じを すぎたよ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
+        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':deadlinePassed?'受付は21:00まで':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
       const display=junior?(JUNIOR_ACTIVITIES[kind]||{icon:'⭐',label:name}):null;
       if(junior)return `<div class="activity-item activity-junior-item"><div class="activity-junior-icon" aria-hidden="true">${display.icon}</div><div class="activity-junior-text"><strong>${safe(display.label)}</strong><small>${safe(status)}</small>${detail}</div><button type="button" class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button></div>`;
       return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
@@ -929,6 +935,7 @@ function renderApprovals(){
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
+  if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())return toast('21時までに2階に上がるチャレンジは、本日21:00で受付終了しました。');
   if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const existing=requestFor(id,kind);
@@ -946,6 +953,7 @@ async function requestActivity(id,kind){
     const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
+      if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
       const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
       if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
@@ -973,6 +981,7 @@ async function reviewActivity(requestId,action){
   if(!req||req.status!=='pending')return;
   if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))return toast('ポケモン獲得停止中です。停止が終わってから承認してください。');
   const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
+  if(action==='approve'&&req.activityKind===UPSTAIRS_ACTIVITY_ID&&!confirm('21時までに実際に2階に上がったことを確認しましたか？'))return;
   if(!confirm(`${label}を${action==='approve'?'承認して仮ゲットを正式獲得にし':'見送りにし、仮ゲットを取り消し'}ますか？`))return;
   await runLocked(async()=>{
     const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId),rewardRef=activityRewardRef(requestId);
