@@ -1743,7 +1743,7 @@ function listen(){
    model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
    model.pokemonReleaseLoaded=true;
    model.pokemonReleaseServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   showReleaseNotice();
+   renderReleaseAdmin();showReleaseNotice();
  },e=>{
    console.warn('Pokemon release notification listener',e);
    model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;
