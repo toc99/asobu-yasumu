@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.3';
+const version = 'v3.12.4';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -37,9 +37,9 @@ function hasConfig(){return !Object.values(firebaseConfig).some(x=>!x||String(x)
 function canOperate(){return !!uid && !!model.ready && !!model.profilesServerConfirmed && !!model.settingsServerConfirmed && navigator.onLine;}
 function stampMillis(stamp){return stamp?.toMillis?.()||0;}
 function undoKind(p, now=Date.now()){
-  if(!p||!canOperate()||isParentPage)return null;
+  if(!p||!canOperate()||isParentPage||Number(p.pauseCount)>0)return null;
   if(p.activeStart>0 && stampMillis(p.startedAt)>0 && now-stampMillis(p.startedAt)>=0 && now-stampMillis(p.startedAt)<30000) return 'start';
-  if(p.activeStart===0 && p.lastSessionId && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
+  if(p.activeStart===0 && p.lastSessionId && !model.sessions.some(s=>s.sid===p.lastSessionId&&Number(s.pauseCount)>0) && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
   return null;
 }
 // 夜間待ち時間の持ち越し。計算の基準時刻はJST（夏時間なし）。
@@ -179,7 +179,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
   writer.set(auditRef(),{action,childId,actorUid:uid,actorRole:role,createdAt:dbApi.serverTimestamp(),
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
-const AUDIT_ACTIONS={pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
+const AUDIT_ACTIONS={play_pause:'ゲーム・動画の一時停止',play_resume:'ゲーム・動画の再開',pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
   history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
@@ -210,13 +210,62 @@ function manualWaitRemaining(p, now=Date.now()){
 function waitingRemaining(p,now=Date.now()){
   return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
 }
+
+/* v3.12.4: 一時停止の累積はFirestoreに保存。休憩の計測は終了した時点で開始する。 */
+function pauseStartedMillis(p){return stampMillis(p?.pauseStartedAt);}
+function isPlayPaused(p){return pauseStartedMillis(p)>0&&(Number(p?.activeStart)>0||videoStartedMillis(p)>0);}
+function totalPausedMillis(p,now=Date.now()){
+  const accumulated=Math.max(0,Number(p?.pauseTotalMs)||0);
+  const pauseStart=pauseStartedMillis(p);
+  return accumulated+(pauseStart?Math.max(0,now-pauseStart):0);
+}
+function activeElapsed(p,start,now=Date.now()){
+  return start>0?Math.max(0,now-start-totalPausedMillis(p,now)):0;
+}
+function videoElapsed(p,now=Date.now()){return activeElapsed(p,videoStartedMillis(p),now);}
+function activeSessionOverlap(session,start,end){
+  const wall=Math.max(0,(Number(session.end)||0)-(Number(session.start)||0));
+  const duration=Math.max(0,Math.min(wall,Number(session.duration)||0));
+  const overlapMs=overlap(session.start,session.end,start,end);
+  // 合計利用時間は厳密に集計する。日付をまたぐ一時停止履歴の按分は近似。
+  return wall>0?Math.min(overlapMs,Math.round(overlapMs*duration/wall)):0;
+}
+async function togglePlayPause(id){
+  if(isParentPage||!ids.includes(id)||!canOperate())return;
+  const current=model.profiles[id];
+  if(!current||!(Number(current.activeStart)>0||videoStartedMillis(current)>0))return toast('ゲーム・動画の利用中だけ一時停止できます。');
+  const resume=isPlayPaused(current);
+  if(!confirm(resume?playerLabel(id)+'：ゲーム・動画を再開しますか？':playerLabel(id)+'：ゲーム・動画を中断しましたか？\n一時停止の時間は利用時間・休憩時間に含みません。'))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('プロフィールがありません。');
+      const p=snap.data(),start=Number(p.activeStart)>0?Number(p.activeStart):videoStartedMillis(p),now=Date.now();
+      if(!start)throw Error('ゲーム・動画が終了しています。');
+      if(resume!==isPlayPaused(p))throw Error('別の端末で状態が変更されました。再確認してください。');
+      if(!resume){
+        const count=Number(p.pauseCount)||0;
+        if(count>=100)throw Error('一時停止回数の上限に達しました。');
+        tx.update(ref,{pauseStartedAt:dbApi.serverTimestamp(),pauseCount:count+1,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'play_pause',id,'利用中','一時停止');
+      }else{
+        const pausedFor=now-pauseStartedMillis(p);
+        if(pausedFor<0||pausedFor>7*DAY)throw Error('一時停止時間が正しくありません。');
+        tx.update(ref,{pauseStartedAt:null,pauseTotalMs:(Number(p.pauseTotalMs)||0)+pausedFor,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'play_resume',id,'一時停止','再開');
+      }
+    });
+    toast(resume?'計測を再開しました。':'計測を一時停止しました。ゲーム・動画も止めてください。');
+  });
+}
+
 function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':videoStartedMillis(p)>0?'watching':restEnd(p)>now?'resting':'ready';}
-function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
-function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?Math.max(0,now-videoStartedMillis(p)):s==='resting'?waitingRemaining(p,now):0;}
+function gameDuration(p,now=Date.now()){return p?.activeStart>0?activeElapsed(p,p.activeStart,now):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?videoElapsed(p,now):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
-  const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
-  const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);
-  const videoStart=videoStartedMillis(p);if(videoStart>0)total+=overlap(videoStart,now,a,b);return total;
+  const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?activeSessionOverlap(s,a,b):0),0);
+  const p=model.profiles[child];if(p?.activeStart>0)total+=Math.round(overlap(p.activeStart,now,a,b)*gameDuration(p,now)/Math.max(1,now-p.activeStart));
+  const videoStart=videoStartedMillis(p);if(videoStart>0)total+=Math.round(overlap(videoStart,now,a,b)*videoElapsed(p,now)/Math.max(1,now-videoStart));return total;
 }
 function playerLabel(id){
   const name=String(model.profiles[id]?.name||'').trim();
@@ -285,12 +334,12 @@ function reportRange(now=Date.now()) {
 function reportStats(id) {
   const {before,start,end}=reportRange();
   const sessions=model.reportSessions.filter(s=>s.childId===id && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end>s.start).sort((a,b)=>a.start-b.start || a.end-b.end);
-  const videoTotal=sessions.reduce((a,s)=>a+(s.activityType==='video'?overlap(s.start,s.end,start,end):0),0);
+  const videoTotal=sessions.reduce((a,s)=>a+(s.activityType==='video'?activeSessionOverlap(s,start,end):0),0);
   const days=Array.from({length:7},(_,i)=>addDays(start,i));
-  const daily=days.map(d=>sessions.reduce((total,s)=>total+overlap(s.start,s.end,d,addDays(d,1)),0));
+  const daily=days.map(d=>sessions.reduce((total,s)=>total+activeSessionOverlap(s,d,addDays(d,1)),0));
   const total=daily.reduce((a,b)=>a+b,0);
   const priorDays=Array.from({length:7},(_,i)=>addDays(before,i));
-  const prevTotal=priorDays.reduce((sum,d)=>sum+sessions.reduce((a,s)=>a+overlap(s.start,s.end,d,addDays(d,1)),0),0);
+  const prevTotal=priorDays.reduce((sum,d)=>sum+sessions.reduce((a,s)=>a+activeSessionOverlap(s,d,addDays(d,1)),0),0);
   const completed=sessions.filter(s=>s.end>=start && s.end<end);
   // 休憩間隔の「記録上の比較」。夜間停止・保護者修正・端末外のゲームは監査できない。
   let checked=0,passed=0;
@@ -298,7 +347,7 @@ function reportStats(id) {
     const s=sessions[i],prev=sessions[i-1];
     if(s.start<start||s.start>=end || prev.end> s.start || prev.end < before)continue;
     checked++;
-    if(s.start>=prev.end+(prev.end-prev.start))passed++;
+    if(s.start>=prev.end+(Number(prev.duration)||prev.end-prev.start))passed++;
   }
   // sessions.createdBy は当該アプリの子ども/保護者アカウントのUID。
   // 旧版データ移行時に保護者が作成した履歴は「子ども自身の終了」に数えない。
@@ -435,7 +484,7 @@ const ACTIVITY_KINDS = Object.freeze({
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
   practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
 });
-const ACTIVITY_DAILY_MAX = 3;
+const ACTIVITY_DAILY_MAX = 5;
 const UPSTAIRS_ACTIVITY_ID='upstairs21';
 function upstairsBeforeDeadline(now=Date.now()){
   return ((now+JST_OFFSET)%DAY)<21*60*MIN;
@@ -1058,7 +1107,7 @@ function renderActivities(){
     }).join('');
     const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
     const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの できた：${used} / ${ACTIVITY_DAILY_MAX}　あと ${remaining}かい</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span>`;
-    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
+    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日5枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
     return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p><div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
 }
@@ -1099,7 +1148,7 @@ async function requestActivity(id,kind){
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const existing=requestFor(id,kind);
   if(existing&&existing.status!=='rejected')return toast('今日はこの項目をすでに申請しています。');
-  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
+  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは5匹までです。');
   const junior=ageModeForChild(id)==='junior';
   const activityName=junior?(JUNIOR_ACTIVITIES[kind]?.label||ACTIVITY_KINDS[kind]):ACTIVITY_KINDS[kind];
   const prompt=junior
@@ -1113,15 +1162,15 @@ async function requestActivity(id,kind){
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
       if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
-      const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
+      const snapshots=await Promise.all([tx.get(ref),...[1,2,3,4,5].map(n=>tx.get(activitySlotRef(id,day,n)))]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
       if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
       if(oldRequest && (oldRequest.childId!==id || oldRequest.activityKind!==kind || oldRequest.dayIndex!==day))
         throw Error('申請履歴と対象の活動が一致しません。');
       // 旧v3.9の申請が残る移行日のみ、画面に表示される既存申請数も加味する。
-      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は3匹までです。');
-      const available=[1,2,3].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
-      if(!available)throw Error('きょうの活動報酬は3枠すべて使用中です。');
+      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は5匹までです。');
+      const available=[1,2,3,4,5].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
+      if(!available)throw Error('きょうの活動報酬は5枠すべて使用中です。');
       const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
       candidate=provisionalPokemonFor(id,rid,otherReserved);
       // 見送り済みドキュメントは再利用する。set(上書き)により以前のreviewedAt/reviewedByを消去し、
@@ -1342,7 +1391,7 @@ function renderAlerts(now=Date.now()){
     const t=model.presence?.lastSeenAt?.toMillis?.()||0;
     if(!t||now-t>150000)alerts.push('<div class="alert stale">iPadの接続を現在確認できません。表示中のゲーム時間は、最後に届いた開始情報からの推定値です。</div>');
   }
-  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
+  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&!isPlayPaused(p)&&gameDuration(p,now)>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
   $('alerts').innerHTML=alerts.join('');
 }
 // v3.8: 動画視聴も画面利用時間として履歴に保存し、終了時に同時間の休憩を設定。
@@ -1350,13 +1399,13 @@ function renderAlerts(now=Date.now()){
 const VIDEO_SHORTCUT_NAME = 'あそぶやすむ動画タイマー';
 function videoStartedMillis(p){const ms=stampMillis(p?.videoStartedAt);return ms>0?Math.floor(ms):0;}
 function videoLimitOf(p){const n=Number(p?.videoDurationMinutes);return Number.isInteger(n)&&n>=1&&n<=240?n:30;}
-function videoDueMillis(p){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN:0;}
+function videoDueMillis(p,now=Date.now()){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN+totalPausedMillis(p,now):0;}
 function videoShortcutUrl(minutes){
   const n=Math.max(1,Math.min(240,Math.floor(Number(minutes)||30)));
   return `shortcuts://run-shortcut?name=${encodeURIComponent(VIDEO_SHORTCUT_NAME)}&input=text&text=${encodeURIComponent(String(n))}`;
 }
 function renderVideoAction(id,p,now=Date.now()){
-  const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p),active=!!start;
+  const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p,now),active=!!start,paused=isPlayPaused(p);
   const junior=!isParentPage&&ageModeForChild(id,now)==='junior';
   if(!active){
     if(isParentPage)return '';
@@ -1366,20 +1415,22 @@ function renderVideoAction(id,p,now=Date.now()){
       '</div>';
   }
   const remaining=Math.max(0,due-now),overdue=now>=due;
-  const label=overdue?'時間になったよ！':`あと ${hms(remaining)}`;
-  const nativeAction=!isParentPage&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
+  const label=paused?`一時停止中・残り ${hms(remaining)}`:overdue?'時間になったよ！':`あと ${hms(remaining)}`;
+  const nativeAction=!isParentPage&&!paused&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
   const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>${junior?'⏹️ どうがを やめたよ':'⏹️ 動画をおわる'}</button>`:'';
-  return `<div class="video-box ${overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
+  const pauseAction=!isParentPage?`<button type="button" class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ 動画を再開':'⏸️ 動画を一時停止'}</button>`:'';
+  return `<div class="video-box ${paused?'video-paused':overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
     `<div class="video-countdown">${safe(label)}</div>`+
-    (overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
+    (paused?'<p class="video-note">動画を止めてね。iPad標準タイマーは自動停止しないため、使っている場合は手動で停止し、再開後に設定し直してください。</p>':overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
     (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
-    `<div class="video-actions">${nativeAction}${stopAction}</div></div>`;
+    `<div class="video-actions">${pauseAction}${nativeAction}${stopAction}</div></div>`;
 }
 const videoNoticeSent = new Set();
 function checkVideoNotices(now=Date.now()){
   if(isParentPage||!model.ready||!canOperate()||document.hidden)return;
   for(const id of ids){
-    const p=model.profiles[id],due=videoDueMillis(p);
+    const p=model.profiles[id],due=videoDueMillis(p,now);
+    if(isPlayPaused(p))continue;
     if(!due||now<due)continue;
     const key=`${id}|${due}`;
     if(videoNoticeSent.has(key))continue;
@@ -1417,15 +1468,18 @@ async function stopVideo(id){return runLocked(async()=>{
     const snap=await tx.get(ref);if(!snap.exists())throw Error('子どものデータが見つかりません。');
     const p=snap.data(),start=videoStartedMillis(p),end=Date.now();
     if(!start)throw Error('動画タイマーは開始されていません。');
-    const dur=end-start;
+    const pauseMs=totalPausedMillis(p,end),pauseCount=Number(p.pauseCount)||0;
+    const dur=activeElapsed(p,start,end);
     if(dur<1000)throw Error('開始から1秒以上経過してから終了してください。');
     if(dur>7*DAY)throw Error('動画視聴が7日を超えています。保護者が記録を確認してください。');
     // 既存の休憩が残る特殊なケースでも、待ち時間を短くしない。
     const until=Math.max(Number(p.restUntil)||0,end+dur);
     tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,endedAt:null,
-      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
+      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
     tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
-      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false});
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
+      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}: {})});
     appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
       `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
     return dur;
@@ -1437,26 +1491,28 @@ function renderPlayers(now=Date.now()){
   if(!model.ready)return;
   const keepOpen=new Set([...$('players').querySelectorAll('details[data-player-tools][open]')].map(el=>el.dataset.playerTools));
   $('players').innerHTML=displayIds().map((id,i)=>{
-    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
+    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p),paused=isPlayPaused(p);
     const junior=!isParentPage&&ageModeFor(p,now)==='junior';
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
     const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
-    const title=st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
-    const juniorTitle=st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
-    const mainTitle=st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
-    const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
+    const title=paused?'一時停止中':st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
+    const juniorTitle=paused?'⏸️ とめてるよ':st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
+    const mainTitle=paused?'一時停止までに あそんだじかん':st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
+    const sub=paused?'計測は一時停止中。ゲームや動画の再開時に「再開」を押してください':st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
-      st==='watching'?`いま終わると ${brief(Math.max(0,now-videoStartedMillis(p)))} の休憩が必要`:
+      st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const juniorMainTitle=st==='playing'?'あそんでいる じかん':st==='watching'?'どうがを みている じかん':st==='resting'?'あと これだけ おやすみ':'いまは あそべるよ！';
-    const juniorSub=st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
-    const juniorDetail=st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
-      st==='watching'?`いま やめたら ${brief(Math.max(0,now-videoStartedMillis(p)))} おやすみ`:
+    const juniorSub=paused?'ゲーム・どうがも とめよう。おわったら さいかいしてね':st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
+    const juniorDetail=paused?`いちじていしちゅう・これまでの利用 ${brief(st==='playing'?elapsed:videoElapsed(p,now))}`:st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
+      st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:
       st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actionText=junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||st==='watching'||busy||!canOperate()?'disabled':''}>${actionText}</button>`;
+    const pauseAction=!isParentPage&&st==='playing'?`<button class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ ゲームを再開':'⏸️ ゲームを一時停止'}</button>`:'';
+    const pausedNote=paused?`<div class="play-paused-note" role="status">一時停止中：この時間はゲーム・動画の利用時間に含まれません。必ず実機も止めてください。</div>`:'';
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
@@ -1474,14 +1530,14 @@ function renderPlayers(now=Date.now()){
     const carryBadge=carry?`<div class="night-carryover-badge night-carryover-${carry.phase}" role="status">${safe(carry.message)}</div>`:'';
     const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
-    const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
+    const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?activeSessionOverlap(s,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?Math.round(overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1))*gameDuration(p,now)/Math.max(1,now-p.activeStart)):0);
     const videoToday=Math.max(0,today-gameToday);
     const age = ageOf(p, now);
     const subtitle = age === null ? '年齢未設定' : `${age}さい`;
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${pauseAction}${videoAction}</div>${pausedNote}${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${retroAction}${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -1491,9 +1547,9 @@ function renderPlayers(now=Date.now()){
 function weekData(now=Date.now()){
   const today=dayStart(now),days=Array.from({length:7},(_,i)=>addDays(today,i-6));
   const totals=days.map(d=>displayIds().map(id=>{
-    const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?overlap(s.start,s.end,d,end):0),0);
-    const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);
-    const vs=videoStartedMillis(p);if(vs>0)sum+=overlap(vs,now,d,end);return sum;
+    const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?activeSessionOverlap(s,d,end):0),0);
+    const p=model.profiles[id];if(p?.activeStart>0)sum+=Math.round(overlap(p.activeStart,now,d,end)*gameDuration(p,now)/Math.max(1,now-p.activeStart));
+    const vs=videoStartedMillis(p);if(vs>0)sum+=Math.round(overlap(vs,now,d,end)*videoElapsed(p,now)/Math.max(1,now-vs));return sum;
   }));return {days,totals};
 }
 function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
@@ -1503,17 +1559,17 @@ function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();
     return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${themeFor(model.profiles[ordered[j]])}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
   }).join('');
 }
-function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});
-  const vs=videoStartedMillis(p);if(vs>0)arr.push({sid:'video-active-'+id,childId:id,start:vs,end:now,duration:now-vs,activityType:'video',ongoing:true});}
+function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:gameDuration(p,now),pauseMs:totalPausedMillis(p,now),deviceId:p.deviceId,ongoing:true});
+  const vs=videoStartedMillis(p);if(vs>0)arr.push({sid:'video-active-'+id,childId:id,start:vs,end:now,duration:videoElapsed(p,now),pauseMs:totalPausedMillis(p,now),activityType:'video',ongoing:true});}
   if(model.historyExtra && model.historyExtra.day===selectedDay){for(const s of model.historyExtra.items){if(!arr.some(x=>x.sid===s.sid))arr.push(s);}}
-  return arr.filter(s=>overlap(s.start,s.end,start,end)>0).sort((a,b)=>b.start-a.start);
+  return arr.filter(s=>activeSessionOverlap(s,start,end)>0).sort((a,b)=>b.start-a.start);
 }
 function renderHistory(){const target=$('history-list');if(!target)return;const sessions=daySessions(),start=selectedDay,end=addDays(start,1);
  $('history-date').value=dateKey(start);
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
  const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
- target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','more'];
@@ -1600,8 +1656,9 @@ function renderParentDashboard(now=Date.now()){
   container.innerHTML=ids.map(id=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now);
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
+    if(isPlayPaused(p))names[st]='一時停止中';
     const state=names[st]||'確認中';
-    const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
+    const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`視聴時間 ${brief(videoElapsed(p,now))}`:'ゲーム・動画を開始できます';
     const carry=nightCarryoverInfo(p,now);
     return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small>${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
   }).join('');
@@ -1610,7 +1667,7 @@ function playerLayoutSignature(now=Date.now()){
   if(!model.ready)return '';
   return JSON.stringify({online:canOperate(),busy,day:rewardDayIndex(now),kids:ids.map(id=>{
     const p=model.profiles[id]||{};
-    return [id,status(p,now),ageModeFor(p,now),p.activeStart,videoStartedMillis(p),videoDueMillis(p)<=now,
+    return [id,status(p,now),ageModeFor(p,now),p.activeStart,videoStartedMillis(p),pauseStartedMillis(p),p.pauseTotalMs,p.pauseCount,videoDueMillis(p,now)<=now,
       p.restUntil,p.restStart,p.lastDuration,p.manualRestUntil,p.manualRestMinutes,
       p.lastSessionId,p.rewardLastDayIndex,p.rewardBlockedSessionId,p.rewardLastSessionId,
       p.rewardSuspendedUntil,stampMillis(p.updatedAt),
@@ -1621,13 +1678,14 @@ function updatePlayerTimes(now=Date.now()){
   for(const id of ids){
     const p=model.profiles[id],card=document.querySelector(`[data-player-id="${id}"]`);
     if(!p||!card)continue;
-    const st=status(p,now),junior=!isParentPage&&ageModeFor(p,now)==='junior';
+    const st=status(p,now),junior=!isParentPage&&ageModeFor(p,now)==='junior',paused=isPlayPaused(p);
     const digits=card.querySelector('.big-time .digits');
     if(digits)digits.textContent=hms(summaryFor(p,now));
     const line=card.querySelector('.forecast-line');
     if(line){
-      if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(now-videoStartedMillis(p))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
-      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(now-videoStartedMillis(p))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
+      if(paused){line.textContent='⏸️ 一時停止中：計測は止まっています。実機も中断してください。';}
+      else if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
+      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
     }
     const prog=card.querySelector('.progress i');
     if(prog){
@@ -1641,7 +1699,7 @@ function updatePlayerTimes(now=Date.now()){
       prog.style.width=progress.toFixed(1)+'%';
     }
     const video=card.querySelector('.video-countdown');
-    if(video){const remaining=Math.max(0,videoDueMillis(p)-now);video.textContent=remaining>0?`あと ${hms(remaining)}`:'時間になったよ！';}
+    if(video){const remaining=Math.max(0,videoDueMillis(p,now)-now);video.textContent=isPlayPaused(p)?`一時停止中・残り ${hms(remaining)}`:remaining>0?`あと ${hms(remaining)}`:'時間になったよ！';}
     const undo=card.querySelector('button.undo-action');
     const kind=undoKind(p,now);
     if(undo&&kind){const sec=Math.max(1,Math.ceil((30000-(now-stampMillis(kind==='start'?p.startedAt:p.endedAt)))/1000));undo.textContent=`↩️ まちがえた！ あと${sec}秒`;}
@@ -1848,10 +1906,15 @@ async function endPlay(id){return runLocked(async()=>{
   const sidRef=dbApi.doc(sessionsRef());const now=Date.now();
   const duration=await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データがありません');const p=snap.data();
-    if(!p.activeStart)throw Error('すでに終了しています');if(now-p.activeStart<1000)throw Error('開始から1秒以上経過してから終了してください。');const dur=now-p.activeStart;
+    if(!p.activeStart)throw Error('すでに終了しています');
+    const pauseMs=totalPausedMillis(p,now),pauseCount=Number(p.pauseCount)||0;
+    const dur=activeElapsed(p,p.activeStart,now);
+    if(dur<1000)throw Error('実際のプレイ時間が1秒以上になるまで終了できません。');
     if(dur>7*DAY)throw Error('7日以上計測されています。保護者が開始時刻を確認してください。');
-    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
+      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
     tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
+      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}:{ }),
       undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}});
     appendAudit(tx,'end',id,'ゲーム中',`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
     return dur;
@@ -1864,7 +1927,7 @@ function chooseStart(id){
   if(videoStartedMillis(p)>0)return toast('動画を見ている間はゲームを開始できません。');
   startPlay(id,'sw1'); // 旧データ・Firestoreルールとの互換性のため固定値を保持（画面には表示しない）。
 }
-function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
+function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=gameDuration(p,now);
  $('end-confirm-text').innerHTML=`<div>${safe(playerLabel(id))}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('finish-actually-stopped').checked=false;$('confirm-end').disabled=true;$('end-dialog').showModal();}
 
 // 30秒以内の誤操作取り消し。終了取り消しは履歴削除とプロフィール復元を同一transactionで実行する。
@@ -1877,6 +1940,7 @@ async function undoRecent(id){
       if(!pSnap.exists())throw Error('子どものデータがありません。');
       const p=pSnap.data(),now=Date.now();
       if(p.activeStart>0){
+        if(Number(p.pauseCount)>0)throw Error('一時停止を含むプレイの開始取り消しはできません。終了操作を行ってください。');
         const at=stampMillis(p.startedAt);
         if(!at||now-at<0||now-at>=30000)throw Error('開始から30秒を過ぎたため、取り消せません。');
         tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:null,updatedAt:dbApi.serverTimestamp()});
@@ -1884,10 +1948,12 @@ async function undoRecent(id){
         return 'start';
       }
       const at=stampMillis(p.endedAt);
+      if(model.sessions.some(s=>s.sid===p.lastSessionId&&Number(s.pauseCount)>0))throw Error('一時停止を含む終了記録は取り消せません。保護者に相談してください。');
       if(!at||now-at<0||now-at>=30000||!p.lastSessionId)throw Error('終了から30秒を過ぎたため、取り消せません。');
       const sessionRef=dbApi.doc(sessionsRef(),p.lastSessionId),sSnap=await tx.get(sessionRef);
       if(!sSnap.exists())throw Error('取り消す履歴が見つかりません。');
       const s=sSnap.data(),u=s.undoPrevious;
+      if(Number(s.pauseCount)>0)throw Error('一時停止を含む終了記録は取り消せません。');
       if(!u||s.childId!==id||s.createdBy!==uid||stampMillis(s.createdAt)!==at||s.edited)throw Error('この履歴は取り消し対象ではありません。');
       tx.update(ref,{
         activeStart:s.start,deviceId:s.deviceId,startedAt:u.startedAt||null,endedAt:null,
@@ -2147,6 +2213,7 @@ function initUiEvents(){
    if(btn.dataset.effortDay){effortCalendarDay=Number(btn.dataset.effortDay);renderEffortCalendar();}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
+    if(btn.dataset.playPause)togglePlayPause(btn.dataset.playPause);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
    if(btn.dataset.manual)openManualWait(btn.dataset.manual);
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
