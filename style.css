@@ -416,3 +416,12 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .pokemon-release-notice .btn{width:100%}
 .pokemon-release-notice .btn{width:100%}
 @media(max-width:560px){.pokemon-release-person{align-items:stretch;flex-direction:column}.pokemon-release-person .btn{width:100%}}
+
+/* v3.12.4: games/videos pause controls and status messages */
+.btn.pause-action{background:#fff4d8;color:#6b480b;border:1px solid #f2c577;min-height:44px;font-weight:800}
+.btn.pause-action:hover{background:#ffe8b1}
+.play-paused-note{margin:8px 0;padding:12px 14px;border-radius:12px;border:2px solid #f3c777;background:#fff8e7;color:#714d19;font-weight:800;line-height:1.6}
+.video-paused{border:2px solid #f3c777;background:#fff8e7}
+.video-paused .video-countdown{color:#795516}
+.player .player-primary-actions .pause-action{width:100%;max-width:360px}
+@media(max-width:560px){.btn.pause-action{width:100%}}
