@@ -1049,24 +1049,27 @@ function renderPokedex(){
   if(!ids.includes(select.value))select.value=displayIds()[0];
   for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
-  const id=select.value,allClaims=rewardClaims(id),claims=allClaims.filter(c=>c.revoked!==true),map=pokemonMapFor(id);
+  const id=select.value,map=pokemonMapFor(id),inventory=model.pokemonInventories[id];
+  const registered=new Set(inventory?.seen?Object.keys(inventory.seen).map(Number):[...map.keys()]);
   if(!isParentPage)$('pokemon-collection')?.classList.toggle('age-junior',ageModeForChild(id)==='junior');
-  const unique=map.size;
-  const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
-  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹`;
-  $('pokedex-progress').style.width=`${(unique/POKEDEX_TOTAL*100).toFixed(2)}%`;
+  const unique=map.size,registeredCount=registered.size;
+  const genIndex=generationFor(registeredCount),max=GENERATIONS[genIndex].end;
+  $('pokedex-summary').textContent=`所持：${unique}匹　・　図鑑登録：${registeredCount} / ${POKEDEX_TOTAL}種類`;
+  $('pokedex-progress').style.width=`${(registeredCount/POKEDEX_TOTAL*100).toFixed(2)}%`;
   const next=GENERATIONS[genIndex+1];
   $('pokedex-milestone').textContent=next
-    ? `${GENERATIONS[genIndex].name}まで解放中（No.001〜${max}）。次の${next.name}まであと${Math.max(0,next.needed-unique)}種類`
+    ? `${GENERATIONS[genIndex].name}まで解放中（No.001〜${max}）。次の${next.name}まであと${Math.max(0,next.needed-registeredCount)}種類`
     : '第9世代まで解放中！ 全1,025匹を目指そう';
   const currentFilter=filter.value;
   const entries=[];
   // 初期描画負荷を抑えるため、全件表示でも現在解放中の番号まで。
   for(let no=1;no<=max;no++){
-    const count=map.get(no)||0;
+    const count=map.get(no)||0,seen=registered.has(no);
     if(currentFilter==='owned'&&!count)continue;
+    if(currentFilter==='seen'&&!seen)continue;
     const name=pokemonName(no),label=`No.${String(no).padStart(4,'0')}`;
-    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong><small>公式ずかんを見る</small></a>`);
+    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：所持中"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong><small>所持中・公式ずかん</small></a>`);
+    else if(seen)entries.push(`<a class="pokedex-entry registered" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：登録済み"><span class="pokedex-number">${label}</span><span class="pokedex-mark">✓</span><strong>${safe(name)}</strong><small>登録済み・現在未所持</small></a>`);
     else entries.push(`<div class="pokedex-entry locked" aria-label="${label} 未発見"><span class="pokedex-number">${label}</span><span class="pokedex-mark">？</span><strong>？？？</strong><small>まだ見つけていない</small></div>`);
   }
   target.innerHTML=entries.join('')||'<p class="empty">まだポケモンをゲットしていません。ゲームの休憩や今日のチャレンジでゲットしよう！</p>';
@@ -1114,7 +1117,7 @@ async function claimPokemon(id){
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
       const no=chooseUniquePokemon(inventory,reward.id);
-      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true});
+      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_GAME));
       tx.update(ref,{rewardLastSessionId:sid,rewardLastDayIndex:day,updatedAt:dbApi.serverTimestamp()});
       tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:3,pokemonNo:no});
       appendAudit(tx,'pokemon_claim',id,'本日は未獲得','ポケモンをゲット',sid);
@@ -1405,7 +1408,7 @@ async function reviewActivity(requestId,action){
       const newReserved={...inventory.reserved};delete newReserved[key];
       if(action==='approve'){
         if(inventory.owned[key])throw Error('そのポケモンは既に所持しています。');
-        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true});
+        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_ACTIVITY));
       }else nextInventory(tx,invRef,inventory,inventory.owned,newReserved);
       tx.update(requestRef,{status:action==='approve'?'approved':'rejected',reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
       if(action==='approve'){
