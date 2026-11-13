@@ -1,5 +1,6 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
+import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -7,7 +8,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.5';
+const version = 'v3.13.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -516,8 +517,28 @@ function chooseUniquePokemon(state,key){
   if(!choices.length)throw Error('現在の世代で新しいポケモンが見つかりません。');
   return choices[hashReward(key)%choices.length];
 }
-function nextInventory(tx,ref,state,owned,reserved,seen=state.seen){
-  tx.update(ref,{owned,reserved,seen,version:state.version+1,updatedAt:dbApi.serverTimestamp()});
+function nextInventory(tx,ref,state,owned,reserved,seen=state.seen,extra={}){
+  tx.update(ref,{owned,reserved,seen,version:state.version+1,updatedAt:dbApi.serverTimestamp(),...extra});
+}
+const BUDDY_XP_PER_ACTIVITY=10, BUDDY_XP_PER_GAME=5, BUDDY_LEVEL_STEP=20;
+function ownedSpeciesByReward(state,rewardId){
+  if(!state||!rewardId)return 0;
+  const item=Object.entries(state.owned||{}).find(([,rid])=>rid===rewardId);
+  return item?Number(item[0]):0;
+}
+function buddyProgress(state){
+  const rewardId=String(state?.buddyId||'');
+  const no=ownedSpeciesByReward(state,rewardId);
+  const xp=Math.max(0,Number(state?.experience?.[rewardId])||0);
+  return {rewardId,no,xp,level:Math.min(99,1+Math.floor(xp/BUDDY_LEVEL_STEP))};
+}
+function evolutionXpRequired(target){
+  return evolutionStage(target)>=3?180:80;
+}
+function buddyXpUpdate(state,delta){
+  const buddy=buddyProgress(state);
+  if(!buddy.no || !Number.isInteger(delta) || delta<=0)return {};
+  return {experience:{...(state.experience||{}),[buddy.rewardId]:Math.min(1980,buddy.xp+delta)}};
 }
 function makeInventorySeed(id){
   const owned={},reserved={},seen={},assigned=assignedPokemon(id);
@@ -636,7 +657,19 @@ function assignedPokemon(id,additional=[]){
   return result;
 }
 function pokemonMapFor(id){
-  // 取り消し済みの報酬も割当て順には残す。後から取得したポケモンの番号がずれないようにする。
+  const state=model.pokemonInventories[id];
+  if(state?.owned){
+    const byReward=new Map(rewardClaims(id).map(c=>[claimIdOf(c),c]));
+    const counts=new Map();
+    for(const [key,rid] of Object.entries(state.owned)){
+      const reward=byReward.get(rid);
+      if(reward?.revoked===true)continue;
+      const no=Number(key);
+      if(Number.isInteger(no)&&no>0&&no<=POKEDEX_TOTAL)counts.set(no,1);
+    }
+    return counts;
+  }
+  // 旧版の所持情報は移行前にのみ使用する。
   const counts=new Map(),assigned=assignedPokemon(id);
   for(const claim of rewardClaims(id)){
     if(claim.revoked===true)continue;
@@ -645,6 +678,93 @@ function pokemonMapFor(id){
   }
   return counts;
 }
+
+function buddyCandidates(id){
+  const state=model.pokemonInventories[id];
+  if(!state?.owned)return [];
+  const rewards=new Map(rewardClaims(id).map(r=>[claimIdOf(r),r]));
+  return Object.entries(state.owned).map(([no,rid])=>({no:Number(no),rid}))
+    .filter(x=>rewards.has(x.rid)&&rewards.get(x.rid).revoked!==true).sort((a,b)=>a.no-b.no);
+}
+function renderBuddy(){
+  const root=$('buddy-panel');if(!root)return;
+  const id=isParentPage?parentFocusChild:focusChild;
+  if(!model.ready||!inventoryReady(id)||!model.rewardsLoaded){
+    root.innerHTML='<p class="empty">相棒の記録を読み込み中です。保護者画面で重複防止管理を確認してください。</p>';return;
+  }
+  const data=model.pokemonInventories[id],list=buddyCandidates(id),b=buddyProgress(data);
+  if(!list.length){root.innerHTML='<p class="empty">ポケモンをゲットすると相棒を選べるよ！</p>';return;}
+  const select=isParentPage?'':
+    '<label class="buddy-choose">育てる相棒をえらぼう<select id="buddy-select"><option value="">相棒なし</option>'+
+    list.map(x=>'<option value="'+safe(x.rid)+'" '+(x.rid===b.rewardId?'selected':'')+'>'+safe(pokemonName(x.no))+' (No.'+x.no+')</option>').join('')+
+    '</select></label>';
+  if(!b.no){root.innerHTML='<p>好きなポケモンを1匹選ぶと、チャレンジを通じて成長するよ。</p>'+select+
+    (isParentPage?'<p class="tiny">相棒は子ども画面で選択できます。</p>':'');return;}
+  const unlocked=GENERATIONS[generationFor(Object.keys(data.seen||{}).length)].end;
+  const targets=EVOLUTION_TARGETS[b.no]||[];
+  const lines=targets.map(to=>{
+    const xp=evolutionXpRequired(to),already=!!data.owned[String(to)]||!!data.reserved[String(to)];
+    const locked=to>unlocked;
+    const reason=already?'所持または予約済み':locked?'世代を解放すると進化できる':b.xp<xp?'あと '+(xp-b.xp)+' XP':'進化できる！';
+    return '<div class="buddy-target"><div><strong>'+safe(pokemonName(to))+'</strong><small>Lv.'+
+      (Math.floor(xp/BUDDY_LEVEL_STEP)+1)+'（累計 '+xp+' XP）／'+safe(reason)+'</small></div>'+
+      (isParentPage?'':'<button type="button" class="btn primary" data-buddy-evolve="'+id+':'+to+'" '+(already||locked||b.xp<xp||busy||!canOperate()?'disabled':'')+'>進化する</button>')+
+      '</div>';
+  }).join('');
+  const currentStep=(b.xp%BUDDY_LEVEL_STEP)/BUDDY_LEVEL_STEP*100;
+  root.innerHTML='<div class="buddy-profile"><div class="buddy-orb">✦</div><div class="buddy-facts"><strong>'+
+    safe(pokemonName(b.no))+'</strong><small>全国図鑑 No.'+String(b.no).padStart(4,'0')+'</small>'+
+    '<div class="buddy-level">Lv.'+b.level+' <span>'+b.xp+' XP</span></div>'+
+    '<div class="buddy-bar"><i style="width:'+currentStep.toFixed(1)+'%"></i></div>'+
+    '<small>'+(b.xp>=180?'称号：育成マスター':'次のレベルまで '+(BUDDY_LEVEL_STEP-b.xp%BUDDY_LEVEL_STEP)+' XP')+'</small></div></div>'+
+    select+
+    '<p class="tiny">チャレンジ承認 +10 XP、ゲーム・休憩のごほうび +5 XP。相棒を変更しても経験値は残ります。</p>'+
+    (lines?'<div class="buddy-evolutions"><h3>進化先</h3>'+lines+'</div>':
+      '<p class="tiny">この種類は通常の進化先がありません。レベルと称号を育てよう。</p>')+
+    '<p class="tiny">進化すると今の1匹が進化後に変わります。進化前は図鑑の「登録済み」に残ります。</p>';
+}
+async function selectBuddy(id,rid){
+  if(isParentPage||!ids.includes(id)||!inventoryReady(id)||!canOperate())return;
+  if(rid&&!buddyCandidates(id).some(x=>x.rid===rid))return toast('所持していないポケモンは選べません。');
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref));
+      if(rid&&!ownedSpeciesByReward(inv,rid))throw Error('そのポケモンは所持していません。');
+      if((inv.buddyId||'')===rid)return;
+      tx.update(ref,{buddyId:rid,version:inv.version+1,updatedAt:dbApi.serverTimestamp()});
+    });
+    toast(rid?'相棒を変更したよ！':'相棒を外したよ。');
+  });
+}
+async function evolveBuddy(id,no){
+  if(isParentPage||!ids.includes(id)||!Number.isInteger(no)||!inventoryReady(id)||!canOperate())return;
+  const start=buddyProgress(model.pokemonInventories[id]);
+  if(!start.no||!(EVOLUTION_TARGETS[start.no]||[]).includes(no))return toast('進化先が正しくありません。');
+  if(!confirm(pokemonName(start.no)+'を '+pokemonName(no)+'に進化させますか？\n同じ1匹が変化し、進化前も図鑑に登録済みとして残ります。'))return;
+  await runLocked(async()=>{
+    const ev=await dbApi.runTransaction(db,async tx=>{
+      const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref)),b=buddyProgress(inv);
+      if(b.rewardId!==start.rewardId||!(EVOLUTION_TARGETS[b.no]||[]).includes(no))throw Error('相棒の状態が変わりました。');
+      if(b.xp<evolutionXpRequired(no))throw Error('経験値が足りません。');
+      const max=GENERATIONS[generationFor(Object.keys(inv.seen).length)].end;
+      if(no>max)throw Error('進化先の世代はまだ解放されていません。');
+      if(inv.owned[String(no)]||inv.reserved[String(no)])throw Error('進化先はすでに所持・予約中です。');
+      const owned={...inv.owned};delete owned[String(b.no)];owned[String(no)]=b.rewardId;
+      const history={...(inv.evolutionLog||{})},old=Array.isArray(history[b.rewardId])?history[b.rewardId]:[];
+      history[b.rewardId]=[...old,{from:b.no,to:no,at:Date.now()}];
+      nextInventory(tx,ref,inv,owned,inv.reserved,{...inv.seen,[String(b.no)]:true,[String(no)]:true},{evolutionLog:history});
+      return {from:b.no,to:no};
+    });
+    const dlg=$('buddy-evolution-dialog');
+    if(dlg){
+      $('buddy-evolution-from').textContent=pokemonName(ev.from);
+      $('buddy-evolution-to').textContent=pokemonName(ev.to);
+      $('buddy-evolution-link').href=officialPokedexUrl(ev.to);
+      if(!dlg.open)dlg.showModal();
+    }else toast(pokemonName(ev.from)+'が'+pokemonName(ev.to)+'に進化した！');
+  });
+}
+
 // v3.11.6: 5匹編成のマイチーム。プロフィールの独立フィールドのみ更新し、報酬処理は変更しない。
 const TEAM_SIZE=5;
 let favoriteTeamChild='older', editingTeamSlot=null;
@@ -801,6 +921,13 @@ function rewardActionFor(id,now=Date.now()){
 const releaseSeenFallback=new Set();
 let pokemonReleasePending=null;
 function releaseCandidatesFor(id){
+  const state=model.pokemonInventories[id];
+  if(state?.owned){
+    const rewardById=new Map(rewardClaims(id).map(r=>[claimIdOf(r),r]));
+    return Object.entries(state.owned).filter(([,rid])=>rewardById.has(rid)&&rewardById.get(rid).revoked!==true)
+      .map(([no,rewardId])=>({rewardId,no:Number(no)}))
+      .filter(v=>Number.isInteger(v.no)&&v.no>0&&v.no<=POKEDEX_TOTAL);
+  }
   const assigned=assignedPokemon(id);
   return rewardClaims(id).filter(c=>c.revoked!==true).map(c=>({
     rewardId:claimIdOf(c),no:assigned.get(claimIdOf(c))
@@ -833,7 +960,7 @@ async function releaseThreePokemon(id){
   const choices=releaseCandidatesFor(id);
   if(!inventoryReady(id))return toast('ポケモン管理情報を確認中です。');
   if(!choices.length)return toast('所持ポケモンがありません。');
-  if(!confirm(playerLabel(id)+'のポケモンを'+Math.min(3,choices.length)+'匹逃がします。\n所持が3匹未満の場合は全て対象です。\n図鑑とマイチームに反映され、元には戻せません。実行しますか？'))return;
+  if(!confirm(playerLabel(id)+'のポケモンを'+Math.min(3,choices.length)+'匹逃がします。\n所持が3匹未満の場合は全て対象です。\n図鑑と相棒にも反映され、元には戻せません。実行しますか？'))return;
   await runLocked(async()=>{
     const selected=chooseThreeRandom(choices);
     const details=selected.map(c=>({rewardId:c.rewardId,no:c.no,name:pokemonName(c.no)}));
@@ -858,7 +985,8 @@ async function releaseThreePokemon(id){
         if(newOwned[String(c.no)]!==c.rewardId)throw Error('最新の所持データと一致しません。再表示してください。');
         delete newOwned[String(c.no)];
       }
-      nextInventory(tx,invRef,inventory,newOwned,inventory.reserved);
+      nextInventory(tx,invRef,inventory,newOwned,inventory.reserved,inventory.seen,
+        selected.some(c=>c.rewardId===inventory.buddyId)?{buddyId:''}:{});
       const remaining=new Set(choices.filter(c=>!taken.has(c.rewardId)).map(c=>c.no));
       const oldTeam=teamFromProfile(profile);
       const newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
@@ -922,24 +1050,27 @@ function renderPokedex(){
   if(!ids.includes(select.value))select.value=displayIds()[0];
   for(const option of select.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
-  const id=select.value,allClaims=rewardClaims(id),claims=allClaims.filter(c=>c.revoked!==true),map=pokemonMapFor(id);
+  const id=select.value,map=pokemonMapFor(id),inventory=model.pokemonInventories[id];
+  const registered=new Set(inventory?.seen?Object.keys(inventory.seen).map(Number):[...map.keys()]);
   if(!isParentPage)$('pokemon-collection')?.classList.toggle('age-junior',ageModeForChild(id)==='junior');
-  const unique=map.size;
-  const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
-  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹`;
-  $('pokedex-progress').style.width=`${(unique/POKEDEX_TOTAL*100).toFixed(2)}%`;
+  const unique=map.size,registeredCount=registered.size;
+  const genIndex=generationFor(registeredCount),max=GENERATIONS[genIndex].end;
+  $('pokedex-summary').textContent=`所持：${unique}匹　・　図鑑登録：${registeredCount} / ${POKEDEX_TOTAL}種類`;
+  $('pokedex-progress').style.width=`${(registeredCount/POKEDEX_TOTAL*100).toFixed(2)}%`;
   const next=GENERATIONS[genIndex+1];
   $('pokedex-milestone').textContent=next
-    ? `${GENERATIONS[genIndex].name}まで解放中（No.001〜${max}）。次の${next.name}まであと${Math.max(0,next.needed-unique)}種類`
+    ? `${GENERATIONS[genIndex].name}まで解放中（No.001〜${max}）。次の${next.name}まであと${Math.max(0,next.needed-registeredCount)}種類`
     : '第9世代まで解放中！ 全1,025匹を目指そう';
   const currentFilter=filter.value;
   const entries=[];
   // 初期描画負荷を抑えるため、全件表示でも現在解放中の番号まで。
   for(let no=1;no<=max;no++){
-    const count=map.get(no)||0;
+    const count=map.get(no)||0,seen=registered.has(no);
     if(currentFilter==='owned'&&!count)continue;
+    if(currentFilter==='seen'&&!seen)continue;
     const name=pokemonName(no),label=`No.${String(no).padStart(4,'0')}`;
-    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong><small>公式ずかんを見る</small></a>`);
+    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：所持中"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong><small>所持中・公式ずかん</small></a>`);
+    else if(seen)entries.push(`<a class="pokedex-entry registered" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：登録済み"><span class="pokedex-number">${label}</span><span class="pokedex-mark">✓</span><strong>${safe(name)}</strong><small>登録済み・現在未所持</small></a>`);
     else entries.push(`<div class="pokedex-entry locked" aria-label="${label} 未発見"><span class="pokedex-number">${label}</span><span class="pokedex-mark">？</span><strong>？？？</strong><small>まだ見つけていない</small></div>`);
   }
   target.innerHTML=entries.join('')||'<p class="empty">まだポケモンをゲットしていません。ゲームの休憩や今日のチャレンジでゲットしよう！</p>';
@@ -987,7 +1118,7 @@ async function claimPokemon(id){
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
       const no=chooseUniquePokemon(inventory,reward.id);
-      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true});
+      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_GAME));
       tx.update(ref,{rewardLastSessionId:sid,rewardLastDayIndex:day,updatedAt:dbApi.serverTimestamp()});
       tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:3,pokemonNo:no});
       appendAudit(tx,'pokemon_claim',id,'本日は未獲得','ポケモンをゲット',sid);
@@ -1278,7 +1409,7 @@ async function reviewActivity(requestId,action){
       const newReserved={...inventory.reserved};delete newReserved[key];
       if(action==='approve'){
         if(inventory.owned[key])throw Error('そのポケモンは既に所持しています。');
-        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true});
+        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_ACTIVITY));
       }else nextInventory(tx,invRef,inventory,inventory.owned,newReserved);
       tx.update(requestRef,{status:action==='approve'?'approved':'rejected',reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
       if(action==='approve'){
@@ -1654,7 +1785,7 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','more'];
 const PARENT_VIEWS=['home','actions','reports','more'];
-const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて マイチームを つくろう',more:'きろくと おしらせを かくにんしよう'};
+const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',more:'きろくと おしらせを かくにんしよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
   if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
@@ -1709,7 +1840,7 @@ function setFocusChild(id,syncApprovals=true){
   });
   // Parent approvals default to all; switching the global child selector sets a focused filter.
   if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
-  renderActivities();renderBonuses();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
+  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
 }
 function renderKidSpotlight(){
   const box=$('kid-spotlight-message');if(!box||!model.ready)return;
@@ -1805,7 +1936,7 @@ function render(now=Date.now()){
   }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
   checkRestNotices(now);checkVideoNotices(now);showReleaseNotice();
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderBuddy();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1869,7 +2000,7 @@ function listen(){
    cleanups.push(dbApi.onSnapshot(pokemonInventoryRef(id),{includeMetadataChanges:true},snap=>{
      model.pokemonInventories[id]=snap.exists()?snap.data():null;
      model.inventoryLoaded[id]=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-     initializePokemonInventories();renderActivities();renderBonuses();renderReleaseAdmin();renderPokedex();
+     initializePokemonInventories();renderActivities();renderBonuses();renderBuddy();renderReleaseAdmin();renderPokedex();
    },e=>{model.inventoryError=errorText(e);console.warn('Pokemon inventory listener',e);}));
  }
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
@@ -1882,7 +2013,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
+   renderPokedex();renderBuddy();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
    model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
@@ -1902,7 +2033,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();initializePokemonInventories();
+   renderActivities();renderApprovals();renderPokedex();renderBuddy();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -2249,7 +2380,7 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
  }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
- if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));const data={version:4,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));const inventorySnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonInventory'));const pokemonInventory=inventorySnap.docs.map(d=>({...d.data(),childId:d.id}));const releaseSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonReleases'));const pokemonReleases=releaseSnap.docs.map(d=>({...d.data(),releaseEventId:d.id}));const data={version:5,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants,pokemonInventory,pokemonReleases};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){toast(errorText(e));}}
@@ -2307,6 +2438,7 @@ function initUiEvents(){
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
    if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
+    if(btn.dataset.buddyEvolve){const [child,no]=btn.dataset.buddyEvolve.split(':');evolveBuddy(child,Number(no));}
    if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
@@ -2325,6 +2457,7 @@ function initUiEvents(){
  $('parent-focus-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('pokedex-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
+  document.addEventListener('change',e=>{if(e.target?.id==='buddy-select')selectBuddy(focusChild,e.target.value);});
  $('finish-actually-stopped')?.addEventListener('change',e=>{$('confirm-end').disabled=!e.target.checked;});
  $('confirm-end')?.addEventListener('click',()=>{if(!$('finish-actually-stopped')?.checked)return;pendingEnd&&endPlay(pendingEnd);});
   $('manual-form')?.addEventListener('submit',saveManualWait);

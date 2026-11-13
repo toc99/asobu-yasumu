@@ -5,11 +5,11 @@
 <meta charset="utf-8"/><meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#eaf4ff" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="あそぶ・やすむ" name="apple-mobile-web-app-title"/>
 <meta content="子どもたちのゲーム・動画の時間と休憩を自分で管理するアプリ" name="description"/>
-<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.12.5" rel="stylesheet"/>
-<title>あそぶ・やすむ v3.12.5｜子ども用</title>
+<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.13.0" rel="stylesheet"/>
+<title>あそぶ・やすむ v3.13.0｜子ども用</title>
 </head>
 <body data-role="kid">
-<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.12.5</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
+<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.13.0</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
 <main class="container">
 <div class="setup-banner hidden" id="setup-warning"></div>
 <section class="login-panel card" id="login-screen"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form class="login-form" id="login-form"><label>メールアドレス<input autocomplete="username" id="email" required="" type="email"/></label><label>パスワード<input autocomplete="current-password" id="password" required="" type="password"/></label><button class="btn primary" type="submit">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><button class="btn outline hidden" id="retry-login" type="button">再接続する</button><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
@@ -30,21 +30,17 @@
 
 
 
-<section class="ui-view-pane" id="kid-pane-time"><div class="players" id="players"></div><div class="ui-spotlight" id="kid-reward-spotlight"><div><span class="ui-eyebrow">🎁 ごほうびのおしらせ</span><p aria-live="polite" id="kid-spotlight-message">ポケモンのごほうびを確認中…</p></div><button class="btn outline" data-kid-view="pokemon" type="button">ポケモンを見る</button></div></section><section class="ui-view-pane hidden" id="kid-pane-challenge"><section class="card activity-section" id="activity-section"><div class="section-head"><div><h2>📚 今日のチャレンジ</h2><p>10種類のがんばりから選ぼう！ 申請するとポケモンを仮ゲット。保護者が承認したら正式ゲット！</p></div></div><div class="activity-rewards" id="activity-rewards"><p class="empty">読み込み中…</p></div><p class="tiny">各項目1日1回、活動報酬は1人1日3匹まで（承認待ちも含む）。見送りなら仮ゲットは消え、枠が戻ります。ゲーム・休憩の報酬は別枠です。</p></section><section class="card effort-calendar-card" id="activity-calendar"><div class="section-head"><div><h2>🗓️ がんばりカレンダー</h2><p>申請した日を基準に、承認された活動や確認待ちを振り返ろう。</p></div></div>
+<section class="ui-view-pane" id="kid-pane-time"><div class="players" id="players"></div><div class="ui-spotlight" id="kid-reward-spotlight"><div><span class="ui-eyebrow">🎁 ごほうびのおしらせ</span><p aria-live="polite" id="kid-spotlight-message">ポケモンのごほうびを確認中…</p></div><button class="btn outline" data-kid-view="pokemon" type="button">ポケモンを見る</button></div></section><section class="ui-view-pane hidden" id="kid-pane-challenge"><section class="card activity-section" id="activity-section"><div class="section-head"><div><h2>📚 今日のチャレンジ</h2><p>11種類のがんばりから選ぼう！ 申請するとポケモンを仮ゲット。保護者が承認したら正式ゲット！</p></div></div><div class="activity-rewards" id="activity-rewards"><p class="empty">読み込み中…</p></div><p class="tiny">各項目1日1回、活動報酬は1人1日3匹まで（承認待ちも含む）。見送りなら仮ゲットは消え、枠が戻ります。ゲーム・休憩の報酬は別枠です。</p></section><section class="card effort-calendar-card" id="activity-calendar"><div class="section-head"><div><h2>🗓️ がんばりカレンダー</h2><p>申請した日を基準に、承認された活動や確認待ちを振り返ろう。</p></div></div>
 <div class="effort-calendar-toolbar"><label>だれのカレンダー？<select id="effort-calendar-child"><option value="older">子ども1</option><option value="younger">子ども2</option></select></label><div class="effort-calendar-month-nav"><button aria-label="前月" class="btn outline" id="effort-calendar-prev" type="button">‹</button><strong id="effort-calendar-month"></strong><button aria-label="翌月" class="btn outline" id="effort-calendar-next" type="button">›</button></div></div>
-<p class="effort-calendar-summary" id="effort-calendar-summary"></p><div class="effort-calendar-grid" id="effort-calendar-grid"><p class="empty">活動記録を読み込み中…</p></div><div class="effort-calendar-detail" id="effort-calendar-detail"></div><p class="tiny">✓ は承認済み、◷ は確認待ち。見送りになった活動は達成数に含まれません。きょうだい同士の順位付けはしません。</p></section></section><section class="ui-view-pane hidden" id="kid-pane-pokemon"><section aria-label="お気に入りポケモンのチーム" class="card team-section" id="favorite-team">
-<div class="section-head team-head"><div><h2>🌟 マイチーム</h2><p>ゲットした ポケモンから すきな5ひきを えらぼう！</p></div>
-<label class="team-player-label" for="team-child">だれの チーム？<select id="team-child"><option value="older">子ども1</option><option value="younger">子ども2</option></select></label>
-</div>
-<p class="team-status" id="team-status" role="status">チームをよみこみ中…</p>
-<div class="team-stage" id="team-stage"><p class="empty">チームをよみこみ中…</p></div>
-<p class="tiny team-note">チームは子どもごとにクラウドへ保存されます。ポケモンの獲得数やごほうびの条件は変わりません。</p>
-</section><section aria-label="特別ボーナス" class="card bonus-section" id="bonus-child">
+<p class="effort-calendar-summary" id="effort-calendar-summary"></p><div class="effort-calendar-grid" id="effort-calendar-grid"><p class="empty">活動記録を読み込み中…</p></div><div class="effort-calendar-detail" id="effort-calendar-detail"></div><p class="tiny">✓ は承認済み、◷ は確認待ち。見送りになった活動は達成数に含まれません。きょうだい同士の順位付けはしません。</p></section></section><section class="ui-view-pane hidden" id="kid-pane-pokemon"><section class="card buddy-section" id="buddy-section">
+ <div class="section-head"><div><h2>🌱 相棒ポケモン</h2><p>お気に入りの1匹を選んで、がんばりで育てよう！</p></div></div>
+ <div id="buddy-panel" class="buddy-panel"><p class="empty">相棒のデータを読み込み中…</p></div>
+ </section><section aria-label="特別ボーナス" class="card bonus-section" id="bonus-child">
 <div class="section-head"><div><h2>🎁 特別ボーナス</h2><p>おうちの人から届いたプレゼントで、ポケモンを1匹ゲットできるよ！</p></div></div>
 <div class="bonus-list" id="bonus-child-list"><p class="empty">プレゼントを確認中…</p></div>
-<p class="tiny">ゲーム・休憩のごほうびや、今日のチャレンジの3枠には含まれません。ふだんは好きなときに受け取れます（ごほうびおやすみ中は受け取れません）。</p>
-</section><section class="card pokedex-section" id="pokemon-collection"><div class="section-head"><div><h2>⭐ ポケモンをあつめよう！</h2><p>ゲームと休憩、10種類の活動、特別ボーナスのごほうびで集めよう。活動は保護者が承認すると正式ゲット！</p></div></div>
-<div class="pokedex-controls"><label>だれの図鑑？<select id="pokedex-child"><option value="older">子ども1</option><option value="younger">子ども2</option></select></label><label>表示するもの<select id="pokedex-filter"><option value="owned">ゲットしたポケモン</option><option value="all">解放済みの世代をすべて</option></select></label></div>
+<p class="tiny">ゲーム・休憩のごほうびや、今日のチャレンジの5枠には含まれません。ふだんは好きなときに受け取れます（ごほうびおやすみ中は受け取れません）。</p>
+</section><section class="card pokedex-section" id="pokemon-collection"><div class="section-head"><div><h2>⭐ ポケモンをあつめよう！</h2><p>ゲームと休憩、11種類の活動、特別ボーナスのごほうびで集めよう。活動は保護者が承認すると正式ゲット！</p></div></div>
+<div class="pokedex-controls"><label>だれの図鑑？<select id="pokedex-child"><option value="older">子ども1</option><option value="younger">子ども2</option></select></label><label>表示するもの<select id="pokedex-filter"><option value="owned">いま所持している</option><option value="seen">図鑑に登録済み</option><option value="all">解放済みをすべて</option></select></label></div>
 <p class="pokedex-summary" id="pokedex-summary">図鑑を読み込み中…</p><div class="pokedex-progress"><div class="pokedex-progress-fill" id="pokedex-progress"></div></div><p class="tiny" id="pokedex-milestone"></p>
 <div class="pokedex-provisional" id="pokedex-provisional"></div>
 <div class="pokedex-grid" id="pokedex-grid"><p class="empty">図鑑を読み込み中…</p></div>
@@ -80,7 +76,15 @@
 </div><div class="end-preview" id="end-confirm-text"></div>
 <label class="finish-confirm"><input id="finish-actually-stopped" type="checkbox"/> <span>ゲームを やめたよ！</span></label><div class="dialog-buttons"><button class="btn secondary" data-close="">まだあそぶ</button><button class="btn finish" disabled="" id="confirm-end">ほんとうに おわった！</button></div></div></dialog>
 <dialog id="manual-dialog"><form class="dialog-body" id="manual-form"><div class="dialog-head"><h2 id="manual-title">待ち時間を設定</h2><button aria-label="閉じる" class="x" data-close="" type="button">×</button></div><p class="manual-current" id="manual-current"></p><p class="tiny" id="manual-policy"></p><label class="manual-label" for="manual-minutes">残り待ち時間（分）<input id="manual-minutes" inputmode="numeric" max="1440" min="1" required="" step="1" type="number" value="30"/></label><div class="manual-presets"><button data-preset="15" type="button">15分</button><button data-preset="30" type="button">30分</button><button data-preset="45" type="button">45分</button><button data-preset="60" type="button">60分</button><button data-preset="90" type="button">90分</button></div><p class="manual-preview" id="manual-preview" role="status"></p><div class="dialog-buttons"><button class="btn secondary" data-close="" type="button">もどる</button><button class="btn outline" id="manual-clear" type="button">手動待ち時間を解除</button><button class="btn primary" type="submit">待ち時間を保存</button></div></form></dialog>
-<dialog class="pokemon-result" id="pokemon-result"><div class="dialog-body pokemon-result-content"><div class="pokedex-celebrate">✦ ✨ ✦</div><h2 id="pokemon-result-title">ポケモンをゲット！</h2><div class="pokemon-result-name" id="pokemon-result-name"></div><p id="pokemon-result-number"></p><a class="btn primary pokemon-link" href="https://zukan.pokemon.co.jp/" id="pokemon-result-link" rel="noopener noreferrer" target="_blank">公式ずかんで姿を見る</a><button class="btn secondary" data-close="" type="button">図鑑にもどる</button></div></dialog>
+<dialog id="buddy-evolution-dialog" aria-labelledby="buddy-evolution-title">
+ <div class="dialog-body buddy-evolution-scene">
+  <div class="buddy-evolution-light" aria-hidden="true">✦ ✨ ✦</div>
+  <h2 id="buddy-evolution-title">進化おめでとう！</h2>
+  <div class="buddy-evolution-names"><span id="buddy-evolution-from"></span><span aria-hidden="true"> → </span><strong id="buddy-evolution-to"></strong></div>
+  <p>相棒が進化した！進化前も図鑑に登録済みとして残るよ。</p>
+  <a class="btn primary" id="buddy-evolution-link" href="https://zukan.pokemon.co.jp/" target="_blank" rel="noopener noreferrer">公式ずかんで見る</a>
+  <button type="button" class="btn secondary" data-close>相棒にもどる</button>
+ </div></dialog><dialog class="pokemon-result" id="pokemon-result"><div class="dialog-body pokemon-result-content"><div class="pokedex-celebrate">✦ ✨ ✦</div><h2 id="pokemon-result-title">ポケモンをゲット！</h2><div class="pokemon-result-name" id="pokemon-result-name"></div><p id="pokemon-result-number"></p><a class="btn primary pokemon-link" href="https://zukan.pokemon.co.jp/" id="pokemon-result-link" rel="noopener noreferrer" target="_blank">公式ずかんで姿を見る</a><button class="btn secondary" data-close="" type="button">図鑑にもどる</button></div></dialog>
 <dialog id="pokemon-release-dialog" aria-labelledby="pokemon-release-title">
 <div class="dialog-body pokemon-release-notice"><div class="pokemon-release-notice-icon" aria-hidden="true">💨</div>
 <h2 id="pokemon-release-title">ポケモンからのおしらせ</h2>
@@ -90,5 +94,5 @@
 <button type="button" class="btn primary full" id="pokemon-release-ack">わかったよ</button>
 </div></dialog>
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
-<script src="app.js?v=3.12.5" type="module"></script>
+<script src="app.js?v=3.13.0" type="module"></script>
 </body></html>

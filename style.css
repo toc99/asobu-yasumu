@@ -425,3 +425,34 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .video-paused .video-countdown{color:#795516}
 .player .player-primary-actions .pause-action{width:100%;max-width:360px}
 @media(max-width:560px){.btn.pause-action{width:100%}}
+
+/* v3.13.0 buddy: accessible, responsive, no copyrighted Pokemon image assets */
+.buddy-section .section-head{margin-bottom:12px}
+.buddy-panel{display:grid;gap:13px}
+.buddy-profile{display:flex;align-items:center;gap:16px;padding:16px;background:linear-gradient(120deg,#f0fbf5,#eef4ff);border:1px solid #d6ebeb;border-radius:18px}
+.buddy-orb{display:grid;place-items:center;width:74px;height:74px;border-radius:50%;font-size:40px;background:#fff7cd;color:#b58423;flex-shrink:0}
+.buddy-facts{display:grid;gap:5px;min-width:0;flex:1}
+.buddy-facts>strong{font-size:clamp(18px,3vw,24px);overflow-wrap:anywhere}
+.buddy-facts small{font-size:12px;color:#53657a}
+.buddy-level{font-size:18px;font-weight:900}
+.buddy-level span{font-size:13px;font-weight:700;margin-left:8px}
+.buddy-bar{height:12px;border-radius:99px;background:#d1dfea;overflow:hidden}
+.buddy-bar i{height:100%;display:block;background:linear-gradient(90deg,#54bd97,#61a4e9);border-radius:99px;transition:width .4s}
+.buddy-choose{display:grid;gap:6px;font-weight:700}
+.buddy-choose select{width:100%;max-width:520px;padding:12px;border:1px solid #bdccd9;border-radius:12px;background:white}
+.buddy-evolutions{border:1px solid #e1e6f1;border-radius:14px;padding:12px}
+.buddy-evolutions h3{margin:0 0 10px;font-size:16px}
+.buddy-target{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid #ebeff6}
+.buddy-target:first-of-type{border-top:none}
+.buddy-target>div{display:grid;gap:4px}
+.buddy-target small{font-size:12px;color:#647188}
+.buddy-target button{flex-shrink:0}
+.pokedex-entry.registered{background:#f1f4f9;color:#435774;border:1px solid #dbe2ec}
+.pokedex-entry.registered .pokedex-mark{color:#6981a5}
+.buddy-evolution-scene{text-align:center;display:grid;justify-items:center;gap:16px}
+.buddy-evolution-light{font-size:42px;animation:buddy-evolve-twinkle 1.2s ease-in-out 2}
+.buddy-evolution-names{font-size:clamp(17px,4vw,25px);font-weight:800;line-height:1.5}
+.buddy-evolution-names strong{color:#296a58}
+@keyframes buddy-evolve-twinkle{0%,100%{opacity:.6;transform:scale(.9)}50%{opacity:1;transform:scale(1.2)}}
+@media(max-width:520px){.buddy-profile{gap:11px;padding:12px}.buddy-orb{width:54px;height:54px;font-size:30px}.buddy-target{align-items:stretch;flex-direction:column}.buddy-target button{width:100%}}
+@media(prefers-reduced-motion:reduce){.buddy-evolution-light{animation:none}}
