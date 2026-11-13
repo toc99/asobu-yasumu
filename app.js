@@ -21,7 +21,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false,pokemonInventories:{older:null,younger:null},inventoryLoaded:{older:false,younger:false},inventoryError:''};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false,pokemonInventories:{older:null,younger:null},inventoryLoaded:{older:false,younger:false},inventoryError:{older:'',younger:''}};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
@@ -500,7 +500,7 @@ function dailyActivityActive(id,day=rewardDayIndex()){
 /* Firestoreの1ドキュメントに所持・申請予約をまとめる。
    取得と予約は必ずinventory文書を読み書きする単一トランザクションで行う。 */
 const pokemonInventoryRef=id=>dbApi.doc(db,'households',householdId,'pokemonInventory',id);
-function inventoryReady(id){return !!model.pokemonInventories[id]&&model.inventoryLoaded[id]&&!model.inventoryError;}
+function inventoryReady(id){return !!model.pokemonInventories[id]&&model.inventoryLoaded[id]&&!model.inventoryError[id];}
 function inventoryState(snapshot){
   if(!snapshot.exists())throw Error('ポケモンの重複防止データが未初期化です。保護者画面を開いてください。');
   const d=snapshot.data();
@@ -545,18 +545,19 @@ async function initializePokemonInventories(){
   inventoryInitializing=true;
   try{
     for(const id of ids){
-      if(model.pokemonInventories[id])continue;
-      const seed=makeInventorySeed(id);
-      await dbApi.runTransaction(db,async tx=>{
-        const ref=pokemonInventoryRef(id),snap=await tx.get(ref);
-        if(!snap.exists())tx.set(ref,seed);
-      });
+      if(model.pokemonInventories[id]){model.inventoryError[id]='';continue;}
+      try{
+        const seed=makeInventorySeed(id);
+        await dbApi.runTransaction(db,async tx=>{
+          const ref=pokemonInventoryRef(id),snap=await tx.get(ref);
+          if(!snap.exists())tx.set(ref,seed);
+        });
+        model.inventoryError[id]='';
+      }catch(e){
+        model.inventoryError[id]=String(e.message||e);
+        console.warn('Pokemon inventory migration',id,e);
+      }
     }
-    model.inventoryError='';
-  }catch(e){
-    model.inventoryError=String(e.message||e);
-    console.warn('Pokemon inventory migration',e);
-    if($('pokemon-inventory-status'))$('pokemon-inventory-status').textContent=model.inventoryError;
   }finally{inventoryInitializing=false;renderActivities();renderBonuses();renderReleaseAdmin();}
 }
 function provisionalPokemonFor(id,requestId,alsoReserved=[]){
@@ -816,6 +817,9 @@ function chooseThreeRandom(items){
 function renderReleaseAdmin(){
   const root=$('pokemon-release-actions');if(!root||!isParentPage)return;
   if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
+  const statusNode=$('pokemon-inventory-status');
+  if(statusNode){const errors=ids.map(id=>model.inventoryError[id]).filter(Boolean);
+    statusNode.textContent=errors.length?errors.join(' ／ '):ids.every(inventoryReady)?'重複防止管理は有効です。':'重複防止データを確認中です。保護者画面で初回移行します。';}
   root.innerHTML=displayIds().map(id=>{
     const count=releaseCandidatesFor(id).length;
     const disabled=count===0||busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
@@ -1809,7 +1813,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError='';previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
