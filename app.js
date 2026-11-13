@@ -525,7 +525,8 @@ function makeInventorySeed(id){
     const no=assigned.get(claimIdOf(claim));
     if(!Number.isInteger(no)||no<1||no>POKEDEX_TOTAL)throw Error('既存の図鑑番号を読み取れません。');
     seen[String(no)]=true;
-    if(claim.revoked===true)continue;
+    // 不正申告で一時取消された個体は復旧され得るため、番号を確保し続ける。
+    if(claim.revoked===true&&claim.revokedReason==='released')continue;
     if(owned[String(no)])throw Error(playerLabel(id)+'に既存の重複ポケモンがあります。安全に統合するため移行作業が必要です。');
     owned[String(no)]=claimIdOf(claim);
   }
