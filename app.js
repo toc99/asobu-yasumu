@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.4';
+const version = 'v3.12.5';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -21,7 +21,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false,pokemonInventories:{older:null,younger:null},inventoryLoaded:{older:false,younger:false},inventoryError:''};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
@@ -497,17 +497,72 @@ function dailyRequests(id,day=rewardDayIndex()){
 function dailyActivityActive(id,day=rewardDayIndex()){
   return dailyRequests(id,day).filter(r=>r.status==='pending'||r.status==='approved').length;
 }
-// 仮獲得も予約済みと見なし、同じポケモンが出にくいようにする。
-// 本日の確定・仮獲得は競合する可能性があるため、承認時に重複の最終確認も行う。
-function provisionalPokemonFor(id,requestId,alsoReserved=[]){
-  const owned=new Set(pokemonMapFor(id).keys());
-  for(const r of model.activityRequests){
-    if(r.childId===id && r.status==='pending' && Number.isInteger(r.candidateNo))owned.add(r.candidateNo);
+/* Firestoreの1ドキュメントに所持・申請予約をまとめる。
+   取得と予約は必ずinventory文書を読み書きする単一トランザクションで行う。 */
+const pokemonInventoryRef=id=>dbApi.doc(db,'households',householdId,'pokemonInventory',id);
+function inventoryReady(id){return !!model.pokemonInventories[id]&&model.inventoryLoaded[id]&&!model.inventoryError;}
+function inventoryState(snapshot){
+  if(!snapshot.exists())throw Error('ポケモンの重複防止データが未初期化です。保護者画面を開いてください。');
+  const d=snapshot.data();
+  if(!d||!Number.isInteger(d.version)||!d.owned||!d.reserved||!d.seen)throw Error('ポケモン管理情報が不正です。');
+  return d;
+}
+function chooseUniquePokemon(state,key){
+  const occupied=new Set([...Object.keys(state.owned),...Object.keys(state.reserved)].map(Number));
+  const history=Object.keys(state.seen).length;
+  const max=GENERATIONS[generationFor(history)].end;
+  const choices=[];
+  for(let no=1;no<=max;no++)if(!occupied.has(no))choices.push(no);
+  if(!choices.length)throw Error('現在の世代で新しいポケモンが見つかりません。');
+  return choices[hashReward(key)%choices.length];
+}
+function nextInventory(tx,ref,state,owned,reserved,seen=state.seen){
+  tx.update(ref,{owned,reserved,seen,version:state.version+1,updatedAt:dbApi.serverTimestamp()});
+}
+function makeInventorySeed(id){
+  const owned={},reserved={},seen={},assigned=assignedPokemon(id);
+  for(const claim of rewardClaims(id)){
+    const no=assigned.get(claimIdOf(claim));
+    if(!Number.isInteger(no)||no<1||no>POKEDEX_TOTAL)throw Error('既存の図鑑番号を読み取れません。');
+    seen[String(no)]=true;
+    if(claim.revoked===true)continue;
+    if(owned[String(no)])throw Error(playerLabel(id)+'に既存の重複ポケモンがあります。安全に統合するため移行作業が必要です。');
+    owned[String(no)]=claimIdOf(claim);
   }
-  for(const no of alsoReserved)if(Number.isInteger(no)&&no>0)owned.add(no);
-  const max=GENERATIONS[generationFor(pokemonMapFor(id).size)].end;
-  const pool=[];for(let no=1;no<=max;no++)if(!owned.has(no))pool.push(no);
-  return pool.length?pool[hashReward(requestId)%pool.length]:1+hashReward(requestId)%POKEDEX_TOTAL;
+  for(const request of model.activityRequests.filter(x=>x.childId===id&&x.status==='pending')){
+    const no=Number(request.candidateNo),key=String(no);
+    if(!Number.isInteger(no)||no<1||no>POKEDEX_TOTAL||owned[key]||reserved[key])
+      throw Error(playerLabel(id)+'に番号が重複した仮ゲットがあります。保護者の承認前に移行作業が必要です。');
+    reserved[key]=request.requestId;
+  }
+  return {owned,reserved,seen,version:1,updatedAt:dbApi.serverTimestamp()};
+}
+let inventoryInitializing=false;
+async function initializePokemonInventories(){
+  if(!isParentPage||inventoryInitializing||!db||!uid
+     ||!model.rewardsServerConfirmed||!model.activityServerConfirmed
+     ||!model.inventoryLoaded.older||!model.inventoryLoaded.younger)return;
+  inventoryInitializing=true;
+  try{
+    for(const id of ids){
+      if(model.pokemonInventories[id])continue;
+      const seed=makeInventorySeed(id);
+      await dbApi.runTransaction(db,async tx=>{
+        const ref=pokemonInventoryRef(id),snap=await tx.get(ref);
+        if(!snap.exists())tx.set(ref,seed);
+      });
+    }
+    model.inventoryError='';
+  }catch(e){
+    model.inventoryError=String(e.message||e);
+    console.warn('Pokemon inventory migration',e);
+    if($('pokemon-inventory-status'))$('pokemon-inventory-status').textContent=model.inventoryError;
+  }finally{inventoryInitializing=false;renderActivities();renderBonuses();renderReleaseAdmin();}
+}
+function provisionalPokemonFor(id,requestId,alsoReserved=[]){
+  const state=model.pokemonInventories[id];
+  if(!state)return 0;
+  return chooseUniquePokemon(state,requestId);
 }
 
 // v3.11.2: parent-confirmed early finish reporting. Rules enforce the same guards.
