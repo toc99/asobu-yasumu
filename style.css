@@ -426,7 +426,7 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .player .player-primary-actions .pause-action{width:100%;max-width:360px}
 @media(max-width:560px){.btn.pause-action{width:100%}}
 
-/* v3.13.0 buddy: accessible, responsive, no copyrighted Pokemon image assets */
+/* v3.13.1 buddy: accessible, responsive, no copyrighted Pokemon image assets */
 .buddy-section .section-head{margin-bottom:12px}
 .buddy-panel{display:grid;gap:13px}
 .buddy-profile{display:flex;align-items:center;gap:16px;padding:16px;background:linear-gradient(120deg,#f0fbf5,#eef4ff);border:1px solid #d6ebeb;border-radius:18px}
@@ -456,3 +456,8 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 @keyframes buddy-evolve-twinkle{0%,100%{opacity:.6;transform:scale(.9)}50%{opacity:1;transform:scale(1.2)}}
 @media(max-width:520px){.buddy-profile{gap:11px;padding:12px}.buddy-orb{width:54px;height:54px;font-size:30px}.buddy-target{align-items:stretch;flex-direction:column}.buddy-target button{width:100%}}
 @media(prefers-reduced-motion:reduce){.buddy-evolution-light{animation:none}}
+
+/* v3.13.1: daily 11-challenge completion badge */
+.activity-complete-badge{margin:10px 0 12px;padding:12px 14px;border:1px solid #edca76;border-radius:12px;background:#fffae8;color:#704c16;font-weight:800;line-height:1.6}
+.effort-day .effort-complete{font-size:15px;display:inline-flex;align-items:center;justify-content:center}
+@media(max-width:560px){.activity-complete-badge{padding:10px 12px;font-size:13px}}

@@ -8,7 +8,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.13.0';
+const version = 'v3.13.1';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -28,7 +28,7 @@ let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, famil
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
-let lastUpstairsCutoffState='';
+let lastActivityDayIndex=-1;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -479,17 +479,19 @@ const GENERATIONS = Object.freeze([
   {name:'第8世代',end:905,needed:400},
   {name:'第9世代',end:1025,needed:500}
 ]);
-// v3.10: 10種類の活動。子ども・日付ごとに活動報酬は最大3匹（仮獲得を含む）。
+// v3.13.1: 11種類を各1日1回申請可能。くじは同日に5件まで、以降は相棒XP。
 const ACTIVITY_KINDS = Object.freeze({
   study:'勉強した', reading:'本を読んだ', exercise:'体を動かした',
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
   practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
 });
-const ACTIVITY_DAILY_MAX = 5;
+const ACTIVITY_POKEMON_MAX = 5;
+const ACTIVITY_DAILY_MAX = Object.keys(ACTIVITY_KINDS).length;
+const ACTIVITY_EXTRA_XP = 2;
+const ACTIVITY_SLOTS = Array.from({length:ACTIVITY_DAILY_MAX},(_,i)=>i+1);
 const UPSTAIRS_ACTIVITY_ID='upstairs21';
-function upstairsBeforeDeadline(now=Date.now()){
-  return ((now+JST_OFFSET)%DAY)<21*60*MIN;
-}
+function activityIsPokemon(request){return Number(request?.slotNo)>=1&&Number(request?.slotNo)<=ACTIVITY_POKEMON_MAX&&Number(request?.candidateNo)>0;}
+function activityIsXpOnly(request){return Number(request?.slotNo)>ACTIVITY_POKEMON_MAX&&Number(request?.candidateNo)===0;}
 const activitySlotId = (id,day,slot) => `${id}_${day}_${slot}`;
 const activitySlotRef = (id,day,slot) => dbApi.doc(db,'households',householdId,'activitySlots',activitySlotId(id,day,slot));
 function dailyRequests(id,day=rewardDayIndex()){
@@ -536,9 +538,10 @@ function evolutionXpRequired(target){
   return evolutionStage(target)>=3?180:80;
 }
 function buddyXpUpdate(state,delta){
-  const buddy=buddyProgress(state);
-  if(!buddy.no || !Number.isInteger(delta) || delta<=0)return {};
-  return {experience:{...(state.experience||{}),[buddy.rewardId]:Math.min(1980,buddy.xp+delta)}};
+  if(!Number.isInteger(delta)||delta<=0)return {};
+  const buddy=buddyProgress(state),banked=Math.max(0,Number(state?.bankedXp)||0);
+  if(!buddy.no)return {bankedXp:Math.min(1980,banked+delta)};
+  return {experience:{...(state.experience||{}),[buddy.rewardId]:Math.min(1980,buddy.xp+delta+banked)},bankedXp:0};
 }
 function makeInventorySeed(id){
   const owned={},reserved={},seen={},assigned=assignedPokemon(id);
@@ -552,6 +555,7 @@ function makeInventorySeed(id){
     owned[String(no)]=claimIdOf(claim);
   }
   for(const request of model.activityRequests.filter(x=>x.childId===id&&x.status==='pending')){
+    if(activityIsXpOnly(request))continue;
     const no=Number(request.candidateNo),key=String(no);
     if(!Number.isInteger(no)||no<1||no>POKEDEX_TOTAL||owned[key]||reserved[key])
       throw Error(playerLabel(id)+'に番号が重複した仮ゲットがあります。保護者の承認前に移行作業が必要です。');
@@ -699,6 +703,7 @@ function renderBuddy(){
     list.map(x=>'<option value="'+safe(x.rid)+'" '+(x.rid===b.rewardId?'selected':'')+'>'+safe(pokemonName(x.no))+' (No.'+x.no+')</option>').join('')+
     '</select></label>';
   if(!b.no){root.innerHTML='<p>好きなポケモンを1匹選ぶと、チャレンジを通じて成長するよ。</p>'+select+
+    '<p class="tiny">あとで相棒に反映できる経験値：'+(Number(data.bankedXp)||0)+' XP</p>'+
     (isParentPage?'<p class="tiny">相棒は子ども画面で選択できます。</p>':'');return;}
   const unlocked=GENERATIONS[generationFor(Object.keys(data.seen||{}).length)].end;
   const targets=EVOLUTION_TARGETS[b.no]||[];
@@ -731,7 +736,9 @@ async function selectBuddy(id,rid){
       const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref));
       if(rid&&!ownedSpeciesByReward(inv,rid))throw Error('そのポケモンは所持していません。');
       if((inv.buddyId||'')===rid)return;
-      tx.update(ref,{buddyId:rid,version:inv.version+1,updatedAt:dbApi.serverTimestamp()});
+      const banked=Math.max(0,Number(inv.bankedXp)||0),oldXp=Math.max(0,Number(inv.experience?.[rid])||0);
+      tx.update(ref,{buddyId:rid,version:inv.version+1,updatedAt:dbApi.serverTimestamp(),
+        ...(rid&&banked?{experience:{...(inv.experience||{}),[rid]:Math.min(1980,oldXp+banked)},bankedXp:0}:{})});
     });
     toast(rid?'相棒を変更したよ！':'相棒を外したよ。');
   });
@@ -1080,7 +1087,7 @@ function renderPokedex(){
 }
 function renderProvisionalPokedex(id){
   const root=$('pokedex-provisional');if(!root)return;
-  const pending=model.activityRequests.filter(r=>r.childId===id&&r.status==='pending');
+  const pending=model.activityRequests.filter(r=>r.childId===id&&r.status==='pending'&&Number(r.candidateNo)>0);
   if(!pending.length){root.innerHTML='';return;}
   root.innerHTML='<h3>⏳ 仮ゲット（保護者の確認待ち）</h3><div class="provisional-grid">'+pending.map(r=>{
     const no=Number(r.candidateNo),pokemon=Number.isInteger(no)&&no>0?`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`:'ポケモンは承認時に決まります';
@@ -1246,28 +1253,32 @@ function renderEffortCalendar(){
     const approved=items.filter(r=>r.status==='approved').length;
     const pending=items.filter(r=>r.status==='pending').length;
     records.push({day,approved,pending});
-    rows.push(`<button type="button" class="effort-day ${effortCalendarDay===day?'selected':''} ${day===today?'today':''}" data-effort-day="${day}" aria-pressed="${effortCalendarDay===day}" ${day>today?'disabled':''} aria-label="${d}日：承認済み${approved}件、確認待ち${pending}件"><span class="effort-day-number">${d}</span><span class="effort-day-symbols">${approved?`<span class="effort-approved" aria-label="承認済み">✓${approved}</span>`:''}${pending?`<span class="effort-pending" aria-label="承認待ち">◷${pending}</span>`:''}</span></button>`);
+    rows.push(`<button type="button" class="effort-day ${effortCalendarDay===day?'selected':''} ${day===today?'today':''}" data-effort-day="${day}" aria-pressed="${effortCalendarDay===day}" ${day>today?'disabled':''} aria-label="${d}日：承認済み${approved}件、確認待ち${pending}件${approved===ACTIVITY_DAILY_MAX?'、全達成バッジ獲得':''}"><span class="effort-day-number">${d}</span><span class="effort-day-symbols">${approved===ACTIVITY_DAILY_MAX?'<span class="effort-complete" aria-label="全達成バッジ">🏆</span>':approved?`<span class="effort-approved" aria-label="承認済み">✓${approved}</span>`:''}${pending?`<span class="effort-pending" aria-label="承認待ち">◷${pending}</span>`:''}</span></button>`);
   }
   grid.innerHTML='<div class="effort-weekdays">'+['日','月','火','水','木','金','土'].map(x=>`<span>${x}</span>`).join('')+'</div>'+
     `<div class="effort-days">${Array.from({length:first},()=>'<span class="effort-blank" aria-hidden="true"></span>').join('')}${rows.join('')}</div>`;
   const approvedDays=records.filter(d=>d.approved>0).length;
   const approvedTotal=records.reduce((sum,r)=>sum+r.approved,0);
   const pendingTotal=records.reduce((sum,r)=>sum+r.pending,0);
-  $('effort-calendar-summary').textContent=`承認済みの活動 ${approvedTotal}件 / がんばった日 ${approvedDays}日 / 確認待ち ${pendingTotal}件`;
+  const completedDays=records.filter(d=>d.approved===ACTIVITY_DAILY_MAX).length;
+  $('effort-calendar-summary').textContent=`承認済みの活動 ${approvedTotal}件 / がんばった日 ${approvedDays}日 / 全達成バッジ ${completedDays}個 / 確認待ち ${pendingTotal}件`;
   const selected=effortCalendarDay;
   const selectedDayNumber=new Date(selected*DAY).getUTCDate();
   const selectedRows=effortCalendarRows(effortCalendarChild,selected);
   const assigned=(model.rewardsLoaded&&selectedRows.some(r=>r.status==='approved'))?assignedPokemon(effortCalendarChild):null;
+  const allComplete=selectedRows.filter(r=>r.status==='approved').length===ACTIVITY_DAILY_MAX;
   detail.innerHTML=`<h3>${effortCalendarMonth+1}月${selectedDayNumber}日のチャレンジ</h3>`+
+    (allComplete?'<p class="activity-complete-badge">🏆 全11チャレンジ達成！ がんばりバッジ獲得</p>':'')+
     (selectedRows.length?`<div class="effort-details">${selectedRows.map(r=>{
       const label=r.status==='approved'?'承認済み':r.status==='pending'?'確認待ち':'見送り';
       const statusClass=r.status==='approved'?'approved':r.status==='pending'?'pending':'rejected';
       let pokemon='';
-      const no=r.status==='pending'?Number(r.candidateNo):r.status==='approved'?assigned?.get(`activity_${r.requestId}`):null;
+      const no=activityIsXpOnly(r)?0:r.status==='pending'?Number(r.candidateNo):r.status==='approved'?assigned?.get(`activity_${r.requestId}`):null;
       if(Number.isInteger(no)&&no>=1&&no<=POKEDEX_TOTAL){
         const name=`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`;
         pokemon=r.status==='approved'?`<a href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer">${name}を公式ずかんで見る</a>`:`<span>仮ゲット：${name}</span>`;
       }
+      if(activityIsXpOnly(r)&&r.status!=='rejected')pokemon='<span>🌱 相棒 +2 XP（くじなし）</span>';
       return `<div class="effort-detail-row"><span><strong>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
     }).join('')}</div>`:'<p class="tiny">この日の活動申請はありません。</p>');
 }
@@ -1285,29 +1296,37 @@ function renderActivities(){
   root.innerHTML=displayIds().filter(id=>isParentPage||id===focusChild).map(id=>{
     const junior=!isParentPage&&ageModeForChild(id)==='junior';
     const used=dailyActivityActive(id),remaining=Math.max(0,ACTIVITY_DAILY_MAX-used);
+    const approved=dailyRequests(id).filter(r=>r.status==='approved').length;
+    const pokemonUsed=dailyRequests(id).filter(r=>['pending','approved'].includes(r.status)&&activityIsPokemon(r)).length;
     const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
       const req=requestFor(id,kind),number=Number(req?.candidateNo);
       const label=Number.isInteger(number)&&number>0?`${pokemonName(number)}（No.${String(number).padStart(4,'0')}）`:'';
       const retry=req?.status==='rejected';
       const alreadyDone=!!req&&!retry;
       const suspended=rewardSuspended(model.profiles[id]);
+      const xpOnly=(req&&req.status!=='rejected')?activityIsXpOnly(req):pokemonUsed>=ACTIVITY_POKEMON_MAX;
       const status=junior
-        ?(req?.status==='approved'?'できた！ ポケモン ゲット！':retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち':'まだ おくってないよ')
-        :(req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます');
-      const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
-      const deadlinePassed=kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline();
-      const unavailable=alreadyDone||deadlinePassed||remaining===0||suspended||!inventoryReady(id)||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
+        ?(req?.status==='approved'?(activityIsXpOnly(req)?'できた！ あいぼうに +2 XP！':'できた！ ポケモン ゲット！')
+          :retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち'
+          :xpOnly?'できたら あいぼうが そだつよ':'まだ おくってないよ')
+        :(req?.status==='approved'?(activityIsXpOnly(req)?'承認済み・相棒 +2 XP':'承認済み・正式ゲット')
+          :retry?'見送り・もういちどできたら再申請可能':req?'保護者の確認待ち'
+          :xpOnly?'承認で相棒 +2 XP':'申請するとポケモンを仮ゲット');
+      const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`
+        :req?.status==='pending'&&activityIsXpOnly(req)?'<span class="provisional-label">🌱 承認後に相棒へ +2 XP</span>':'';
+      const unavailable=alreadyDone||remaining===0||suspended||!inventoryReady(id)||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
-        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':deadlinePassed?'9じを すぎたよ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
-        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':deadlinePassed?'受付は21:00まで':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
+        ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
+        :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':remaining===0?'全11種類申請済み':retry?'もういちど できた！申請':'できた！申請');
       const display=junior?(JUNIOR_ACTIVITIES[kind]||{icon:'⭐',label:name}):null;
       if(junior)return `<div class="activity-item activity-junior-item"><div class="activity-junior-icon" aria-hidden="true">${display.icon}</div><div class="activity-junior-text"><strong>${safe(display.label)}</strong><small>${safe(status)}</small>${detail}</div><button type="button" class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button></div>`;
       return `<div class="activity-item"><span><strong>${safe(name)}</strong><small>${status}</small>${detail}</span>${!isParentPage?`<button class="btn outline" data-activity-request="${id}:${kind}" ${unavailable?'disabled':''}>${buttonLabel}</button>`:''}</div>`;
     }).join('');
     const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
-    const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの できた：${used} / ${ACTIVITY_DAILY_MAX}　あと ${remaining}かい</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span>`;
-    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日5枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
-    return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p><div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
+    const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの チャレンジ：${used} / ${ACTIVITY_DAILY_MAX}　くじ ${pokemonUsed} / 5</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}種類　・　ポケモンくじ ${pokemonUsed} / 5</span>`;
+    const note=junior?'11この うち できた ことを おくろう！ さいしょの5こはポケモン、6こめからは あいぼうのけいけんち。':'11種類とも申請可能（各1日1回）。最初の5件はくじ＋相棒10 XP、6件目以降は相棒2 XP。見送り後は再挑戦できます。';
+    const complete=approved===ACTIVITY_DAILY_MAX?'<div class="activity-complete-badge" role="status">🏆 きょうの全11チャレンジ達成！ がんばりバッジ獲得</div>':'';
+    return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p>${complete}<div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
 }
 // v3.11 F04: 現行の承認トランザクションを変えず、一覧の視認性と子ども別フィルターを改善。
@@ -1336,97 +1355,115 @@ function renderApprovals(){
     const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
-    const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:'';
-    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>正式にゲット</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
+    const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:r.status==='pending'&&activityIsXpOnly(r)?'<small>🌱 承認すると相棒へ +2 XP（くじなし）</small>':'';
+    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>${activityIsXpOnly(r)?'経験値を承認':'正式にゲット'}</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
   }).join(''):'<p class="empty">この条件に該当する申請はありません。</p>');
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
-  if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())return toast('21時までに2階に上がるチャレンジは、本日21:00で受付終了しました。');
-  if(!model.activityServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウド接続を確認してください。');
+  if(!model.activityServerConfirmed||!model.rewardsServerConfirmed||!inventoryReady(id))
+    return toast('クラウド接続とポケモン管理情報を確認してください。');
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const existing=requestFor(id,kind);
   if(existing&&existing.status!=='rejected')return toast('今日はこの項目をすでに申請しています。');
-  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは5匹までです。');
+  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('11種類すべて申請済みです。');
   const junior=ageModeForChild(id)==='junior';
   const activityName=junior?(JUNIOR_ACTIVITIES[kind]?.label||ACTIVITY_KINDS[kind]):ACTIVITY_KINDS[kind];
+  const xpOnly=dailyActivityActive(id)>=ACTIVITY_POKEMON_MAX;
   const prompt=junior
-    ?`${playerLabel(id)}：${activityName}？\nほんとうに できたら、おうちのひとに おくろう！\n「OK」を おしてね。`
+    ?`${playerLabel(id)}：${activityName}？\nほんとうに できたら、おうちのひとに おくろう！`
     :existing?.status==='rejected'
-      ?`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」をもう一度やった？\nできたなら、もう一度申請してポケモンを仮ゲットしよう！`
-      :`${playerLabel(id)}：${ACTIVITY_KINDS[kind]}を頑張ったことを申請して、ポケモンを仮ゲットしますか？`;
+      ?`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」をもう一度達成しましたか？\n確認して再申請します。`
+      :`${playerLabel(id)}：「${ACTIVITY_KINDS[kind]}」を達成しましたか？\n${xpOnly?'承認後、相棒の経験値を獲得します。':'ポケモンを仮ゲットして保護者に申請します。'}`;
   if(!confirm(prompt))return;
   await runLocked(async()=>{
     const day=rewardDayIndex(),rid=activityRequestId(id,kind,day),ref=activityRef(id,kind,day);
-    let candidate=0;
+    let candidate=0,chosenSlot=0;
     await dbApi.runTransaction(db,async tx=>{
-      if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
       const invRef=pokemonInventoryRef(id);
-      const snapshots=await Promise.all([tx.get(ref),...[1,2,3,4,5].map(n=>tx.get(activitySlotRef(id,day,n))),tx.get(invRef)]);
-      const inventory=inventoryState(snapshots[6]);
+      const snapshots=await Promise.all([tx.get(ref),...ACTIVITY_SLOTS.map(n=>tx.get(activitySlotRef(id,day,n))),tx.get(invRef)]);
+      const inventory=inventoryState(snapshots[ACTIVITY_DAILY_MAX+1]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
-      if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
-      if(oldRequest && (oldRequest.childId!==id || oldRequest.activityKind!==kind || oldRequest.dayIndex!==day))
+      if(oldRequest&&oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
+      if(oldRequest&&(oldRequest.childId!==id||oldRequest.activityKind!==kind||oldRequest.dayIndex!==day))
         throw Error('申請履歴と対象の活動が一致しません。');
-      // 旧v3.9の申請が残る移行日のみ、画面に表示される既存申請数も加味する。
-      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は5匹までです。');
-      const available=[1,2,3,4,5].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
-      if(!available)throw Error('きょうの活動報酬は5枠すべて使用中です。');
-      const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
-      candidate=chooseUniquePokemon(inventory,rid);
-      nextInventory(tx,invRef,inventory,inventory.owned,{...inventory.reserved,[String(candidate)]:rid});
-      // 見送り済みドキュメントは再利用する。set(上書き)により以前のreviewedAt/reviewedByを消去し、
-      // 新しい申請日時・仮ゲット番号・空き枠に差し替える。Firestore Rulesはrejected→pendingのみ許可。
-      tx.set(ref,{childId:id,activityKind:kind,dayIndex:day,status:'pending',requestedBy:uid,requestedAt:dbApi.serverTimestamp(),slotNo:available,candidateNo:candidate});
-      tx.set(activitySlotRef(id,day,available),{childId:id,dayIndex:day,slotNo:available,requestId:rid,candidateNo:candidate,updatedAt:dbApi.serverTimestamp()});
-      appendAudit(tx,'activity_request',id,oldRequest?'見送り・再挑戦':'未申請','仮ゲット・承認待ち',rid);
+      const available=ACTIVITY_SLOTS.find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
+      if(!available)throw Error('本日の11種類はすべて申請済みです。');
+      chosenSlot=available;
+      candidate=available<=ACTIVITY_POKEMON_MAX?chooseUniquePokemon(inventory,rid):0;
+      if(candidate){
+        nextInventory(tx,invRef,inventory,inventory.owned,{...inventory.reserved,[String(candidate)]:rid});
+      }
+      tx.set(ref,{childId:id,activityKind:kind,dayIndex:day,status:'pending',
+        requestedBy:uid,requestedAt:dbApi.serverTimestamp(),slotNo:available,candidateNo:candidate});
+      tx.set(activitySlotRef(id,day,available),{childId:id,dayIndex:day,slotNo:available,
+        requestId:rid,candidateNo:candidate,updatedAt:dbApi.serverTimestamp()});
+      appendAudit(tx,'activity_request',id,oldRequest?'見送り・再挑戦':'未申請',
+        candidate?'仮ゲット・承認待ち':'相棒XP・承認待ち',rid);
     });
-    toast(`${pokemonName(candidate)}を仮ゲット！ 保護者の承認で正式ゲットになります。`);
-    // 反映はFirestoreのスナップショットを待つ（承認前に正式図鑑へ入れない）。
+    toast(candidate
+      ?`${pokemonName(candidate)}を仮ゲット！保護者の承認で正式ゲットになります。`
+      :`${playerLabel(id)}：チャレンジを申請！承認後、相棒に +${ACTIVITY_EXTRA_XP} XP。`);
   });
 }
 async function reviewActivity(requestId,action){
   if(!isParentPage||!['approve','reject'].includes(action))return;
   const req=model.activityRequests.find(r=>r.requestId===requestId);
   if(!req||req.status!=='pending')return;
-  if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))return toast('ポケモン獲得停止中です。停止が終わってから承認してください。');
+  if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))
+    return toast('ごほうび停止中です。停止が終わってから承認してください。');
   const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
-  if(action==='approve'&&req.activityKind===UPSTAIRS_ACTIVITY_ID&&!confirm('21時までに実際に2階に上がったことを確認しましたか？'))return;
-  if(!confirm(`${label}を${action==='approve'?'承認して仮ゲットを正式獲得にし':'見送りにし、仮ゲットを取り消し'}ますか？`))return;
+  const xpOnly=activityIsXpOnly(req);
+  const actionLabel=action==='reject'
+    ?'見送りにしますか？'
+    :xpOnly?`承認して相棒へ +${ACTIVITY_EXTRA_XP} XP を付与しますか？`
+      :'承認して仮ゲットを正式獲得にしますか？';
+  if(!confirm(`${label}を${actionLabel}`))return;
   await runLocked(async()=>{
-    const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId),rewardRef=activityRewardRef(requestId);
-    const doc=await dbApi.runTransaction(db,async tx=>{
-      const invRef=pokemonInventoryRef(req.childId);
+    const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId);
+    const rewardRef=activityRewardRef(requestId),invRef=pokemonInventoryRef(req.childId);
+    const result=await dbApi.runTransaction(db,async tx=>{
       const [snap,oldReward,invSnap]=await Promise.all([tx.get(requestRef),tx.get(rewardRef),tx.get(invRef)]);
       const inventory=inventoryState(invSnap);
-      if(!snap.exists()||snap.data().status!=='pending'||oldReward.exists())throw Error('この申請はすでに処理されています。');
-      const d=snap.data(),hasSlot=Number.isInteger(d.slotNo)&&d.slotNo>=1&&d.slotNo<=5;
+      if(!snap.exists()||snap.data().status!=='pending'||oldReward.exists())
+        throw Error('この申請はすでに処理されています。');
+      const d=snap.data(),hasSlot=Number.isInteger(d.slotNo)&&d.slotNo>=1&&d.slotNo<=ACTIVITY_DAILY_MAX;
       const slotRef=hasSlot?activitySlotRef(d.childId,d.dayIndex,d.slotNo):null;
       const slotSnap=slotRef?await tx.get(slotRef):null;
-      if(hasSlot&&(!slotSnap.exists()||slotSnap.data().requestId!==requestId))throw Error('申請枠の状態が不一致です。');
+      if(!hasSlot||!slotSnap.exists()||slotSnap.data().requestId!==requestId)
+        throw Error('申請枠の状態が一致しません。');
+      const isXp=activityIsXpOnly(d),isPokemon=activityIsPokemon(d);
+      if(!isXp&&!isPokemon)throw Error('申請の報酬種別が正しくありません。');
       const no=Number(d.candidateNo),key=String(no);
-      if(!Number.isInteger(no)||inventory.reserved[key]!==requestId)throw Error('予約していたポケモンの番号が一致しません。');
-      const newReserved={...inventory.reserved};delete newReserved[key];
-      if(action==='approve'){
-        if(inventory.owned[key])throw Error('そのポケモンは既に所持しています。');
-        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_ACTIVITY));
-      }else nextInventory(tx,invRef,inventory,inventory.owned,newReserved);
-      tx.update(requestRef,{status:action==='approve'?'approved':'rejected',reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
-      if(action==='approve'){
-        const fixed=Number.isInteger(d.candidateNo)&&d.candidateNo>=1&&d.candidateNo<=POKEDEX_TOTAL;
-        tx.set(rewardRef,{childId:d.childId,dayIndex:d.dayIndex,kind:'activity',activityKind:d.activityKind,
-          sourceRequestId:requestId,sessionId:'',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:fixed?3:2,
-          ...(fixed?{pokemonNo:d.candidateNo}:{})});
-      }else if(hasSlot){
+      if(isPokemon){
+        if(inventory.reserved[key]!==requestId)throw Error('予約ポケモンが一致しません。');
+        const reserved={...inventory.reserved};delete reserved[key];
+        if(action==='approve'){
+          if(inventory.owned[key])throw Error('すでに所持しているポケモンです。');
+          nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},reserved,
+            {...inventory.seen,[key]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_ACTIVITY));
+        }else nextInventory(tx,invRef,inventory,inventory.owned,reserved);
+      }else if(action==='approve'){
+        nextInventory(tx,invRef,inventory,inventory.owned,inventory.reserved,inventory.seen,
+          buddyXpUpdate(inventory,ACTIVITY_EXTRA_XP));
+      }
+      tx.update(requestRef,{status:action==='approve'?'approved':'rejected',
+        reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
+      if(action==='approve'&&isPokemon){
+        tx.set(rewardRef,{childId:d.childId,dayIndex:d.dayIndex,kind:'activity',
+          activityKind:d.activityKind,sourceRequestId:requestId,sessionId:'',
+          claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:3,pokemonNo:no});
+      }else if(action==='reject'){
         tx.update(slotRef,{requestId:'',candidateNo:0,updatedAt:dbApi.serverTimestamp()});
       }
-      appendAudit(tx,action==='approve'?'activity_approve':'activity_reject',d.childId,'仮ゲット・申請中',action==='approve'?'正式獲得':'見送り・仮ゲット取消',requestId);
-      return {...d,rewardId:`activity_${requestId}`,catalogVersion:Number.isInteger(d.candidateNo)?3:2,pokemonNo:d.candidateNo,kind:'activity',claimedAt:{toMillis:()=>Date.now()}};
+      appendAudit(tx,action==='approve'?'activity_approve':'activity_reject',
+        d.childId,'チャレンジ申請',action==='reject'?'見送り':
+          isXp?'相棒 +2 XP':'ポケモン正式獲得',requestId);
+      return {isXp,no,approved:action==='approve'};
     });
-    if(action==='approve'){
-      const no=assignedPokemon(doc.childId,[doc]).get(doc.rewardId);
-      toast(`${label}を承認しました。${pokemonName(no)}を正式ゲット！`);
-    }else toast(`${label}を見送りにしました。仮ゲットは取り消しました。`);
+    if(!result.approved)toast(`${label}を見送りにしました。再挑戦できます。`);
+    else if(result.isXp)toast(`${label}を承認しました。相棒へ +${ACTIVITY_EXTRA_XP} XP！`);
+    else toast(`${label}を承認しました。${pokemonName(result.no)}を正式ゲット！`);
   });
 }
 // v3.11.2 事実確認は必ず保護者。未確認のズル判定や子どもからの報酬削除はしない。
@@ -1921,9 +1958,9 @@ function render(now=Date.now()){
   // Timer labels update each second. Big cards and hidden panes are not reconstructed unnecessarily.
   if(isParentPage&&Math.floor(now/1000)%30===0)renderHonestyAdmin();
   renderNightPolicy();renderSync();if(!model.ready)return;
-  // 日付変更と21:00到来時にチャレンジの締切表示を即時更新する。
-  const activityCutoffState=`${rewardDayIndex(now)}:${upstairsBeforeDeadline(now)}`;
-  if(lastUpstairsCutoffState!==activityCutoffState){lastUpstairsCutoffState=activityCutoffState;renderActivities();}
+  // JSTの日付変更時にチャレンジの当日申請ボタンを更新する。
+  const currentActivityDay=rewardDayIndex(now);
+  if(lastActivityDayIndex!==currentActivityDay){lastActivityDayIndex=currentActivityDay;renderActivities();}
   if(Math.floor(now/1000)%5===0)renderAlerts(now);
   const signature=playerLayoutSignature(now);
   if(signature!==playerRenderSignature||now-playerRenderedAt>=30000||!$('players')?.querySelector('.player')){

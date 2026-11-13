@@ -5,11 +5,11 @@
 <meta charset="utf-8"/><meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#eaf4ff" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="あそぶ・やすむ" name="apple-mobile-web-app-title"/>
 <meta content="子どもたちのゲーム・動画の時間と休憩を自分で管理するアプリ" name="description"/>
-<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.13.0" rel="stylesheet"/>
-<title>あそぶ・やすむ v3.13.0｜子ども用</title>
+<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.13.1" rel="stylesheet"/>
+<title>あそぶ・やすむ v3.13.1｜子ども用</title>
 </head>
 <body data-role="kid">
-<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.13.0</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
+<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.13.1</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
 <main class="container">
 <div class="setup-banner hidden" id="setup-warning"></div>
 <section class="login-panel card" id="login-screen"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form class="login-form" id="login-form"><label>メールアドレス<input autocomplete="username" id="email" required="" type="email"/></label><label>パスワード<input autocomplete="current-password" id="password" required="" type="password"/></label><button class="btn primary" type="submit">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><button class="btn outline hidden" id="retry-login" type="button">再接続する</button><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
@@ -38,7 +38,7 @@
  </section><section aria-label="特別ボーナス" class="card bonus-section" id="bonus-child">
 <div class="section-head"><div><h2>🎁 特別ボーナス</h2><p>おうちの人から届いたプレゼントで、ポケモンを1匹ゲットできるよ！</p></div></div>
 <div class="bonus-list" id="bonus-child-list"><p class="empty">プレゼントを確認中…</p></div>
-<p class="tiny">ゲーム・休憩のごほうびや、今日のチャレンジの5枠には含まれません。ふだんは好きなときに受け取れます（ごほうびおやすみ中は受け取れません）。</p>
+<p class="tiny">ゲーム・休憩のごほうびや、チャレンジのくじ5件には含まれません。ふだんは好きなときに受け取れます（ごほうびおやすみ中は受け取れません）。</p>
 </section><section class="card pokedex-section" id="pokemon-collection"><div class="section-head"><div><h2>⭐ ポケモンをあつめよう！</h2><p>ゲームと休憩、11種類の活動、特別ボーナスのごほうびで集めよう。活動は保護者が承認すると正式ゲット！</p></div></div>
 <div class="pokedex-controls"><label>だれの図鑑？<select id="pokedex-child"><option value="older">子ども1</option><option value="younger">子ども2</option></select></label><label>表示するもの<select id="pokedex-filter"><option value="owned">いま所持している</option><option value="seen">図鑑に登録済み</option><option value="all">解放済みをすべて</option></select></label></div>
 <p class="pokedex-summary" id="pokedex-summary">図鑑を読み込み中…</p><div class="pokedex-progress"><div class="pokedex-progress-fill" id="pokedex-progress"></div></div><p class="tiny" id="pokedex-milestone"></p>
@@ -94,5 +94,5 @@
 <button type="button" class="btn primary full" id="pokemon-release-ack">わかったよ</button>
 </div></dialog>
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
-<script src="app.js?v=3.13.0" type="module"></script>
+<script src="app.js?v=3.13.1" type="module"></script>
 </body></html>
