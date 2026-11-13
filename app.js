@@ -1,5 +1,6 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
+import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -7,7 +8,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.5';
+const version = 'v3.13.0';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -516,8 +517,28 @@ function chooseUniquePokemon(state,key){
   if(!choices.length)throw Error('現在の世代で新しいポケモンが見つかりません。');
   return choices[hashReward(key)%choices.length];
 }
-function nextInventory(tx,ref,state,owned,reserved,seen=state.seen){
-  tx.update(ref,{owned,reserved,seen,version:state.version+1,updatedAt:dbApi.serverTimestamp()});
+function nextInventory(tx,ref,state,owned,reserved,seen=state.seen,extra={}){
+  tx.update(ref,{owned,reserved,seen,version:state.version+1,updatedAt:dbApi.serverTimestamp(),...extra});
+}
+const BUDDY_XP_PER_ACTIVITY=10, BUDDY_XP_PER_GAME=5, BUDDY_LEVEL_STEP=20;
+function ownedSpeciesByReward(state,rewardId){
+  if(!state||!rewardId)return 0;
+  const item=Object.entries(state.owned||{}).find(([,rid])=>rid===rewardId);
+  return item?Number(item[0]):0;
+}
+function buddyProgress(state){
+  const rewardId=String(state?.buddyId||'');
+  const no=ownedSpeciesByReward(state,rewardId);
+  const xp=Math.max(0,Number(state?.experience?.[rewardId])||0);
+  return {rewardId,no,xp,level:Math.min(99,1+Math.floor(xp/BUDDY_LEVEL_STEP))};
+}
+function evolutionXpRequired(target){
+  return evolutionStage(target)>=3?180:80;
+}
+function buddyXpUpdate(state,delta){
+  const buddy=buddyProgress(state);
+  if(!buddy.no || !Number.isInteger(delta) || delta<=0)return {};
+  return {experience:{...(state.experience||{}),[buddy.rewardId]:Math.min(1980,buddy.xp+delta)}};
 }
 function makeInventorySeed(id){
   const owned={},reserved={},seen={},assigned=assignedPokemon(id);
@@ -636,7 +657,19 @@ function assignedPokemon(id,additional=[]){
   return result;
 }
 function pokemonMapFor(id){
-  // 取り消し済みの報酬も割当て順には残す。後から取得したポケモンの番号がずれないようにする。
+  const state=model.pokemonInventories[id];
+  if(state?.owned){
+    const byReward=new Map(rewardClaims(id).map(c=>[claimIdOf(c),c]));
+    const counts=new Map();
+    for(const [key,rid] of Object.entries(state.owned)){
+      const reward=byReward.get(rid);
+      if(reward?.revoked===true)continue;
+      const no=Number(key);
+      if(Number.isInteger(no)&&no>0&&no<=POKEDEX_TOTAL)counts.set(no,1);
+    }
+    return counts;
+  }
+  // 旧版の所持情報は移行前にのみ使用する。
   const counts=new Map(),assigned=assignedPokemon(id);
   for(const claim of rewardClaims(id)){
     if(claim.revoked===true)continue;
@@ -801,6 +834,13 @@ function rewardActionFor(id,now=Date.now()){
 const releaseSeenFallback=new Set();
 let pokemonReleasePending=null;
 function releaseCandidatesFor(id){
+  const state=model.pokemonInventories[id];
+  if(state?.owned){
+    const rewardById=new Map(rewardClaims(id).map(r=>[claimIdOf(r),r]));
+    return Object.entries(state.owned).filter(([,rid])=>rewardById.has(rid)&&rewardById.get(rid).revoked!==true)
+      .map(([no,rewardId])=>({rewardId,no:Number(no)}))
+      .filter(v=>Number.isInteger(v.no)&&v.no>0&&v.no<=POKEDEX_TOTAL);
+  }
   const assigned=assignedPokemon(id);
   return rewardClaims(id).filter(c=>c.revoked!==true).map(c=>({
     rewardId:claimIdOf(c),no:assigned.get(claimIdOf(c))
