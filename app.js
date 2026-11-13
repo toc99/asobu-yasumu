@@ -179,7 +179,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
   writer.set(auditRef(),{action,childId,actorUid:uid,actorRole:role,createdAt:dbApi.serverTimestamp(),
     before:truncate(before),after:truncate(after),sessionId:sessionId||''});
 }
-const AUDIT_ACTIONS={pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
+const AUDIT_ACTIONS={play_pause:'ゲーム・動画の一時停止',play_resume:'ゲーム・動画の再開',pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
   history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
@@ -1391,7 +1391,7 @@ function renderAlerts(now=Date.now()){
     const t=model.presence?.lastSeenAt?.toMillis?.()||0;
     if(!t||now-t>150000)alerts.push('<div class="alert stale">iPadの接続を現在確認できません。表示中のゲーム時間は、最後に届いた開始情報からの推定値です。</div>');
   }
-  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&now-p.activeStart>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
+  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&!isPlayPaused(p)&&gameDuration(p,now)>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
   $('alerts').innerHTML=alerts.join('');
 }
 // v3.8: 動画視聴も画面利用時間として履歴に保存し、終了時に同時間の休憩を設定。
@@ -1399,13 +1399,13 @@ function renderAlerts(now=Date.now()){
 const VIDEO_SHORTCUT_NAME = 'あそぶやすむ動画タイマー';
 function videoStartedMillis(p){const ms=stampMillis(p?.videoStartedAt);return ms>0?Math.floor(ms):0;}
 function videoLimitOf(p){const n=Number(p?.videoDurationMinutes);return Number.isInteger(n)&&n>=1&&n<=240?n:30;}
-function videoDueMillis(p){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN:0;}
+function videoDueMillis(p,now=Date.now()){const start=videoStartedMillis(p);return start?start+videoLimitOf(p)*MIN+totalPausedMillis(p,now):0;}
 function videoShortcutUrl(minutes){
   const n=Math.max(1,Math.min(240,Math.floor(Number(minutes)||30)));
   return `shortcuts://run-shortcut?name=${encodeURIComponent(VIDEO_SHORTCUT_NAME)}&input=text&text=${encodeURIComponent(String(n))}`;
 }
 function renderVideoAction(id,p,now=Date.now()){
-  const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p),active=!!start;
+  const start=videoStartedMillis(p),minutes=videoLimitOf(p),due=videoDueMillis(p,now),active=!!start,paused=isPlayPaused(p);
   const junior=!isParentPage&&ageModeForChild(id,now)==='junior';
   if(!active){
     if(isParentPage)return '';
@@ -1415,20 +1415,22 @@ function renderVideoAction(id,p,now=Date.now()){
       '</div>';
   }
   const remaining=Math.max(0,due-now),overdue=now>=due;
-  const label=overdue?'時間になったよ！':`あと ${hms(remaining)}`;
-  const nativeAction=!isParentPage&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
+  const label=paused?`一時停止中・残り ${hms(remaining)}`:overdue?'時間になったよ！':`あと ${hms(remaining)}`;
+  const nativeAction=!isParentPage&&!paused&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
   const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>${junior?'⏹️ どうがを やめたよ':'⏹️ 動画をおわる'}</button>`:'';
-  return `<div class="video-box ${overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
+  const pauseAction=!isParentPage?`<button type="button" class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ 動画を再開':'⏸️ 動画を一時停止'}</button>`:'';
+  return `<div class="video-box ${paused?'video-paused':overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
     `<div class="video-countdown">${safe(label)}</div>`+
-    (overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
+    (paused?'<p class="video-note">動画を止めてね。iPad標準タイマーは自動停止しないため、使っている場合は手動で停止し、再開後に設定し直してください。</p>':overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
     (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
-    `<div class="video-actions">${nativeAction}${stopAction}</div></div>`;
+    `<div class="video-actions">${pauseAction}${nativeAction}${stopAction}</div></div>`;
 }
 const videoNoticeSent = new Set();
 function checkVideoNotices(now=Date.now()){
   if(isParentPage||!model.ready||!canOperate()||document.hidden)return;
   for(const id of ids){
-    const p=model.profiles[id],due=videoDueMillis(p);
+    const p=model.profiles[id],due=videoDueMillis(p,now);
+    if(isPlayPaused(p))continue;
     if(!due||now<due)continue;
     const key=`${id}|${due}`;
     if(videoNoticeSent.has(key))continue;
@@ -1486,26 +1488,28 @@ function renderPlayers(now=Date.now()){
   if(!model.ready)return;
   const keepOpen=new Set([...$('players').querySelectorAll('details[data-player-tools][open]')].map(el=>el.dataset.playerTools));
   $('players').innerHTML=displayIds().map((id,i)=>{
-    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p);
+    const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p),paused=isPlayPaused(p);
     const junior=!isParentPage&&ageModeFor(p,now)==='junior';
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
     const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
-    const title=st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
-    const juniorTitle=st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
-    const mainTitle=st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
+    const title=paused?'一時停止中':st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
+    const juniorTitle=paused?'⏸️ とめてるよ':st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
+    const mainTitle=paused?'一時停止までに あそんだじかん':st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
     const sub=st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
-      st==='watching'?`いま終わると ${brief(Math.max(0,now-videoStartedMillis(p)))} の休憩が必要`:
+      st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const juniorMainTitle=st==='playing'?'あそんでいる じかん':st==='watching'?'どうがを みている じかん':st==='resting'?'あと これだけ おやすみ':'いまは あそべるよ！';
-    const juniorSub=st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
-    const juniorDetail=st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
-      st==='watching'?`いま やめたら ${brief(Math.max(0,now-videoStartedMillis(p)))} おやすみ`:
+    const juniorSub=paused?'ゲーム・どうがも とめよう。おわったら さいかいしてね':st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
+    const juniorDetail=paused?`いちじていしちゅう・これまでの利用 ${brief(st==='playing'?elapsed:videoElapsed(p,now))}`:st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
+      st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:
       st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actionText=junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${st==='resting'||st==='watching'||busy||!canOperate()?'disabled':''}>${actionText}</button>`;
+    const pauseAction=!isParentPage&&st==='playing'?`<button class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ ゲームを再開':'⏸️ ゲームを一時停止'}</button>`:'';
+    const pausedNote=paused?`<div class="play-paused-note" role="status">一時停止中：この時間はゲーム・動画の利用時間に含まれません。必ず実機も止めてください。</div>`:'';
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
@@ -1530,7 +1534,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${videoAction}</div>${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${pauseAction}${videoAction}</div>${pausedNote}${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${retroAction}${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -2196,6 +2200,7 @@ function initUiEvents(){
    if(btn.dataset.effortDay){effortCalendarDay=Number(btn.dataset.effortDay);renderEffortCalendar();}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
+    if(btn.dataset.playPause)togglePlayPause(btn.dataset.playPause);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
    if(btn.dataset.manual)openManualWait(btn.dataset.manual);
    if(btn.dataset.undo)undoRecent(btn.dataset.undo);
