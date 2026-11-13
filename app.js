@@ -944,9 +944,9 @@ function renderProvisionalPokedex(id){
     return `<div class="provisional-card"><strong>${pokemon}</strong><small>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}・確認待ち</small><small>まだ正式な図鑑には入りません</small></div>`;
   }).join('')+'</div>';
 }
-function announcePokemon(id,number,isDuplicate){
+function announcePokemon(id,number){
   const dialog=$('pokemon-result');if(!dialog)return;
-  $('pokemon-result-title').textContent=`${playerLabel(id)}、${isDuplicate?'また会えたね！':'新しいポケモンをゲット！'}`;
+  $('pokemon-result-title').textContent=`${playerLabel(id)}、新しいポケモンをゲット！`;
   $('pokemon-result-name').textContent=pokemonName(number);
   $('pokemon-result-number').textContent=`全国図鑑 No.${String(number).padStart(4,'0')}`;
   $('pokemon-result-link').href=officialPokedexUrl(number);
@@ -956,10 +956,12 @@ async function claimPokemon(id){
   if(isParentPage||!ids.includes(id))return;
   const initial=claimEligibility(id);
   if(!initial.ok)return toast(initial.label);
+  if(!inventoryReady(id))return toast('ポケモンの重複防止データを確認中です。保護者画面を開いてください。');
   await runLocked(async()=>{
-    const day=rewardDayIndex(),ref=refProfile(id),reward=rewardRef(id,day);
+    const day=rewardDayIndex(),ref=refProfile(id),reward=rewardRef(id,day),invRef=pokemonInventoryRef(id);
     const result=await dbApi.runTransaction(db,async tx=>{
-      const pSnap=await tx.get(ref),rewardSnap=await tx.get(reward);
+      const [pSnap,rewardSnap,invSnap]=await Promise.all([tx.get(ref),tx.get(reward),tx.get(invRef)]);
+      const inventory=inventoryState(invSnap);
       if(!pSnap.exists())throw Error('プロフィールを取得できません。');
       if(rewardSnap.exists())throw Error('きょうのポケモンはもうゲット済みです。');
       const p=pSnap.data(),sid=p.lastSessionId;
@@ -972,13 +974,14 @@ async function claimPokemon(id){
         throw Error('この記録は獲得の対象外です。次のゲーム終了後に挑戦してください。');
       if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
         throw Error('休憩時間が終わるまで待ってください。');
+      const no=chooseUniquePokemon(inventory,reward.id);
+      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true});
       tx.update(ref,{rewardLastSessionId:sid,rewardLastDayIndex:day,updatedAt:dbApi.serverTimestamp()});
-      tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:2});
+      tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:3,pokemonNo:no});
       appendAudit(tx,'pokemon_claim',id,'本日は未獲得','ポケモンをゲット',sid);
-      return {childId:id,sessionId:sid,dayIndex:day,kind:'rest_completed',catalogVersion:2,rewardId:rewardDocumentId(id,day),claimedAt:{toMillis:()=>Date.now()}};
+      return no;
     });
-    const number=assignedPokemon(id,[result]).get(result.rewardId),duplicate=pokemonMapFor(id).has(number);
-    announcePokemon(id,number,duplicate);
+    announcePokemon(id,result);
   });
 }
 // v3.11.1 F06: 保護者が1回付与した権利を、子どもが1回だけ確定獲得する。
@@ -1038,25 +1041,23 @@ async function claimSpecialBonus(id){
   if(!grant)return toast('受け取れる特別ボーナスはありません。');
   await runLocked(async()=>{
     const grantRef=bonusGrantRef(grant.grantId),rewardRef=bonusRewardRef(grant.grantId);
-    const oldOwned=pokemonMapFor(id);
+    const invRef=pokemonInventoryRef(id);
     const result=await dbApi.runTransaction(db,async tx=>{
-      const [grantSnap,rewardSnap]=await Promise.all([tx.get(grantRef),tx.get(rewardRef)]);
+      const [grantSnap,rewardSnap,invSnap]=await Promise.all([tx.get(grantRef),tx.get(rewardRef),tx.get(invRef)]);
+      const inventory=inventoryState(invSnap);
       if(!grantSnap.exists()||grantSnap.data().status!=='available'||grantSnap.data().childId!==id)
         throw Error('特別ボーナスはすでに受け取り済みか、対象が異なります。');
       if(rewardSnap.exists())throw Error('この特別ボーナスはすでにゲット済みです。');
       const pSnap=await tx.get(refProfile(id));
       if(!pSnap.exists()||rewardSuspended(pSnap.data()))throw Error('いまはポケモンを受け取れません。');
+      const no=chooseUniquePokemon(inventory,rewardRef.id);
+      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:rewardRef.id},inventory.reserved,{...inventory.seen,[String(no)]:true});
       tx.update(grantRef,{status:'claimed',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),rewardId:rewardRef.id});
       tx.set(rewardRef,{childId:id,grantId:grant.grantId,sessionId:'',dayIndex:rewardDayIndex(),
-        kind:'special_bonus',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:2});
-      return {childId:id,grantId:grant.grantId,sessionId:'',dayIndex:rewardDayIndex(),
-        kind:'special_bonus',catalogVersion:2,rewardId:rewardRef.id,claimedAt:{toMillis:()=>Date.now()}};
+        kind:'special_bonus',claimedBy:uid,claimedAt:dbApi.serverTimestamp(),catalogVersion:3,pokemonNo:no});
+      return no;
     });
-    // realtime listener が先に反映した場合も二重カウントしない。
-    const extra=model.rewards.some(r=>r.rewardId===result.rewardId)?[]:[result];
-    const no=assignedPokemon(id,extra).get(result.rewardId);
-    if(!Number.isInteger(no))throw Error('獲得済みですが、図鑑の計算に失敗しました。画面を更新してください。');
-    announcePokemon(id,no,oldOwned.has(no));
+    announcePokemon(id,result);
   });
 }
 // v3.11 F02: JSTの申請日を基準にする「がんばりカレンダー」。全件既存購読を再利用。
