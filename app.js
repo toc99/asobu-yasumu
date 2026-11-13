@@ -263,9 +263,9 @@ function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?
 function gameDuration(p,now=Date.now()){return p?.activeStart>0?activeElapsed(p,p.activeStart,now):0;}
 function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?videoElapsed(p,now):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
-  const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
-  const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);
-  const videoStart=videoStartedMillis(p);if(videoStart>0)total+=overlap(videoStart,now,a,b);return total;
+  const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?activeSessionOverlap(s,a,b):0),0);
+  const p=model.profiles[child];if(p?.activeStart>0)total+=Math.round(overlap(p.activeStart,now,a,b)*gameDuration(p,now)/Math.max(1,now-p.activeStart));
+  const videoStart=videoStartedMillis(p);if(videoStart>0)total+=Math.round(overlap(videoStart,now,a,b)*videoElapsed(p,now)/Math.max(1,now-videoStart));return total;
 }
 function playerLabel(id){
   const name=String(model.profiles[id]?.name||'').trim();
@@ -334,12 +334,12 @@ function reportRange(now=Date.now()) {
 function reportStats(id) {
   const {before,start,end}=reportRange();
   const sessions=model.reportSessions.filter(s=>s.childId===id && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end>s.start).sort((a,b)=>a.start-b.start || a.end-b.end);
-  const videoTotal=sessions.reduce((a,s)=>a+(s.activityType==='video'?overlap(s.start,s.end,start,end):0),0);
+  const videoTotal=sessions.reduce((a,s)=>a+(s.activityType==='video'?activeSessionOverlap(s,start,end):0),0);
   const days=Array.from({length:7},(_,i)=>addDays(start,i));
-  const daily=days.map(d=>sessions.reduce((total,s)=>total+overlap(s.start,s.end,d,addDays(d,1)),0));
+  const daily=days.map(d=>sessions.reduce((total,s)=>total+activeSessionOverlap(s,d,addDays(d,1)),0));
   const total=daily.reduce((a,b)=>a+b,0);
   const priorDays=Array.from({length:7},(_,i)=>addDays(before,i));
-  const prevTotal=priorDays.reduce((sum,d)=>sum+sessions.reduce((a,s)=>a+overlap(s.start,s.end,d,addDays(d,1)),0),0);
+  const prevTotal=priorDays.reduce((sum,d)=>sum+sessions.reduce((a,s)=>a+activeSessionOverlap(s,d,addDays(d,1)),0),0);
   const completed=sessions.filter(s=>s.end>=start && s.end<end);
   // 休憩間隔の「記録上の比較」。夜間停止・保護者修正・端末外のゲームは監査できない。
   let checked=0,passed=0;
@@ -347,7 +347,7 @@ function reportStats(id) {
     const s=sessions[i],prev=sessions[i-1];
     if(s.start<start||s.start>=end || prev.end> s.start || prev.end < before)continue;
     checked++;
-    if(s.start>=prev.end+(prev.end-prev.start))passed++;
+    if(s.start>=prev.end+(Number(prev.duration)||prev.end-prev.start))passed++;
   }
   // sessions.createdBy は当該アプリの子ども/保護者アカウントのUID。
   // 旧版データ移行時に保護者が作成した履歴は「子ども自身の終了」に数えない。
@@ -1530,7 +1530,7 @@ function renderPlayers(now=Date.now()){
     const carryBadge=carry?`<div class="night-carryover-badge night-carryover-${carry.phase}" role="status">${safe(carry.message)}</div>`:'';
     const penaltyBanner=rewardSuspended(p,now)?`<p class="penalty-notice" role="status">⚠️ ${safe(rewardSuspensionText(p,now))}。まえに ゲットした ポケモンは なくならないよ。</p>`:'';
     const today=todayTotal(id,now),count=model.sessions.filter(s=>s.childId===id&&s.end>=dayStart(now)).length;
-    const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?overlap(s.start,s.end,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1)):0);
+    const gameToday=model.sessions.reduce((sum,s)=>sum+(s.childId===id && s.activityType!=='video'?activeSessionOverlap(s,dayStart(now),addDays(dayStart(now),1)):0),0)+(p.activeStart>0?Math.round(overlap(p.activeStart,now,dayStart(now),addDays(dayStart(now),1))*gameDuration(p,now)/Math.max(1,now-p.activeStart)):0);
     const videoToday=Math.max(0,today-gameToday);
     const age = ageOf(p, now);
     const subtitle = age === null ? '年齢未設定' : `${age}さい`;
@@ -1547,9 +1547,9 @@ function renderPlayers(now=Date.now()){
 function weekData(now=Date.now()){
   const today=dayStart(now),days=Array.from({length:7},(_,i)=>addDays(today,i-6));
   const totals=days.map(d=>displayIds().map(id=>{
-    const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?overlap(s.start,s.end,d,end):0),0);
-    const p=model.profiles[id];if(p?.activeStart>0)sum+=overlap(p.activeStart,now,d,end);
-    const vs=videoStartedMillis(p);if(vs>0)sum+=overlap(vs,now,d,end);return sum;
+    const end=addDays(d,1);let sum=model.sessions.reduce((a,s)=>a+(s.childId===id?activeSessionOverlap(s,d,end):0),0);
+    const p=model.profiles[id];if(p?.activeStart>0)sum+=Math.round(overlap(p.activeStart,now,d,end)*gameDuration(p,now)/Math.max(1,now-p.activeStart));
+    const vs=videoStartedMillis(p);if(vs>0)sum+=Math.round(overlap(vs,now,d,end)*videoElapsed(p,now)/Math.max(1,now-vs));return sum;
   }));return {days,totals};
 }
 function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
@@ -1559,17 +1559,17 @@ function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();
     return `<div class="week-row"><div class="week-label">${label}</div><div class="week-bars">${t.map((v,j)=>`<div class="track"><div class="fill ${themeFor(model.profiles[ordered[j]])}" style="width:${(v/max*100).toFixed(1)}%"></div></div>`).join('')}</div><div class="week-total">${brief(t[0]+t[1])}</div></div>`;
   }).join('');
 }
-function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:now-p.activeStart,deviceId:p.deviceId,ongoing:true});
-  const vs=videoStartedMillis(p);if(vs>0)arr.push({sid:'video-active-'+id,childId:id,start:vs,end:now,duration:now-vs,activityType:'video',ongoing:true});}
+function daySessions(){const start=selectedDay,end=addDays(start,1);const arr=[...model.sessions];const now=Date.now();for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0)arr.push({sid:'active-'+id,childId:id,start:p.activeStart,end:now,duration:gameDuration(p,now),pauseMs:totalPausedMillis(p,now),deviceId:p.deviceId,ongoing:true});
+  const vs=videoStartedMillis(p);if(vs>0)arr.push({sid:'video-active-'+id,childId:id,start:vs,end:now,duration:videoElapsed(p,now),pauseMs:totalPausedMillis(p,now),activityType:'video',ongoing:true});}
   if(model.historyExtra && model.historyExtra.day===selectedDay){for(const s of model.historyExtra.items){if(!arr.some(x=>x.sid===s.sid))arr.push(s);}}
-  return arr.filter(s=>overlap(s.start,s.end,start,end)>0).sort((a,b)=>b.start-a.start);
+  return arr.filter(s=>activeSessionOverlap(s,start,end)>0).sort((a,b)=>b.start-a.start);
 }
 function renderHistory(){const target=$('history-list');if(!target)return;const sessions=daySessions(),start=selectedDay,end=addDays(start,1);
  $('history-date').value=dateKey(start);
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
  const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
- target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','more'];
@@ -1656,8 +1656,9 @@ function renderParentDashboard(now=Date.now()){
   container.innerHTML=ids.map(id=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now);
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
+    if(isPlayPaused(p))names[st]='一時停止中';
     const state=names[st]||'確認中';
-    const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`開始から ${brief(now-videoStartedMillis(p))}`:'ゲーム・動画を開始できます';
+    const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`視聴時間 ${brief(videoElapsed(p,now))}`:'ゲーム・動画を開始できます';
     const carry=nightCarryoverInfo(p,now);
     return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small>${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
   }).join('');
@@ -1666,7 +1667,7 @@ function playerLayoutSignature(now=Date.now()){
   if(!model.ready)return '';
   return JSON.stringify({online:canOperate(),busy,day:rewardDayIndex(now),kids:ids.map(id=>{
     const p=model.profiles[id]||{};
-    return [id,status(p,now),ageModeFor(p,now),p.activeStart,videoStartedMillis(p),videoDueMillis(p)<=now,
+    return [id,status(p,now),ageModeFor(p,now),p.activeStart,videoStartedMillis(p),pauseStartedMillis(p),p.pauseTotalMs,p.pauseCount,videoDueMillis(p,now)<=now,
       p.restUntil,p.restStart,p.lastDuration,p.manualRestUntil,p.manualRestMinutes,
       p.lastSessionId,p.rewardLastDayIndex,p.rewardBlockedSessionId,p.rewardLastSessionId,
       p.rewardSuspendedUntil,stampMillis(p.updatedAt),
@@ -1677,12 +1678,13 @@ function updatePlayerTimes(now=Date.now()){
   for(const id of ids){
     const p=model.profiles[id],card=document.querySelector(`[data-player-id="${id}"]`);
     if(!p||!card)continue;
-    const st=status(p,now),junior=!isParentPage&&ageModeFor(p,now)==='junior';
+    const st=status(p,now),junior=!isParentPage&&ageModeFor(p,now)==='junior',paused=isPlayPaused(p);
     const digits=card.querySelector('.big-time .digits');
     if(digits)digits.textContent=hms(summaryFor(p,now));
     const line=card.querySelector('.forecast-line');
     if(line){
-      if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(now-videoStartedMillis(p))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
+      if(paused){line.textContent='⏸️ 一時停止中：計測は止まっています。実機も中断してください。';}
+      else if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(now-videoStartedMillis(p))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
       else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(now-videoStartedMillis(p))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
     }
     const prog=card.querySelector('.progress i');
@@ -1697,7 +1699,7 @@ function updatePlayerTimes(now=Date.now()){
       prog.style.width=progress.toFixed(1)+'%';
     }
     const video=card.querySelector('.video-countdown');
-    if(video){const remaining=Math.max(0,videoDueMillis(p)-now);video.textContent=remaining>0?`あと ${hms(remaining)}`:'時間になったよ！';}
+    if(video){const remaining=Math.max(0,videoDueMillis(p,now)-now);video.textContent=isPlayPaused(p)?`一時停止中・残り ${hms(remaining)}`:remaining>0?`あと ${hms(remaining)}`:'時間になったよ！';}
     const undo=card.querySelector('button.undo-action');
     const kind=undoKind(p,now);
     if(undo&&kind){const sec=Math.max(1,Math.ceil((30000-(now-stampMillis(kind==='start'?p.startedAt:p.endedAt)))/1000));undo.textContent=`↩️ まちがえた！ あと${sec}秒`;}
