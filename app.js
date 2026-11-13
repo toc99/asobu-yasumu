@@ -210,9 +210,58 @@ function manualWaitRemaining(p, now=Date.now()){
 function waitingRemaining(p,now=Date.now()){
   return Math.max(normalWaitRemaining(p,now),manualWaitRemaining(p,now));
 }
+
+/* v3.12.4: 一時停止の累積はFirestoreに保存。休憩の計測は終了した時点で開始する。 */
+function pauseStartedMillis(p){return stampMillis(p?.pauseStartedAt);}
+function isPlayPaused(p){return pauseStartedMillis(p)>0&&(Number(p?.activeStart)>0||videoStartedMillis(p)>0);}
+function totalPausedMillis(p,now=Date.now()){
+  const accumulated=Math.max(0,Number(p?.pauseTotalMs)||0);
+  const pauseStart=pauseStartedMillis(p);
+  return accumulated+(pauseStart?Math.max(0,now-pauseStart):0);
+}
+function activeElapsed(p,start,now=Date.now()){
+  return start>0?Math.max(0,now-start-totalPausedMillis(p,now)):0;
+}
+function videoElapsed(p,now=Date.now()){return activeElapsed(p,videoStartedMillis(p),now);}
+function activeSessionOverlap(session,start,end){
+  const wall=Math.max(0,(Number(session.end)||0)-(Number(session.start)||0));
+  const duration=Math.max(0,Math.min(wall,Number(session.duration)||0));
+  const overlapMs=overlap(session.start,session.end,start,end);
+  // 合計利用時間は厳密に集計する。日付をまたぐ一時停止履歴の按分は近似。
+  return wall>0?Math.min(overlapMs,Math.round(overlapMs*duration/wall)):0;
+}
+async function togglePlayPause(id){
+  if(isParentPage||!ids.includes(id)||!canOperate())return;
+  const current=model.profiles[id];
+  if(!current||!(Number(current.activeStart)>0||videoStartedMillis(current)>0))return toast('ゲーム・動画の利用中だけ一時停止できます。');
+  const resume=isPlayPaused(current);
+  if(!confirm(resume?playerLabel(id)+'：ゲーム・動画を再開しますか？':playerLabel(id)+'：ゲーム・動画を中断しましたか？\n一時停止の時間は利用時間・休憩時間に含みません。'))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('プロフィールがありません。');
+      const p=snap.data(),start=Number(p.activeStart)>0?Number(p.activeStart):videoStartedMillis(p),now=Date.now();
+      if(!start)throw Error('ゲーム・動画が終了しています。');
+      if(resume!==isPlayPaused(p))throw Error('別の端末で状態が変更されました。再確認してください。');
+      if(!resume){
+        const count=Number(p.pauseCount)||0;
+        if(count>=100)throw Error('一時停止回数の上限に達しました。');
+        tx.update(ref,{pauseStartedAt:dbApi.serverTimestamp(),pauseCount:count+1,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'play_pause',id,'利用中','一時停止');
+      }else{
+        const pausedFor=now-pauseStartedMillis(p);
+        if(pausedFor<0||pausedFor>7*DAY)throw Error('一時停止時間が正しくありません。');
+        tx.update(ref,{pauseStartedAt:null,pauseTotalMs:(Number(p.pauseTotalMs)||0)+pausedFor,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'play_resume',id,'一時停止','再開');
+      }
+    });
+    toast(resume?'計測を再開しました。':'計測を一時停止しました。ゲーム・動画も止めてください。');
+  });
+}
+
 function status(p,now=Date.now()){if(!p)return 'unknown';return p.activeStart>0?'playing':videoStartedMillis(p)>0?'watching':restEnd(p)>now?'resting':'ready';}
-function gameDuration(p,now=Date.now()){return p?.activeStart>0?Math.max(0,now-p.activeStart):0;}
-function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?Math.max(0,now-videoStartedMillis(p)):s==='resting'?waitingRemaining(p,now):0;}
+function gameDuration(p,now=Date.now()){return p?.activeStart>0?activeElapsed(p,p.activeStart,now):0;}
+function summaryFor(p,now=Date.now()){const s=status(p,now);return s==='playing'?gameDuration(p,now):s==='watching'?videoElapsed(p,now):s==='resting'?waitingRemaining(p,now):0;}
 function todayTotal(child,now=Date.now()){
   const a=dayStart(now),b=addDays(a,1);let total=model.sessions.reduce((sum,s)=>sum+(s.childId===child?overlap(s.start,s.end,a,b):0),0);
   const p=model.profiles[child];if(p?.activeStart>0)total+=overlap(p.activeStart,now,a,b);
