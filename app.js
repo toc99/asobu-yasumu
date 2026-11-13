@@ -39,7 +39,7 @@ function stampMillis(stamp){return stamp?.toMillis?.()||0;}
 function undoKind(p, now=Date.now()){
   if(!p||!canOperate()||isParentPage)return null;
   if(p.activeStart>0 && stampMillis(p.startedAt)>0 && now-stampMillis(p.startedAt)>=0 && now-stampMillis(p.startedAt)<30000) return 'start';
-  if(p.activeStart===0 && p.lastSessionId && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
+  if(p.activeStart===0 && p.lastSessionId && !model.sessions.some(s=>s.sid===p.lastSessionId&&Number(s.pauseCount)>0) && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
   return null;
 }
 // 夜間待ち時間の持ち越し。計算の基準時刻はJST（夏時間なし）。
@@ -1468,15 +1468,18 @@ async function stopVideo(id){return runLocked(async()=>{
     const snap=await tx.get(ref);if(!snap.exists())throw Error('子どものデータが見つかりません。');
     const p=snap.data(),start=videoStartedMillis(p),end=Date.now();
     if(!start)throw Error('動画タイマーは開始されていません。');
-    const dur=end-start;
+    const pauseMs=totalPausedMillis(p,end),pauseCount=Number(p.pauseCount)||0;
+    const dur=activeElapsed(p,start,end);
     if(dur<1000)throw Error('開始から1秒以上経過してから終了してください。');
     if(dur>7*DAY)throw Error('動画視聴が7日を超えています。保護者が記録を確認してください。');
     // 既存の休憩が残る特殊なケースでも、待ち時間を短くしない。
     const until=Math.max(Number(p.restUntil)||0,end+dur);
     tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,endedAt:null,
-      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
+      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
     tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
-      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false});
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
+      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}: {})});
     appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
       `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
     return dur;
@@ -1901,10 +1904,15 @@ async function endPlay(id){return runLocked(async()=>{
   const sidRef=dbApi.doc(sessionsRef());const now=Date.now();
   const duration=await dbApi.runTransaction(db,async tx=>{
     const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('家族データがありません');const p=snap.data();
-    if(!p.activeStart)throw Error('すでに終了しています');if(now-p.activeStart<1000)throw Error('開始から1秒以上経過してから終了してください。');const dur=now-p.activeStart;
+    if(!p.activeStart)throw Error('すでに終了しています');
+    const pauseMs=totalPausedMillis(p,now),pauseCount=Number(p.pauseCount)||0;
+    const dur=activeElapsed(p,p.activeStart,now);
+    if(dur<1000)throw Error('実際のプレイ時間が1秒以上になるまで終了できません。');
     if(dur>7*DAY)throw Error('7日以上計測されています。保護者が開始時刻を確認してください。');
-    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp()});
+    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
+      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
     tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
+      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}:{ }),
       undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}});
     appendAudit(tx,'end',id,'ゲーム中',`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
     return dur;
@@ -1917,7 +1925,7 @@ function chooseStart(id){
   if(videoStartedMillis(p)>0)return toast('動画を見ている間はゲームを開始できません。');
   startPlay(id,'sw1'); // 旧データ・Firestoreルールとの互換性のため固定値を保持（画面には表示しない）。
 }
-function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=now-p.activeStart;
+function chooseEnd(id){const p=model.profiles[id];if(!p?.activeStart)return;pendingEnd=id;const now=Date.now(),t=gameDuration(p,now);
  $('end-confirm-text').innerHTML=`<div>${safe(playerLabel(id))}が遊んだ時間：<strong>${brief(t)}</strong></div><div>これから休憩：<strong>${brief(t)}</strong></div><div>つぎに遊べるのは：<strong>${dateTime(now+t)}</strong></div>`;$('finish-actually-stopped').checked=false;$('confirm-end').disabled=true;$('end-dialog').showModal();}
 
 // 30秒以内の誤操作取り消し。終了取り消しは履歴削除とプロフィール復元を同一transactionで実行する。
@@ -1937,10 +1945,12 @@ async function undoRecent(id){
         return 'start';
       }
       const at=stampMillis(p.endedAt);
+      if(model.sessions.some(s=>s.sid===p.lastSessionId&&Number(s.pauseCount)>0))throw Error('一時停止を含む終了記録は取り消せません。保護者に相談してください。');
       if(!at||now-at<0||now-at>=30000||!p.lastSessionId)throw Error('終了から30秒を過ぎたため、取り消せません。');
       const sessionRef=dbApi.doc(sessionsRef(),p.lastSessionId),sSnap=await tx.get(sessionRef);
       if(!sSnap.exists())throw Error('取り消す履歴が見つかりません。');
       const s=sSnap.data(),u=s.undoPrevious;
+      if(Number(s.pauseCount)>0)throw Error('一時停止を含む終了記録は取り消せません。');
       if(!u||s.childId!==id||s.createdBy!==uid||stampMillis(s.createdAt)!==at||s.edited)throw Error('この履歴は取り消し対象ではありません。');
       tx.update(ref,{
         activeStart:s.start,deviceId:s.deviceId,startedAt:u.startedAt||null,endedAt:null,
