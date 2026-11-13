@@ -5,11 +5,11 @@
 <meta charset="utf-8"/><meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#eaf4ff" name="theme-color"/><meta content="yes" name="apple-mobile-web-app-capable"/><meta content="あそぶ・やすむ" name="apple-mobile-web-app-title"/>
 <meta content="子どもたちのゲーム・動画の時間と休憩を自分で管理するアプリ" name="description"/>
-<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.13.1" rel="stylesheet"/>
-<title>あそぶ・やすむ v3.13.1｜子ども用</title>
+<link href="manifest.webmanifest" rel="manifest"/><link href="icon-192.png" rel="apple-touch-icon"/><link href="style.css?v=3.13.2" rel="stylesheet"/>
+<title>あそぶ・やすむ v3.13.2｜子ども用</title>
 </head>
 <body data-role="kid">
-<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.13.1</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
+<header class="top"><div class="topinner"><div class="brand"><div class="brand-icon">🎮</div><div><div class="brand-title">あそぶ・やすむ</div><div class="brand-sub">じぶんのじかんを、じぶんでまもろう</div><span aria-label="アプリのバージョン" class="app-version">v3.13.2</span></div></div><div class="topright"><div class="clock" id="clock">--:--</div><div class="small" id="today-date"></div></div></div></header>
 <main class="container">
 <div class="setup-banner hidden" id="setup-warning"></div>
 <section class="login-panel card" id="login-screen"><h1>おうちの iPad をつなごう</h1><p>はじめてだけ、保護者が「iPad専用アカウント」でログインしてね。</p><form class="login-form" id="login-form"><label>メールアドレス<input autocomplete="username" id="email" required="" type="email"/></label><label>パスワード<input autocomplete="current-password" id="password" required="" type="password"/></label><button class="btn primary" type="submit">つなぐ</button></form><p class="hint" id="login-error" role="alert"></p><button class="btn outline hidden" id="retry-login" type="button">再接続する</button><p class="tiny">保護者が外から見るときは <a href="parent.html">保護者用画面</a> を使用します。</p></section>
@@ -44,11 +44,21 @@
 <p class="pokedex-summary" id="pokedex-summary">図鑑を読み込み中…</p><div class="pokedex-progress"><div class="pokedex-progress-fill" id="pokedex-progress"></div></div><p class="tiny" id="pokedex-milestone"></p>
 <div class="pokedex-provisional" id="pokedex-provisional"></div>
 <div class="pokedex-grid" id="pokedex-grid"><p class="empty">図鑑を読み込み中…</p></div>
-<p class="tiny" id="pokedex-note"></p><p class="tiny">非公式の家族用記録機能です。公式のポケモン画像は使用せず、獲得したポケモンの名前から公式ずかんを開きます。長く遊んでも獲得回数は増えません。</p></section></section><section class="ui-view-pane hidden" id="kid-pane-more"><div class="ui-view-heading"><h2>そのほか・きろく</h2><p>きろくや おしらせを みるよ</p></div><section class="card" id="history"><div class="section-head"><h2>📊 この7日間のゲーム・動画記録</h2></div><div id="week-chart"></div><div class="section-head compact"><h2>1日のきろく</h2><input aria-label="日付" id="history-date" type="date"/></div><div id="timeline"></div><div id="history-list"></div></section><section class="card report-section"><div class="section-head"><div><h2>📊 週間レポートとバッジ</h2><p>昨日までの7日間をふりかえろう</p></div></div><div id="weekly-report"><p class="empty">週間レポートを読み込み中…</p></div></section><section class="card rest-notify-settings"><div class="section-head"><div><h2>🔔 おやすみのおしらせ</h2><p>iPadでアプリを開いている間のお知らせ</p></div></div>
+<p class="tiny" id="pokedex-note"></p><p class="tiny">非公式の家族用記録機能です。公式のポケモン画像は使用せず、獲得したポケモンの名前から公式ずかんを開きます。長く遊んでも獲得回数は増えません。</p></section></section><section class="ui-view-pane hidden" id="kid-pane-more"><div class="ui-view-heading"><h2>そのほか・きろく</h2><p>きろくや おしらせを みるよ</p></div><section class="card release-notes-shortcut" aria-label="アプリの更新履歴">
+  <div><h2>📣 更新履歴</h2><p>アプリで ふえた きのうや かわった ところを みよう。</p><small>現在のバージョン：<strong data-release-current>v3.13.2</strong></small></div>
+  <button type="button" class="btn outline" data-kid-view="updates">更新履歴をみる</button>
+</section><section class="card" id="history"><div class="section-head"><h2>📊 この7日間のゲーム・動画記録</h2></div><div id="week-chart"></div><div class="section-head compact"><h2>1日のきろく</h2><input aria-label="日付" id="history-date" type="date"/></div><div id="timeline"></div><div id="history-list"></div></section><section class="card report-section"><div class="section-head"><div><h2>📊 週間レポートとバッジ</h2><p>昨日までの7日間をふりかえろう</p></div></div><div id="weekly-report"><p class="empty">週間レポートを読み込み中…</p></div></section><section class="card rest-notify-settings"><div class="section-head"><div><h2>🔔 おやすみのおしらせ</h2><p>iPadでアプリを開いている間のお知らせ</p></div></div>
 <label class="notify-option"><input id="notify-enabled" type="checkbox"/> 休憩が終わる5分前・1分前・終了時にお知らせする</label>
 <label class="notify-option"><input id="notify-sound" type="checkbox"/> 音も鳴らす</label>
 <div class="notify-buttons"><button class="btn outline" id="notify-test" type="button">おしらせをテスト</button><button class="btn outline" id="notify-permission" type="button">システム通知を許可（対応端末のみ）</button></div>
-<p class="tiny" id="notify-help"></p><p class="tiny">動画タイマーの通知をYouTube中にも鳴らすには、iPadの「ショートカット」アプリで「あそぶやすむ動画タイマー」を初回設定してください（手順書参照）。</p></section><footer>ゲームも動画も、終わったら同じ時間の休憩が始まります。開始・終了は本人が記録してください。YouTubeなど他のアプリを開いている間の通知には、iPad標準タイマーを使用してください。</footer></section></section>
+<p class="tiny" id="notify-help"></p><p class="tiny">動画タイマーの通知をYouTube中にも鳴らすには、iPadの「ショートカット」アプリで「あそぶやすむ動画タイマー」を初回設定してください（手順書参照）。</p></section><footer>ゲームも動画も、終わったら同じ時間の休憩が始まります。開始・終了は本人が記録してください。YouTubeなど他のアプリを開いている間の通知には、iPad標準タイマーを使用してください。</footer></section><section class="ui-view-pane hidden release-notes-view" id="kid-pane-updates" aria-labelledby="kid-updates-heading">
+<div class="ui-view-heading"><h2 id="kid-updates-heading">📣 あたらしくなったこと</h2><p>最新の更新から順番に、過去の主な変更点を確認できます。</p></div>
+<section class="card release-notes-card">
+ <div class="release-notes-top"><button type="button" class="btn outline" data-kid-view="more">← そのほか・きろくに もどる</button><span class="release-notes-current">現在 <strong data-release-current>v3.13.2</strong></span></div>
+ <div id="release-notes-list" class="release-notes-list"><p class="empty">更新履歴を読み込み中…</p></div>
+ <p class="tiny release-notes-footnote">過去の記録は主要な変更を抜粋しています。すべての細かな修正を網羅するものではありません。</p>
+</section>
+</section></section>
 </main>
 <dialog aria-label="マイチームのポケモンを選ぶ" class="team-picker-dialog" id="team-picker">
 <div class="dialog-body team-picker-body">
@@ -94,5 +104,5 @@
 <button type="button" class="btn primary full" id="pokemon-release-ack">わかったよ</button>
 </div></dialog>
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
-<script src="app.js?v=3.13.1" type="module"></script>
+<script src="app.js?v=3.13.2" type="module"></script>
 </body></html>

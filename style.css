@@ -461,3 +461,44 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .activity-complete-badge{margin:10px 0 12px;padding:12px 14px;border:1px solid #edca76;border-radius:12px;background:#fffae8;color:#704c16;font-weight:800;line-height:1.6}
 .effort-day .effort-complete{font-size:15px;display:inline-flex;align-items:center;justify-content:center}
 @media(max-width:560px){.activity-complete-badge{padding:10px 12px;font-size:13px}}
+
+/* v3.13.2 release notes — same shared screen layout on iPad and parent. */
+.release-notes-shortcut{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.release-notes-shortcut>div{min-width:0}
+.release-notes-shortcut h2{margin:0 0 6px;font-size:clamp(17px,2.2vw,21px)}
+.release-notes-shortcut p{margin:0 0 6px;line-height:1.65}
+.release-notes-shortcut small{color:#627286}
+.release-notes-shortcut>.btn{flex-shrink:0}
+.release-notes-card{display:grid;gap:16px}
+.release-notes-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.release-notes-current{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#5a6c80;font-weight:700}
+.release-notes-current strong{font-size:15px;color:#263650}
+.release-notes-list{display:grid;gap:12px}
+.release-notes-entry{border:1px solid #dce5ef;border-radius:14px;background:#fff;overflow:hidden}
+.release-notes-entry[open]{border-color:#b7cee8;box-shadow:0 3px 12px rgba(41,77,126,.06)}
+.release-notes-entry>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;padding:15px 16px;line-height:1.5}
+.release-notes-entry>summary::-webkit-details-marker{display:none}
+.release-notes-entry>summary::after{content:'⌄';font-size:22px;font-weight:700;color:#72849c;transition:transform .15s}
+.release-notes-entry[open]>summary::after{transform:rotate(180deg)}
+.release-notes-entry>summary:focus-visible{outline:3px solid #74a3e8;outline-offset:-4px;border-radius:12px}
+.release-notes-entry-title{min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.release-notes-entry-title strong{font-size:16px;color:#355ca2;white-space:nowrap}
+.release-notes-entry-title>span{font-size:15px;font-weight:700;overflow-wrap:anywhere}
+.release-notes-entry-meta{display:inline-flex;align-items:center;gap:7px;margin-left:auto;flex-shrink:0;color:#718097;font-size:12px}
+.release-notes-new{background:#edf5ff;border:1px solid #ccdcf0;border-radius:99px;padding:3px 8px;color:#365e94;font-size:11px;font-weight:800}
+.release-notes-changes{margin:0;padding:0 18px 16px 38px;line-height:1.85;font-size:14px}
+.release-notes-changes li{padding-left:3px;margin-top:5px}
+.release-notes-footnote{border-top:1px solid #e7edf4;padding-top:11px}
+@media(max-width:620px){
+ .release-notes-shortcut{align-items:stretch;flex-direction:column}
+ .release-notes-shortcut>.btn{width:100%}
+ .release-notes-top>.btn{width:100%}
+ .release-notes-entry>summary{padding:12px;gap:7px;flex-wrap:wrap}
+ .release-notes-entry-title{flex:1;flex-basis:100%}
+ .release-notes-entry-meta{margin:0}
+ .release-notes-entry>summary::after{margin-left:auto}
+ .release-notes-changes{padding:0 13px 14px 30px;font-size:13px}
+}
+@media(prefers-reduced-motion:reduce){
+ .release-notes-entry>summary::after{transition:none}
+}

@@ -1,6 +1,7 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.2';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -8,7 +9,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.13.1';
+const version = APP_VERSION;
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -1820,19 +1821,37 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
-const KID_VIEWS=['time','challenge','pokemon','more'];
-const PARENT_VIEWS=['home','actions','reports','more'];
-const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',more:'きろくと おしらせを かくにんしよう'};
+const KID_VIEWS=['time','challenge','pokemon','more','updates'];
+const PARENT_VIEWS=['home','actions','reports','more','updates'];
+const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',more:'きろくと おしらせを かくにんしよう',updates:'あぷりの あたらしい ところを みてみよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
   if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
 }
+function renderReleaseNotes(){
+  const root=$('release-notes-list');if(!root)return;
+  document.querySelectorAll('.app-version,[data-release-current]').forEach(el=>el.textContent=version);
+  if(!Array.isArray(RELEASE_NOTES)||!RELEASE_NOTES.length||RELEASE_NOTES[0].version!==version){
+    root.textContent='更新履歴のバージョン情報を確認できません。';
+    return;
+  }
+  root.innerHTML=RELEASE_NOTES.map((entry,index)=>{
+    const title=safe(entry.title),v=safe(entry.version);
+    const date=entry.date?'<time datetime="'+safe(entry.date)+'">'+safe(entry.date.replaceAll('-','/'))+'</time>':'';
+    const items=entry.changes.map(change=>'<li>'+safe(change)+'</li>').join('');
+    return '<details class="release-notes-entry" '+(index===0?'open':'')+'>'+
+      '<summary><span class="release-notes-entry-title"><strong>'+v+'</strong><span>'+title+'</span></span>'+
+      '<span class="release-notes-entry-meta">'+(index===0?'<span class="release-notes-new">最新</span>':'')+
+      date+'</span></summary><ul class="release-notes-changes">'+items+'</ul></details>';
+  }).join('');
+}
+
 function setKidView(view,scroll=true){
   if(isParentPage||!KID_VIEWS.includes(view))return;
   kidView=view;historyTab=view==='more'?'history':'home';
   for(const v of KID_VIEWS)$('kid-pane-'+v)?.classList.toggle('hidden',v!==view);
   document.querySelectorAll('[data-kid-view]').forEach(button=>{
-    const active=button.dataset.kidView===view;
+    const active=button.dataset.kidView===view||(view==='updates'&&button.id==='kid-more-toggle');
     button.classList.toggle('is-active',active);
     button.setAttribute('aria-current',active?'page':'false');
   });
@@ -1846,7 +1865,7 @@ function setParentView(view,scroll=true,targetId=''){
   for(const v of PARENT_VIEWS)$('parent-pane-'+v)?.classList.toggle('hidden',v!==view);
   document.querySelectorAll('[data-parent-view]').forEach(button=>{
     if(!button.classList.contains('ui-nav-button'))return;
-    const active=button.dataset.parentView===view;
+    const active=button.dataset.parentView===view||(view==='updates'&&button.dataset.parentView==='more');
     button.classList.toggle('is-active',active);
     button.setAttribute('aria-current',active?'page':'false');
   });
@@ -2438,6 +2457,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
 }
 function initUiEvents(){
+  renderReleaseNotes();
  $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
  $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
  if(!isParentPage){
