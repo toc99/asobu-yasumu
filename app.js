@@ -1789,7 +1789,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError='';previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -1840,6 +1840,13 @@ function subscribeReport(){
   },e=>{console.warn('report listener',e);model.reportLoaded=false;renderReport();});
 }
 function listen(){
+ for(const id of ids){
+   cleanups.push(dbApi.onSnapshot(pokemonInventoryRef(id),{includeMetadataChanges:true},snap=>{
+     model.pokemonInventories[id]=snap.exists()?snap.data():null;
+     model.inventoryLoaded[id]=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+     initializePokemonInventories();renderActivities();renderBonuses();renderReleaseAdmin();renderPokedex();
+   },e=>{model.inventoryError=errorText(e);console.warn('Pokemon inventory listener',e);}));
+ }
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
    const profiles={};for(const doc of snap.docs)profiles[doc.id]=doc.data();model.profiles=profiles;model.fromCache=snap.metadata.fromCache;model.profilesServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;model.receivedAt=Date.now();setReady();setSettingsForm();renderEffortCalendar();
  },listenerError));
@@ -1850,7 +1857,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();
+   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
    model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
@@ -1870,7 +1877,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();
+   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
