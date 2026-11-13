@@ -960,7 +960,7 @@ async function releaseThreePokemon(id){
   const choices=releaseCandidatesFor(id);
   if(!inventoryReady(id))return toast('ポケモン管理情報を確認中です。');
   if(!choices.length)return toast('所持ポケモンがありません。');
-  if(!confirm(playerLabel(id)+'のポケモンを'+Math.min(3,choices.length)+'匹逃がします。\n所持が3匹未満の場合は全て対象です。\n図鑑とマイチームに反映され、元には戻せません。実行しますか？'))return;
+  if(!confirm(playerLabel(id)+'のポケモンを'+Math.min(3,choices.length)+'匹逃がします。\n所持が3匹未満の場合は全て対象です。\n図鑑と相棒にも反映され、元には戻せません。実行しますか？'))return;
   await runLocked(async()=>{
     const selected=chooseThreeRandom(choices);
     const details=selected.map(c=>({rewardId:c.rewardId,no:c.no,name:pokemonName(c.no)}));
@@ -1785,7 +1785,7 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','more'];
 const PARENT_VIEWS=['home','actions','reports','more'];
-const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて マイチームを つくろう',more:'きろくと おしらせを かくにんしよう'};
+const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',more:'きろくと おしらせを かくにんしよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
   if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
