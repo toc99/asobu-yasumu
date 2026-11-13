@@ -7,7 +7,7 @@ const isParentPage = rolePage === 'parent';
 const ids = ['older','younger'];
 const palette = ['sis','bro'];
 const MIN = 60000, DAY = 86400000, JST_OFFSET = 9 * 60 * MIN;
-const version = 'v3.12.3';
+const version = 'v3.12.4';
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
 const hms = ms => { const s=Math.max(0, Math.floor(ms/1000));return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; };
@@ -435,7 +435,7 @@ const ACTIVITY_KINDS = Object.freeze({
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
   practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
 });
-const ACTIVITY_DAILY_MAX = 3;
+const ACTIVITY_DAILY_MAX = 5;
 const UPSTAIRS_ACTIVITY_ID='upstairs21';
 function upstairsBeforeDeadline(now=Date.now()){
   return ((now+JST_OFFSET)%DAY)<21*60*MIN;
@@ -1058,7 +1058,7 @@ function renderActivities(){
     }).join('');
     const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
     const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの できた：${used} / ${ACTIVITY_DAILY_MAX}　あと ${remaining}かい</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}枠　・　残り${remaining}枠</span>`;
-    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日3枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
+    const note=junior?'できた ことを おくろう。おうちのひとが かくにん するよ。みおくりの あとは、もういちど できたら おくれるよ。':'1日5枠まで。仮ゲット中も1枠使います。「見送り」はもう一度活動すれば同じ日に再申請できます。';
     return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p><div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
 }
@@ -1099,7 +1099,7 @@ async function requestActivity(id,kind){
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const existing=requestFor(id,kind);
   if(existing&&existing.status!=='rejected')return toast('今日はこの項目をすでに申請しています。');
-  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは3匹までです。');
+  if(dailyActivityActive(id)>=ACTIVITY_DAILY_MAX)return toast('今日の活動ごほうびは5匹までです。');
   const junior=ageModeForChild(id)==='junior';
   const activityName=junior?(JUNIOR_ACTIVITIES[kind]?.label||ACTIVITY_KINDS[kind]):ACTIVITY_KINDS[kind];
   const prompt=junior
@@ -1113,15 +1113,15 @@ async function requestActivity(id,kind){
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
       if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
-      const snapshots=await Promise.all([tx.get(ref),...[1,2,3].map(n=>tx.get(activitySlotRef(id,day,n)))]);
+      const snapshots=await Promise.all([tx.get(ref),...[1,2,3,4,5].map(n=>tx.get(activitySlotRef(id,day,n)))]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
       if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
       if(oldRequest && (oldRequest.childId!==id || oldRequest.activityKind!==kind || oldRequest.dayIndex!==day))
         throw Error('申請履歴と対象の活動が一致しません。');
       // 旧v3.9の申請が残る移行日のみ、画面に表示される既存申請数も加味する。
-      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は3匹までです。');
-      const available=[1,2,3].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
-      if(!available)throw Error('きょうの活動報酬は3枠すべて使用中です。');
+      if(dailyActivityActive(id,day)>=ACTIVITY_DAILY_MAX)throw Error('本日の活動報酬は5匹までです。');
+      const available=[1,2,3,4,5].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
+      if(!available)throw Error('きょうの活動報酬は5枠すべて使用中です。');
       const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
       candidate=provisionalPokemonFor(id,rid,otherReserved);
       // 見送り済みドキュメントは再利用する。set(上書き)により以前のreviewedAt/reviewedByを消去し、
