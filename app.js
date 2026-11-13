@@ -985,7 +985,8 @@ async function releaseThreePokemon(id){
         if(newOwned[String(c.no)]!==c.rewardId)throw Error('最新の所持データと一致しません。再表示してください。');
         delete newOwned[String(c.no)];
       }
-      nextInventory(tx,invRef,inventory,newOwned,inventory.reserved);
+      nextInventory(tx,invRef,inventory,newOwned,inventory.reserved,inventory.seen,
+        selected.some(c=>c.rewardId===inventory.buddyId)?{buddyId:''}:{});
       const remaining=new Set(choices.filter(c=>!taken.has(c.rewardId)).map(c=>c.no));
       const oldTeam=teamFromProfile(profile);
       const newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
