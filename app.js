@@ -37,7 +37,7 @@ function hasConfig(){return !Object.values(firebaseConfig).some(x=>!x||String(x)
 function canOperate(){return !!uid && !!model.ready && !!model.profilesServerConfirmed && !!model.settingsServerConfirmed && navigator.onLine;}
 function stampMillis(stamp){return stamp?.toMillis?.()||0;}
 function undoKind(p, now=Date.now()){
-  if(!p||!canOperate()||isParentPage)return null;
+  if(!p||!canOperate()||isParentPage||Number(p.pauseCount)>0)return null;
   if(p.activeStart>0 && stampMillis(p.startedAt)>0 && now-stampMillis(p.startedAt)>=0 && now-stampMillis(p.startedAt)<30000) return 'start';
   if(p.activeStart===0 && p.lastSessionId && !model.sessions.some(s=>s.sid===p.lastSessionId&&Number(s.pauseCount)>0) && stampMillis(p.endedAt)>0 && now-stampMillis(p.endedAt)>=0 && now-stampMillis(p.endedAt)<30000) return 'end';
   return null;
@@ -1684,8 +1684,8 @@ function updatePlayerTimes(now=Date.now()){
     const line=card.querySelector('.forecast-line');
     if(line){
       if(paused){line.textContent='⏸️ 一時停止中：計測は止まっています。実機も中断してください。';}
-      else if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(now-videoStartedMillis(p))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
-      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(now-videoStartedMillis(p))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
+      else if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
+      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
     }
     const prog=card.querySelector('.progress i');
     if(prog){
@@ -1940,6 +1940,7 @@ async function undoRecent(id){
       if(!pSnap.exists())throw Error('子どものデータがありません。');
       const p=pSnap.data(),now=Date.now();
       if(p.activeStart>0){
+        if(Number(p.pauseCount)>0)throw Error('一時停止を含むプレイの開始取り消しはできません。終了操作を行ってください。');
         const at=stampMillis(p.startedAt);
         if(!at||now-at<0||now-at>=30000)throw Error('開始から30秒を過ぎたため、取り消せません。');
         tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:null,updatedAt:dbApi.serverTimestamp()});
