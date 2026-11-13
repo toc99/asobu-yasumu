@@ -678,6 +678,93 @@ function pokemonMapFor(id){
   }
   return counts;
 }
+
+function buddyCandidates(id){
+  const state=model.pokemonInventories[id];
+  if(!state?.owned)return [];
+  const rewards=new Map(rewardClaims(id).map(r=>[claimIdOf(r),r]));
+  return Object.entries(state.owned).map(([no,rid])=>({no:Number(no),rid}))
+    .filter(x=>rewards.has(x.rid)&&rewards.get(x.rid).revoked!==true).sort((a,b)=>a.no-b.no);
+}
+function renderBuddy(){
+  const root=$('buddy-panel');if(!root)return;
+  const id=isParentPage?parentFocusChild:focusChild;
+  if(!model.ready||!inventoryReady(id)||!model.rewardsLoaded){
+    root.innerHTML='<p class="empty">相棒の記録を読み込み中です。保護者画面で重複防止管理を確認してください。</p>';return;
+  }
+  const data=model.pokemonInventories[id],list=buddyCandidates(id),b=buddyProgress(data);
+  if(!list.length){root.innerHTML='<p class="empty">ポケモンをゲットすると相棒を選べるよ！</p>';return;}
+  const select=isParentPage?'':
+    '<label class="buddy-choose">育てる相棒をえらぼう<select id="buddy-select"><option value="">相棒なし</option>'+
+    list.map(x=>'<option value="'+safe(x.rid)+'" '+(x.rid===b.rewardId?'selected':'')+'>'+safe(pokemonName(x.no))+' (No.'+x.no+')</option>').join('')+
+    '</select></label>';
+  if(!b.no){root.innerHTML='<p>好きなポケモンを1匹選ぶと、チャレンジを通じて成長するよ。</p>'+select+
+    (isParentPage?'<p class="tiny">相棒は子ども画面で選択できます。</p>':'');return;}
+  const unlocked=GENERATIONS[generationFor(Object.keys(data.seen||{}).length)].end;
+  const targets=EVOLUTION_TARGETS[b.no]||[];
+  const lines=targets.map(to=>{
+    const xp=evolutionXpRequired(to),already=!!data.owned[String(to)]||!!data.reserved[String(to)];
+    const locked=to>unlocked;
+    const reason=already?'所持または予約済み':locked?'世代を解放すると進化できる':b.xp<xp?'あと '+(xp-b.xp)+' XP':'進化できる！';
+    return '<div class="buddy-target"><div><strong>'+safe(pokemonName(to))+'</strong><small>Lv.'+
+      (Math.floor(xp/BUDDY_LEVEL_STEP)+1)+'（累計 '+xp+' XP）／'+safe(reason)+'</small></div>'+
+      (isParentPage?'':'<button type="button" class="btn primary" data-buddy-evolve="'+id+':'+to+'" '+(already||locked||b.xp<xp||busy||!canOperate()?'disabled':'')+'>進化する</button>')+
+      '</div>';
+  }).join('');
+  const currentStep=(b.xp%BUDDY_LEVEL_STEP)/BUDDY_LEVEL_STEP*100;
+  root.innerHTML='<div class="buddy-profile"><div class="buddy-orb">✦</div><div class="buddy-facts"><strong>'+
+    safe(pokemonName(b.no))+'</strong><small>全国図鑑 No.'+String(b.no).padStart(4,'0')+'</small>'+
+    '<div class="buddy-level">Lv.'+b.level+' <span>'+b.xp+' XP</span></div>'+
+    '<div class="buddy-bar"><i style="width:'+currentStep.toFixed(1)+'%"></i></div>'+
+    '<small>'+(b.xp>=180?'称号：育成マスター':'次のレベルまで '+(BUDDY_LEVEL_STEP-b.xp%BUDDY_LEVEL_STEP)+' XP')+'</small></div></div>'+
+    select+
+    '<p class="tiny">チャレンジ承認 +10 XP、ゲーム・休憩のごほうび +5 XP。相棒を変更しても経験値は残ります。</p>'+
+    (lines?'<div class="buddy-evolutions"><h3>進化先</h3>'+lines+'</div>':
+      '<p class="tiny">この種類は通常の進化先がありません。レベルと称号を育てよう。</p>')+
+    '<p class="tiny">進化すると今の1匹が進化後に変わります。進化前は図鑑の「登録済み」に残ります。</p>';
+}
+async function selectBuddy(id,rid){
+  if(isParentPage||!ids.includes(id)||!inventoryReady(id)||!canOperate())return;
+  if(rid&&!buddyCandidates(id).some(x=>x.rid===rid))return toast('所持していないポケモンは選べません。');
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref));
+      if(rid&&!ownedSpeciesByReward(inv,rid))throw Error('そのポケモンは所持していません。');
+      if((inv.buddyId||'')===rid)return;
+      tx.update(ref,{buddyId:rid,version:inv.version+1,updatedAt:dbApi.serverTimestamp()});
+    });
+    toast(rid?'相棒を変更したよ！':'相棒を外したよ。');
+  });
+}
+async function evolveBuddy(id,no){
+  if(isParentPage||!ids.includes(id)||!Number.isInteger(no)||!inventoryReady(id)||!canOperate())return;
+  const start=buddyProgress(model.pokemonInventories[id]);
+  if(!start.no||!(EVOLUTION_TARGETS[start.no]||[]).includes(no))return toast('進化先が正しくありません。');
+  if(!confirm(pokemonName(start.no)+'を '+pokemonName(no)+'に進化させますか？\n同じ1匹が変化し、進化前も図鑑に登録済みとして残ります。'))return;
+  await runLocked(async()=>{
+    const ev=await dbApi.runTransaction(db,async tx=>{
+      const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref)),b=buddyProgress(inv);
+      if(b.rewardId!==start.rewardId||!(EVOLUTION_TARGETS[b.no]||[]).includes(no))throw Error('相棒の状態が変わりました。');
+      if(b.xp<evolutionXpRequired(no))throw Error('経験値が足りません。');
+      const max=GENERATIONS[generationFor(Object.keys(inv.seen).length)].end;
+      if(no>max)throw Error('進化先の世代はまだ解放されていません。');
+      if(inv.owned[String(no)]||inv.reserved[String(no)])throw Error('進化先はすでに所持・予約中です。');
+      const owned={...inv.owned};delete owned[String(b.no)];owned[String(no)]=b.rewardId;
+      const history={...(inv.evolutionLog||{})},old=Array.isArray(history[b.rewardId])?history[b.rewardId]:[];
+      history[b.rewardId]=[...old,{from:b.no,to:no,at:Date.now()}];
+      nextInventory(tx,ref,inv,owned,inv.reserved,{...inv.seen,[String(b.no)]:true,[String(no)]:true},{evolutionLog:history});
+      return {from:b.no,to:no};
+    });
+    const dlg=$('buddy-evolution-dialog');
+    if(dlg){
+      $('buddy-evolution-from').textContent=pokemonName(ev.from);
+      $('buddy-evolution-to').textContent=pokemonName(ev.to);
+      $('buddy-evolution-link').href=officialPokedexUrl(ev.to);
+      if(!dlg.open)dlg.showModal();
+    }else toast(pokemonName(ev.from)+'が'+pokemonName(ev.to)+'に進化した！');
+  });
+}
+
 // v3.11.6: 5匹編成のマイチーム。プロフィールの独立フィールドのみ更新し、報酬処理は変更しない。
 const TEAM_SIZE=5;
 let favoriteTeamChild='older', editingTeamSlot=null;
@@ -1749,7 +1836,7 @@ function setFocusChild(id,syncApprovals=true){
   });
   // Parent approvals default to all; switching the global child selector sets a focused filter.
   if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
-  renderActivities();renderBonuses();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
+  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
 }
 function renderKidSpotlight(){
   const box=$('kid-spotlight-message');if(!box||!model.ready)return;
@@ -1845,7 +1932,7 @@ function render(now=Date.now()){
   }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
   checkRestNotices(now);checkVideoNotices(now);showReleaseNotice();
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderBuddy();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -1909,7 +1996,7 @@ function listen(){
    cleanups.push(dbApi.onSnapshot(pokemonInventoryRef(id),{includeMetadataChanges:true},snap=>{
      model.pokemonInventories[id]=snap.exists()?snap.data():null;
      model.inventoryLoaded[id]=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-     initializePokemonInventories();renderActivities();renderBonuses();renderReleaseAdmin();renderPokedex();
+     initializePokemonInventories();renderActivities();renderBonuses();renderBuddy();renderReleaseAdmin();renderPokedex();
    },e=>{model.inventoryError=errorText(e);console.warn('Pokemon inventory listener',e);}));
  }
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'profiles'),{includeMetadataChanges:true},snap=>{
@@ -1922,7 +2009,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
+   renderPokedex();renderBuddy();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
    model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
@@ -1942,7 +2029,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'activityRequests'),{includeMetadataChanges:true},snap=>{
    model.activityRequests=snap.docs.map(d=>({...d.data(),requestId:d.id}));
    model.activityLoaded=true;model.activityServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
-   renderActivities();renderApprovals();renderPokedex();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();initializePokemonInventories();
+   renderActivities();renderApprovals();renderPokedex();renderBuddy();renderEffortCalendar();renderKidSpotlight();renderParentDashboard();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
@@ -2347,6 +2434,7 @@ function initUiEvents(){
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
    if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
+    if(btn.dataset.buddyEvolve){const [child,no]=btn.dataset.buddyEvolve.split(':');evolveBuddy(child,Number(no));}
    if(btn.dataset.nightResume)resumeNightEarly(btn.dataset.nightResume);
    if(btn.dataset.preset){$('manual-minutes').value=btn.dataset.preset;updateManualPreview();}
  });
@@ -2365,6 +2453,7 @@ function initUiEvents(){
  $('parent-focus-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('pokedex-child')?.addEventListener('change',e=>{if(ids.includes(e.target.value))setFocusChild(e.target.value);});
  $('pokedex-filter')?.addEventListener('change',renderPokedex);
+  document.addEventListener('change',e=>{if(e.target?.id==='buddy-select')selectBuddy(focusChild,e.target.value);});
  $('finish-actually-stopped')?.addEventListener('change',e=>{$('confirm-end').disabled=!e.target.checked;});
  $('confirm-end')?.addEventListener('click',()=>{if(!$('finish-actually-stopped')?.checked)return;pendingEnd&&endPlay(pendingEnd);});
   $('manual-form')?.addEventListener('submit',saveManualWait);
