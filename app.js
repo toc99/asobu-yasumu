@@ -773,7 +773,7 @@ function claimEligibility(id,now=Date.now()){
     return {ok:false,label:'次のゲームと休憩でチャレンジ'};
   if(p.activeStart>0||videoStartedMillis(p)>0)return {ok:false,label:'ゲーム・動画を終えてからチャレンジ'};
   if(waitingRemaining(p,now)>0)return {ok:false,label:'おやすみを守ったらゲット！'};
-  if(!canOperate()||!model.rewardsServerConfirmed)return {ok:false,label:'クラウドを確認中'};
+  if(!canOperate()||!model.rewardsServerConfirmed||!inventoryReady(id))return {ok:false,label:'クラウドを確認中'};
   return {ok:true,label:'ポケモンをゲット！'};
 }
 function rewardActionFor(id,now=Date.now()){
@@ -1005,7 +1005,7 @@ function renderBonuses(){
       const count=availableBonusGrants(id).length,junior=ageModeForChild(id)==='junior';
       const message=junior?(count?`🎁 あと ${count}かい もらえるよ`:'いまは プレゼントなし'):(count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし');
       return `<div class="bonus-person ${junior?'age-junior':''}"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${message}</span></div>`+
-        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed?'disabled':''}>${junior?'🎉 ポケモンを もらう！':'🎉 ポケモンを1匹ゲット！'}</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
+        (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed||!inventoryReady(id)?'disabled':''}>${junior?'🎉 ポケモンを もらう！':'🎉 ポケモンを1匹ゲット！'}</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
         '</div>';
     }).join('');
   }else if(admin){
@@ -1035,7 +1035,7 @@ async function grantSpecialBonus(id){
 }
 async function claimSpecialBonus(id){
   if(isParentPage||!ids.includes(id)||busy)return;
-  if(!model.bonusServerConfirmed||!model.rewardsServerConfirmed)return toast('クラウドの最新状態を確認中です。');
+  if(!model.bonusServerConfirmed||!model.rewardsServerConfirmed||!inventoryReady(id))return toast('ポケモンの管理情報を確認中です。');
   if(rewardSuspended(model.profiles[id]))return toast(rewardSuspensionText(model.profiles[id]));
   const grant=availableBonusGrants(id)[0];
   if(!grant)return toast('受け取れる特別ボーナスはありません。');
@@ -1153,7 +1153,7 @@ function renderActivities(){
         :(req?.status==='approved'?'承認済み・正式ゲット':retry?'見送り・もういちど できたら 申請できるよ':req?'仮ゲット・保護者の確認待ち':'申請できます');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`:'';
       const deadlinePassed=kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline();
-      const unavailable=alreadyDone||deadlinePassed||remaining===0||suspended||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
+      const unavailable=alreadyDone||deadlinePassed||remaining===0||suspended||!inventoryReady(id)||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
         ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':deadlinePassed?'9じを すぎたよ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
         :(alreadyDone?'申請済み':suspended?'ごほうびおやすみ中':deadlinePassed?'受付は21:00まで':remaining===0?'本日上限':retry?'もういちど できた！申請':'できた！申請');
@@ -1218,7 +1218,9 @@ async function requestActivity(id,kind){
     let candidate=0;
     await dbApi.runTransaction(db,async tx=>{
       if(kind===UPSTAIRS_ACTIVITY_ID&&!upstairsBeforeDeadline())throw Error('21時を過ぎたので、今日の申請はできません。');
-      const snapshots=await Promise.all([tx.get(ref),...[1,2,3,4,5].map(n=>tx.get(activitySlotRef(id,day,n)))]);
+      const invRef=pokemonInventoryRef(id);
+      const snapshots=await Promise.all([tx.get(ref),...[1,2,3,4,5].map(n=>tx.get(activitySlotRef(id,day,n))),tx.get(invRef)]);
+      const inventory=inventoryState(snapshots[6]);
       const oldRequest=snapshots[0].exists()?snapshots[0].data():null;
       if(oldRequest && oldRequest.status!=='rejected')throw Error('今日はすでにこの項目を申請しています。');
       if(oldRequest && (oldRequest.childId!==id || oldRequest.activityKind!==kind || oldRequest.dayIndex!==day))
@@ -1228,7 +1230,8 @@ async function requestActivity(id,kind){
       const available=[1,2,3,4,5].find(n=>!snapshots[n].exists()||snapshots[n].data().requestId==='');
       if(!available)throw Error('きょうの活動報酬は5枠すべて使用中です。');
       const otherReserved=snapshots.slice(1).map(s=>s.exists()&&s.data().requestId?s.data().candidateNo:0);
-      candidate=provisionalPokemonFor(id,rid,otherReserved);
+      candidate=chooseUniquePokemon(inventory,rid);
+      nextInventory(tx,invRef,inventory,inventory.owned,{...inventory.reserved,[String(candidate)]:rid});
       // 見送り済みドキュメントは再利用する。set(上書き)により以前のreviewedAt/reviewedByを消去し、
       // 新しい申請日時・仮ゲット番号・空き枠に差し替える。Firestore Rulesはrejected→pendingのみ許可。
       tx.set(ref,{childId:id,activityKind:kind,dayIndex:day,status:'pending',requestedBy:uid,requestedAt:dbApi.serverTimestamp(),slotNo:available,candidateNo:candidate});
@@ -1250,12 +1253,21 @@ async function reviewActivity(requestId,action){
   await runLocked(async()=>{
     const requestRef=dbApi.doc(db,'households',householdId,'activityRequests',requestId),rewardRef=activityRewardRef(requestId);
     const doc=await dbApi.runTransaction(db,async tx=>{
-      const snap=await tx.get(requestRef),oldReward=await tx.get(rewardRef);
+      const invRef=pokemonInventoryRef(req.childId);
+      const [snap,oldReward,invSnap]=await Promise.all([tx.get(requestRef),tx.get(rewardRef),tx.get(invRef)]);
+      const inventory=inventoryState(invSnap);
       if(!snap.exists()||snap.data().status!=='pending'||oldReward.exists())throw Error('この申請はすでに処理されています。');
-      const d=snap.data(),hasSlot=Number.isInteger(d.slotNo)&&d.slotNo>=1&&d.slotNo<=3;
+      const d=snap.data(),hasSlot=Number.isInteger(d.slotNo)&&d.slotNo>=1&&d.slotNo<=5;
       const slotRef=hasSlot?activitySlotRef(d.childId,d.dayIndex,d.slotNo):null;
       const slotSnap=slotRef?await tx.get(slotRef):null;
       if(hasSlot&&(!slotSnap.exists()||slotSnap.data().requestId!==requestId))throw Error('申請枠の状態が不一致です。');
+      const no=Number(d.candidateNo),key=String(no);
+      if(!Number.isInteger(no)||inventory.reserved[key]!==requestId)throw Error('予約していたポケモンの番号が一致しません。');
+      const newReserved={...inventory.reserved};delete newReserved[key];
+      if(action==='approve'){
+        if(inventory.owned[key])throw Error('そのポケモンは既に所持しています。');
+        nextInventory(tx,invRef,inventory,{...inventory.owned,[key]:rewardRef.id},newReserved,{...inventory.seen,[key]:true});
+      }else nextInventory(tx,invRef,inventory,inventory.owned,newReserved);
       tx.update(requestRef,{status:action==='approve'?'approved':'rejected',reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
       if(action==='approve'){
         const fixed=Number.isInteger(d.candidateNo)&&d.candidateNo>=1&&d.candidateNo<=POKEDEX_TOTAL;
