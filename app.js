@@ -1466,7 +1466,7 @@ function renderAlerts(now=Date.now()){
     const t=model.presence?.lastSeenAt?.toMillis?.()||0;
     if(!t||now-t>150000)alerts.push('<div class="alert stale">iPadの接続を現在確認できません。表示中のゲーム時間は、最後に届いた開始情報からの推定値です。</div>');
   }
-  for(const id of ids){const p=model.profiles[id];if(p?.activeStart>0&&!isPlayPaused(p)&&gameDuration(p,now)>=(model.settings.reminderMinutes||60)*MIN){alerts.push(`<div class="alert">⚠️ ${safe(playerLabel(id))}：${model.settings.reminderMinutes}分以上ゲーム中です。終了ボタンの押し忘れがないか確認してください。</div>`);}}
+  // 終了忘れの注意機能は廃止。通信状態の注意だけを残す。
   $('alerts').innerHTML=alerts.join('');
 }
 // v3.8: 動画視聴も画面利用時間として履歴に保存し、終了時に同時間の休憩を設定。
@@ -1843,7 +1843,7 @@ function setSettingsForm(){if(!isParentPage)return;const hash=JSON.stringify({pr
     $('gender-'+id).value=['female','male','neutral'].includes(model.profiles[id]?.gender) ? model.profiles[id].gender : 'neutral';
     $('birth-'+id).max=dateKey(Date.now());
   }
-  $('reminder').value=String(model.settings.reminderMinutes||60);$('video-limit').value=String(model.settings.videoLimitMinutes||30);
+  $('video-limit').value=String(model.settings.videoLimitMinutes||30);
   const policy=model.settings.nightPause||defaultSettings().nightPause;
   $('night-enabled').checked=policy.enabled===true;
   $('night-start').value=policy.start||'22:00';$('night-end').value=policy.end||'07:00';
@@ -1906,7 +1906,7 @@ function listen(){
  cleanups.push(()=>{if(reportUnsubscribe){reportUnsubscribe();reportUnsubscribe=null;}reportPeriodKey='';});
  if(isParentPage){
    cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'presence','ipad'),snap=>{model.presence=snap.exists()?snap.data():null;renderSync();},listenerError));
-   cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),snap=>{model.auditLogs=snap.docs.map(d=>({...d.data(),logId:d.id}));renderAudit();},listenerError));
+   cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(50)),snap=>{model.auditLogs=snap.docs.map(d=>({...d.data(),logId:d.id}));renderAudit();},listenerError));
  }
 }
 function refProfile(id){return dbApi.doc(db,'households',householdId,'profiles',id)}
@@ -2216,7 +2216,7 @@ async function saveSettings(event){event.preventDefault();await runLocked(async(
   const newDesc=`夜間 ${enabled?'ON':'OFF'} ${start}〜${end}／動画タイマー${videoLimitMinutes}分`;
   const b=dbApi.writeBatch(db);
   ids.forEach((id,i)=>b.update(refProfile(id),{name:names[i].slice(0,12),birthDate:births[i],gender:genders[i],updatedAt:dbApi.serverTimestamp()}));
-  b.set(refSettings(),{reminderMinutes:Number($('reminder').value)||60,videoLimitMinutes,nightPause,updatedAt:dbApi.serverTimestamp()},{merge:true});
+  b.set(refSettings(),{videoLimitMinutes,nightPause,updatedAt:dbApi.serverTimestamp()},{merge:true});
   appendAudit(b,'settings_update','all',oldDesc,newDesc);
   await b.commit();toast('設定を保存しました');
  });}
@@ -2251,14 +2251,14 @@ async function exportData(format){try{const result=await dbApi.getDocs(sessionsR
 async function exportAuditCsv(){
  if(!isParentPage)return;
  try{
-  const q=dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(1000));
+  const q=dbApi.query(dbApi.collection(db,'households',householdId,'auditLogs'),dbApi.orderBy('createdAt','desc'),dbApi.limit(50));
   const docs=await dbApi.getDocs(q);
   const esc=v=>{let s=String(v??'');if(/^[=+@\\-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
   const rows=[['日時','操作','対象','操作アカウント','UID','変更前','変更後','履歴ID'],
    ...docs.docs.map(doc=>{const a=doc.data();return [stampMillis(a.createdAt)?new Date(stampMillis(a.createdAt)).toLocaleString('ja-JP'):'',
     AUDIT_ACTIONS[a.action]||a.action,ids.includes(a.childId)?playerLabel(a.childId):'家族全体',a.actorRole,a.actorUid,a.before,a.after,a.sessionId];})];
   download(`asobu-yasumu-audit-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(esc).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
-  toast('操作履歴CSVを保存しました（最新1,000件まで）');
+  toast('操作履歴CSVを保存しました（最新50件）');
  }catch(e){console.error(e);toast(errorText(e));}
 }
 async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||document.visibilityState!=='visible'||!canOperate())return;
