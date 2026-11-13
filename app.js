@@ -818,16 +818,17 @@ function renderReleaseAdmin(){
   if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
   root.innerHTML=displayIds().map(id=>{
     const count=releaseCandidatesFor(id).length;
-    const disabled=count<3||busy||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
-    return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹（重複を含む）</small></div>'+
-      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>ランダムで3匹逃がす</button></div>';
+    const disabled=count===0||busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
+    return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹</small></div>'+
+      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>3匹逃がす</button></div>';
   }).join('');
 }
 async function releaseThreePokemon(id){
   if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed)return;
   const choices=releaseCandidatesFor(id);
-  if(choices.length<3)return toast('所持が3匹未満のため、逃がすことはできません。');
-  if(!confirm(playerLabel(id)+'のポケモンからランダムで3匹逃がします。\n選ばれた3匹は図鑑の所持数から減り、マイチームからも外れます。\nこの画面から元に戻すことはできません。実行しますか？'))return;
+  if(!inventoryReady(id))return toast('ポケモン管理情報を確認中です。');
+  if(!choices.length)return toast('所持ポケモンがありません。');
+  if(!confirm(playerLabel(id)+'のポケモンを'+Math.min(3,choices.length)+'匹逃がします。\n所持が3匹未満の場合は全て対象です。\n図鑑とマイチームに反映され、元には戻せません。実行しますか？'))return;
   await runLocked(async()=>{
     const selected=chooseThreeRandom(choices);
     const details=selected.map(c=>({rewardId:c.rewardId,no:c.no,name:pokemonName(c.no)}));
@@ -835,9 +836,9 @@ async function releaseThreePokemon(id){
     const refList=selected.map(c=>dbApi.doc(db,'households',householdId,'rewards',c.rewardId));
     const priorMarker=model.profiles[id]?.pokemonLastReleaseEventId||'';
     await dbApi.runTransaction(db,async tx=>{
-      const profileRef=refProfile(id),profileSnap=await tx.get(profileRef);
-      const rewardSnaps=[];
-      for(const ref of refList)rewardSnaps.push(await tx.get(ref));
+      const profileRef=refProfile(id),invRef=pokemonInventoryRef(id);
+      const [profileSnap,invSnap,...rewardSnaps]=await Promise.all([tx.get(profileRef),tx.get(invRef),...refList.map(ref=>tx.get(ref))]);
+      const inventory=inventoryState(invSnap);
       if(!profileSnap.exists())throw Error('プロフィールがありません。');
       const profile=profileSnap.data();
       if((profile.pokemonLastReleaseEventId||'')!==priorMarker)
@@ -847,6 +848,12 @@ async function releaseThreePokemon(id){
           throw Error('獲得記録が更新されました。もう一度確認してください。');
       }
       const taken=new Set(selected.map(c=>c.rewardId));
+      const newOwned={...inventory.owned};
+      for(const c of selected){
+        if(newOwned[String(c.no)]!==c.rewardId)throw Error('最新の所持データと一致しません。再表示してください。');
+        delete newOwned[String(c.no)];
+      }
+      nextInventory(tx,invRef,inventory,newOwned,inventory.reserved);
       const remaining=new Set(choices.filter(c=>!taken.has(c.rewardId)).map(c=>c.no));
       const oldTeam=teamFromProfile(profile);
       const newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
@@ -855,14 +862,14 @@ async function releaseThreePokemon(id){
       });
       tx.set(eventRef,{
         childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),reason:'rules_violation',
-        rewardIds:selected.map(c=>c.rewardId),pokemon:details,count:3
+        rewardIds:selected.map(c=>c.rewardId),pokemon:details,count:selected.length
       });
       const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
       if(newTeam.some((n,i)=>n!==oldTeam[i])){
         changes.favoriteTeam=newTeam;changes.teamUpdatedAt=dbApi.serverTimestamp();
       }
       tx.update(profileRef,changes);
-      appendAudit(tx,'pokemon_release',id,'所持ポケモンから3匹抽選',
+      appendAudit(tx,'pokemon_release',id,'所持ポケモンから'+selected.length+'匹',
         details.map(c=>c.name).join('・')+' が逃げた',eventRef.id);
     });
     toast(playerLabel(id)+'：'+details.map(c=>c.name).join('、')+'が逃げていきました。');
@@ -912,9 +919,9 @@ function renderPokedex(){
   if(!model.rewardsLoaded){target.innerHTML='<p class="empty">図鑑を読み込み中…</p>';return;}
   const id=select.value,allClaims=rewardClaims(id),claims=allClaims.filter(c=>c.revoked!==true),map=pokemonMapFor(id);
   if(!isParentPage)$('pokemon-collection')?.classList.toggle('age-junior',ageModeForChild(id)==='junior');
-  const unique=map.size,duplicates=claims.length-unique;
+  const unique=map.size;
   const genIndex=generationFor(unique),max=GENERATIONS[genIndex].end;
-  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹　・　ゲットした回数：${claims.length}回　・　重複：${duplicates}回${allClaims.length>claims.length?`　・　対象外：${allClaims.length-claims.length}件`:''}`;
+  $('pokedex-summary').textContent=`あつめた種類：${unique} / ${POKEDEX_TOTAL}匹`;
   $('pokedex-progress').style.width=`${(unique/POKEDEX_TOTAL*100).toFixed(2)}%`;
   const next=GENERATIONS[genIndex+1];
   $('pokedex-milestone').textContent=next
@@ -927,7 +934,7 @@ function renderPokedex(){
     const count=map.get(no)||0;
     if(currentFilter==='owned'&&!count)continue;
     const name=pokemonName(no),label=`No.${String(no).padStart(4,'0')}`;
-    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong>${count>1?`<small>${count}回ゲット</small>`:'<small>公式ずかんを見る</small>'}</a>`);
+    if(count)entries.push(`<a class="pokedex-entry caught" href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer" aria-label="${safe(name)}：公式ずかんで見る"><span class="pokedex-number">${label}</span><span class="pokedex-mark">★</span><strong>${safe(name)}</strong><small>公式ずかんを見る</small></a>`);
     else entries.push(`<div class="pokedex-entry locked" aria-label="${label} 未発見"><span class="pokedex-number">${label}</span><span class="pokedex-mark">？</span><strong>？？？</strong><small>まだ見つけていない</small></div>`);
   }
   target.innerHTML=entries.join('')||'<p class="empty">まだポケモンをゲットしていません。ゲームの休憩や今日のチャレンジでゲットしよう！</p>';
@@ -1002,19 +1009,19 @@ function renderBonuses(){
   }
   if(child){
     child.innerHTML=displayIds().filter(id=>id===focusChild).map(id=>{
-      const count=availableBonusGrants(id).length,junior=ageModeForChild(id)==='junior';
-      const message=junior?(count?`🎁 あと ${count}かい もらえるよ`:'いまは プレゼントなし'):(count?`🎁 受け取り待ち ${count}匹分`:'いまはプレゼントなし');
+      const count=availableBonusGrants(id).length,total=model.bonusGrants.filter(g=>g.childId===id).length,junior=ageModeForChild(id)==='junior';
+      const message=junior?`🎁 これまで ${total}かい プレゼント ／ あと ${count}かい もらえるよ`:`🎁 総プレゼント ${total}回 ／ 受け取り待ち ${count}回`;
       return `<div class="bonus-person ${junior?'age-junior':''}"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>${message}</span></div>`+
         (count?`<button type="button" class="btn primary" data-bonus-claim="${id}" ${busy||rewardSuspended(model.profiles[id])||!canOperate()||!model.bonusServerConfirmed||!model.rewardsServerConfirmed||!inventoryReady(id)?'disabled':''}>${junior?'🎉 ポケモンを もらう！':'🎉 ポケモンを1匹ゲット！'}</button>`:'<small>おうちの人から届くのを楽しみにしてね</small>')+
         '</div>';
     }).join('');
   }else if(admin){
     admin.innerHTML=displayIds().map(id=>{
-      const pending=availableBonusGrants(id).length;
+      const pending=availableBonusGrants(id).length,total=model.bonusGrants.filter(g=>g.childId===id).length;
       const recent=model.bonusGrants.filter(g=>g.childId===id&&g.status==='claimed')
         .sort((a,b)=>stampMillis(b.claimedAt)-stampMillis(a.claimedAt))[0];
       const last=recent&&stampMillis(recent.claimedAt)?`最後の受け取り：${dateTime(stampMillis(recent.claimedAt))}`:'受け取り履歴なし';
-      return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>未受け取り ${pending}匹分　/　${safe(last)}</span></div>`+
+      return `<div class="bonus-person"><div class="bonus-person-info"><strong>${safe(playerLabel(id))}</strong><span>総プレゼント ${total}回 ／ 受け取り済み ${total-pending}回 ／ 未受け取り ${pending}回　/　${safe(last)}</span></div>`+
         `<button type="button" class="btn primary" data-bonus-grant="${id}" ${busy||!canOperate()||!model.bonusServerConfirmed?'disabled':''}>🎁 特別ボーナスを1回付与</button></div>`;
     }).join('');
   }
