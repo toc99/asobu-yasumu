@@ -532,3 +532,7 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 .feedback-review{border-top:1px solid #e7eef4;padding-top:12px;display:grid;gap:12px}
 .feedback-review button{justify-self:start}
 @media(max-width:620px){.feedback-send,.feedback-review button{width:100%}.feedback-item{padding:12px}.feedback-form{gap:11px}}
+
+/* Keep all four kid tabs in a single row, including the new feedback tab. */
+#kid-primary-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:560px){#kid-primary-nav .ui-nav-button{font-size:12px}}
