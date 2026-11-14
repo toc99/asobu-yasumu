@@ -1,5 +1,5 @@
-const CACHE='asobu-yasumu-v3-13-3-20261114';
-const FILES=['./','./index.html','./parent.html','./style.css?v=3.13.3','./app.js?v=3.13.3','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.13.3','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE='asobu-yasumu-v3-13-4-20261114-feedback';
+const FILES=['./','./index.html','./parent.html','./style.css?v=3.13.4','./app.js?v=3.13.4','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.13.4','./feedback.js?v=3.13.4','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('asobu-yasumu')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method!=='GET'||u.origin!==self.location.origin)return;

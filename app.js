@@ -1,7 +1,8 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.3';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.4';
+import {setupFeedback} from './feedback.js?v=3.13.4';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -29,7 +30,7 @@ let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, famil
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
-let lastActivityDayIndex=-1;
+let lastActivityDayIndex=-1,feedbackUi=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -1859,9 +1860,9 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
-const KID_VIEWS=['time','challenge','pokemon','more','updates'];
+const KID_VIEWS=['time','challenge','pokemon','feedback','more','updates'];
 const PARENT_VIEWS=['home','actions','reports','more','updates'];
-const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',more:'きろくと おしらせを かくにんしよう',updates:'あぷりの あたらしい ところを みてみよう'};
+const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',feedback:'おうちのひとに こえを おくろう',more:'きろくと おしらせを かくにんしよう',updates:'あぷりの あたらしい ところを みてみよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
   if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
@@ -1920,6 +1921,7 @@ function setFocusChild(id,syncApprovals=true){
     $('team-picker').close();editingTeamSlot=null;
   }
   if(isParentPage)parentFocusChild=id;else focusChild=id;
+   feedbackUi?.setChild(id);
   favoriteTeamChild=id;effortCalendarChild=id;
   for(const selectId of ['team-child','effort-calendar-child','pokedex-child','parent-focus-child']){
     const el=$(selectId);if(!el)continue;
@@ -2039,7 +2041,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();feedbackUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -2495,6 +2497,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
 }
 function initUiEvents(){
+  feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
   renderReleaseNotes();
  $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
  $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
@@ -2598,6 +2601,7 @@ async function authorizeCurrentUser(){
     role=memberRole;uid=user.uid;
     $('login-error').textContent='';$('retry-login')?.classList.add('hidden');showApp();
     if(!cleanups.length)listen();
+    feedbackUi?.start(uid,role);
     if(!isParentPage)heartbeat();
   }catch(e){
     if(auth.currentUser?.uid!==user.uid)return;
