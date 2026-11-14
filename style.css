@@ -506,3 +506,29 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 /* v3.13.3: game rewards are claimed separately per game completion day */
 .pokemon-reward-day-actions{display:grid;gap:8px}
 .pokemon-reward-day-actions .pokemon-claim{width:100%;white-space:normal;line-height:1.45;min-height:48px}
+
+/* v3.13.4: feedback form for children and issue triage for parents */
+.feedback-card{display:grid;gap:14px}
+.feedback-form{display:grid;gap:14px;max-width:700px}
+.feedback-form label,.feedback-review label{display:grid;gap:6px;font-weight:700;line-height:1.5}
+.feedback-form input,.feedback-form select,.feedback-form textarea,.feedback-review select,.feedback-review textarea{
+  width:100%;box-sizing:border-box;min-height:45px;border:1px solid #b9cbe1;border-radius:10px;
+  padding:10px 12px;background:#fff;color:#26364f;font:inherit;font-weight:500
+}
+.feedback-form textarea,.feedback-review textarea{min-height:92px;resize:vertical;overflow-wrap:anywhere}
+.feedback-form input:focus-visible,.feedback-form select:focus-visible,.feedback-form textarea:focus-visible,
+.feedback-review select:focus-visible,.feedback-review textarea:focus-visible{outline:3px solid #83b2e4;outline-offset:2px}
+.feedback-sender{padding:10px 14px;border:1px solid #cfe2f3;border-radius:10px;background:#f2f8ff;font-weight:600}
+.feedback-send{min-height:52px;justify-self:start}
+#feedback-submit-message{min-height:1.5em;font-weight:700;color:#345c81}
+.feedback-list{display:grid;gap:12px}
+.feedback-item{padding:14px;border:1px solid #dae4ed;background:#fff;border-radius:14px}
+.feedback-item-head{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap}
+.feedback-item-head strong{font-size:16px;overflow-wrap:anywhere}
+.feedback-item small{display:block;margin-top:6px;color:#62768d}
+.feedback-state{display:inline-block;padding:4px 9px;border-radius:999px;background:#edf5ff;color:#355e89;font-size:12px;font-weight:800}
+.feedback-description{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7;margin:10px 0}
+.feedback-reply{padding:10px 12px;border-left:4px solid #76a4d3;background:#f4f8ff;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
+.feedback-review{border-top:1px solid #e7eef4;padding-top:12px;display:grid;gap:12px}
+.feedback-review button{justify-self:start}
+@media(max-width:620px){.feedback-send,.feedback-review button{width:100%}.feedback-item{padding:12px}.feedback-form{gap:11px}}
