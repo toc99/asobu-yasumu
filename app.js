@@ -1,10 +1,10 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.6';
-import {effectivePausedMillis} from './pause-timing.js?v=3.13.6';
-import {setupFeedback} from './feedback.js?v=3.13.6';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.13.6';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.7';
+import {effectivePausedMillis} from './pause-timing.js?v=3.13.7';
+import {setupFeedback} from './feedback.js?v=3.13.7';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.13.7';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -306,7 +306,7 @@ const JUNIOR_ACTIVITIES = Object.freeze({
   practicing:{icon:'🎵',label:'れんしゅうを した'},
   trying:{icon:'🌟',label:'あたらしい ことに ちょうせん'},
   persevering:{icon:'💪',label:'さいごまで がんばった'},
-  kindness:{icon:'🤝',label:'だれかを たすけた'},
+  outingCalm:{icon:'🚶',label:'おでかけで おちついて すごせた'},
   upstairs21:{icon:'🏠',label:'よる9じまでに 2かいへ あがる'}
 });
 function ageModeFor(profile,now=Date.now()){
@@ -487,8 +487,11 @@ const GENERATIONS = Object.freeze([
 const ACTIVITY_KINDS = Object.freeze({
   study:'勉強した', reading:'本を読んだ', exercise:'体を動かした',
   helping:'お手伝いした', cleaning:'片付けた', creating:'何かを作った',
-  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', kindness:'誰かを助けた', upstairs21:'よる9時までに2階に上がる'
+  practicing:'練習した', trying:'新しいことに挑戦した', persevering:'最後まで頑張った', outingCalm:'お出かけの時に落ち着いて行動できた', upstairs21:'よる9時までに2階に上がる'
 });
+// Retired activities remain readable in the history; they are not available to submit.
+const LEGACY_ACTIVITY_KINDS = Object.freeze({kindness:'誰かを助けた'});
+function activityKindLabel(kind){return ACTIVITY_KINDS[kind]||LEGACY_ACTIVITY_KINDS[kind]||kind;}
 const ACTIVITY_POKEMON_MAX = 5;
 const ACTIVITY_DAILY_MAX = Object.keys(ACTIVITY_KINDS).length;
 const ACTIVITY_EXTRA_XP = 2;
@@ -1126,7 +1129,7 @@ function renderProvisionalPokedex(id){
   if(!pending.length){root.innerHTML='';return;}
   root.innerHTML='<h3>⏳ 仮ゲット（保護者の確認待ち）</h3><div class="provisional-grid">'+pending.map(r=>{
     const no=Number(r.candidateNo),pokemon=Number.isInteger(no)&&no>0?`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`:'ポケモンは承認時に決まります';
-    return `<div class="provisional-card"><strong>${pokemon}</strong><small>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}・確認待ち</small><small>まだ正式な図鑑には入りません</small></div>`;
+    return `<div class="provisional-card"><strong>${pokemon}</strong><small>${safe(activityKindLabel(r.activityKind))}・確認待ち</small><small>まだ正式な図鑑には入りません</small></div>`;
   }).join('')+'</div>';
 }
 function announcePokemon(id,number){
@@ -1321,7 +1324,7 @@ function renderEffortCalendar(){
         pokemon=r.status==='approved'?`<a href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer">${name}を公式ずかんで見る</a>`:`<span>仮ゲット：${name}</span>`;
       }
       if(activityIsXpOnly(r)&&r.status!=='rejected')pokemon='<span>🌱 相棒 +2 XP（くじなし）</span>';
-      return `<div class="effort-detail-row"><span><strong>${safe(ACTIVITY_KINDS[r.activityKind]||r.activityKind)}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
+      return `<div class="effort-detail-row"><span><strong>${safe(activityKindLabel(r.activityKind))}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
     }).join('')}</div>`:'<p class="tiny">この日の活動申請はありません。</p>');
 }
 
@@ -1393,7 +1396,7 @@ function renderApprovals(){
   const summary=$('approval-filter-summary');if(summary)summary.textContent=
     `全員の確認待ち ${count}件${staleCount?`（うち24時間以上 ${staleCount}件）`:''}。表示中 ${pending.length}件。`;
   root.innerHTML=(requests.length?requests.map(r=>{
-    const kind=ACTIVITY_KINDS[r.activityKind]||r.activityKind;
+    const kind=activityKindLabel(r.activityKind);
     const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
@@ -1454,7 +1457,7 @@ async function reviewActivity(requestId,action){
   if(!req||req.status!=='pending')return;
   if(action==='approve'&&rewardSuspended(model.profiles[req.childId]))
     return toast('ごほうび停止中です。停止が終わってから承認してください。');
-  const label=`${playerLabel(req.childId)}の${ACTIVITY_KINDS[req.activityKind]||req.activityKind}`;
+  const label=`${playerLabel(req.childId)}の${activityKindLabel(req.activityKind)}`;
   const xpOnly=activityIsXpOnly(req);
   const actionLabel=action==='reject'
     ?'見送りにしますか？'
