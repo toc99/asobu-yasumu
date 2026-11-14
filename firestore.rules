@@ -1,0 +1,1168 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function memberPath(h) {
+      return /databases/$(database)/documents/households/$(h)/members/$(request.auth.uid);
+    }
+    function signedIn() { return request.auth != null; }
+    function isMember(h) { return signedIn() && exists(memberPath(h)); }
+    function isParent(h) { return isMember(h) && get(memberPath(h)).data.role == 'parent'; }
+    function isKid(h) { return isMember(h) && get(memberPath(h)).data.role == 'kid'; }
+
+    // v3.12.4: 一時停止中はゲーム・動画の計測だけを停止し、休憩を発生させない。
+    function pauseMsAtEnd(d, ended) {
+      let start = d.get('pauseStartedAt',null);
+      return d.get('pauseTotalMs',0) + (start is timestamp ? ended - start.toMillis() : 0);
+    }
+    function validKidPauseStart() {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let count = prev.get('pauseCount',0);
+      return (prev.activeStart > 0 || prev.get('videoStartedAt',null) is timestamp)
+        && prev.get('pauseStartedAt',null) == null
+        && count is int && count >= 0 && count < 100
+        && next.diff(prev).affectedKeys().hasOnly(['pauseStartedAt','pauseCount','updatedAt'])
+        && next.pauseStartedAt == request.time
+        && next.pauseCount == count + 1
+        && next.updatedAt == request.time;
+    }
+    function validKidPauseResume() {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let started = prev.get('pauseStartedAt',null);
+      let oldTotal = prev.get('pauseTotalMs',0);
+      return (prev.activeStart > 0 || prev.get('videoStartedAt',null) is timestamp)
+        && started is timestamp && request.time >= started
+        && request.time.toMillis() - started.toMillis() <= 604800000
+        && oldTotal is int && oldTotal >= 0 && oldTotal <= 604800000
+        && next.diff(prev).affectedKeys().hasOnly(['pauseStartedAt','pauseTotalMs','updatedAt'])
+        && next.pauseStartedAt == null
+        && next.pauseTotalMs is int
+        && next.pauseTotalMs >= oldTotal
+        && next.pauseTotalMs >= oldTotal + request.time.toMillis() - started.toMillis() - 60000
+        && next.pauseTotalMs <= oldTotal + request.time.toMillis() - started.toMillis() + 60000
+        && next.updatedAt == request.time;
+    }
+    // 複数回中断した記録の終了。既存の通常終了ルールとは別に厳格検証する。
+    function validKidPausedGameEnd(h,id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let now = request.time.toMillis();
+      let s = getAfter(sessionPath(h,next.lastSessionId));
+      return prev.activeStart is int && prev.activeStart > 0
+        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) > 0
+        && prev.get('videoStartedAt',null) == null
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','restStart','restUntil',
+          'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+        ])
+        && next.updatedAt == request.time
+        && next.activeStart == 0 && next.deviceId == null
+        && next.startedAt == null && next.endedAt == request.time
+        && next.pauseStartedAt == null && next.pauseTotalMs == 0 && next.pauseCount == 0
+        && next.restStart is int && next.restStart >= now - 60000 && next.restStart <= now + 60000
+        && next.lastDuration is int && next.lastDuration >= 1000 && next.lastDuration <= 604800000
+        && next.restUntil == next.restStart + next.lastDuration
+        && next.lastSessionId is string && next.lastSessionId.size() > 0
+        && s != null && s.data.childId == id && s.data.start == prev.activeStart
+        && s.data.end == next.restStart && s.data.duration == next.lastDuration
+        && s.data.pauseCount == prev.pauseCount
+        && s.data.pauseMs is int && s.data.pauseMs > 0
+        && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
+        && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000
+        && next.lastDuration == next.restStart - prev.activeStart - s.data.pauseMs;
+    }
+    function validKidPausedVideoEnd(h,id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let now = request.time.toMillis();
+      let old = prev.get('videoStartedAt',null);
+      let s = getAfter(sessionPath(h,next.lastSessionId));
+      return old is timestamp && prev.activeStart == 0
+        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) > 0
+        && next.diff(prev).affectedKeys().hasOnly([
+          'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
+          'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+        ])
+        && next.updatedAt == request.time
+        && next.videoStartedAt == null && next.videoDurationMinutes == 0 && next.endedAt == null
+        && next.pauseStartedAt == null && next.pauseTotalMs == 0 && next.pauseCount == 0
+        && next.restStart is int && next.restStart >= now - 60000 && next.restStart <= now + 60000
+        && next.lastDuration is int && next.lastDuration >= 1000 && next.lastDuration <= 604800000
+        && next.restUntil >= prev.restUntil
+        && next.restUntil == (prev.restUntil > next.restStart + next.lastDuration ? prev.restUntil : next.restStart + next.lastDuration)
+        && next.lastSessionId is string && next.lastSessionId.size() > 0
+        && s != null && s.data.childId == id && s.data.activityType == 'video'
+        && s.data.start == math.floor(old.toMillis()) && s.data.end == next.restStart
+        && s.data.duration == next.lastDuration && s.data.pauseCount == prev.pauseCount
+        && s.data.pauseMs is int && s.data.pauseMs > 0
+        && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
+        && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000
+        && next.lastDuration == next.restStart - math.floor(old.toMillis()) - s.data.pauseMs;
+    }
+    // セッションには実開始・実終了・中断を除いた実利用時間を保存する。
+    function validKidPausedGameSessionCreate(h,sid) {
+      let d = request.resource.data;
+      let prev = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll([
+          'childId','start','end','duration','deviceId','createdAt','createdBy',
+          'edited','undoPrevious','pauseMs','pauseCount'
+        ])
+        && d.keys().hasOnly([
+          'childId','start','end','duration','deviceId','createdAt','createdBy',
+          'edited','undoPrevious','pauseMs','pauseCount'
+        ])
+        && d.childId in ['older','younger'] && d.deviceId in ['sw1','sw2']
+        && d.start is int && d.end is int && d.end > d.start
+        && d.end <= request.time.toMillis() + 60000 && d.end >= request.time.toMillis() - 60000
+        && d.duration is int && d.duration >= 1000 && d.duration <= 604800000
+        && d.pauseMs is int && d.pauseMs > 0 && d.pauseCount is int && d.pauseCount > 0 && d.pauseCount <= 100
+        && d.duration == d.end - d.start - d.pauseMs
+        && d.createdAt == request.time && d.createdBy == request.auth.uid && d.edited == false
+        && prev != null && prev.data.activeStart == d.start && prev.data.deviceId == d.deviceId
+        && prev.data.pauseCount == d.pauseCount
+        && d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
+        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000
+        && d.undoPrevious is map
+        && d.undoPrevious.keys().hasAll(['restStart','restUntil','lastDuration','lastSessionId','startedAt'])
+        && d.undoPrevious.keys().hasOnly(['restStart','restUntil','lastDuration','lastSessionId','startedAt'])
+        && d.undoPrevious.restStart == prev.data.restStart
+        && d.undoPrevious.restUntil == prev.data.restUntil
+        && d.undoPrevious.lastDuration == prev.data.lastDuration
+        && d.undoPrevious.lastSessionId == prev.data.lastSessionId
+        && d.undoPrevious.startedAt == prev.data.get('startedAt',null)
+        && after != null && after.data.lastSessionId == sid
+        && after.data.activeStart == 0 && after.data.endedAt == request.time
+        && after.data.lastDuration == d.duration && after.data.restStart == d.end
+        && after.data.restUntil == d.end + d.duration
+        && after.data.pauseStartedAt == null && after.data.pauseTotalMs == 0 && after.data.pauseCount == 0
+        && after.data.updatedAt == request.time;
+    }
+    function validKidPausedVideoSessionCreate(h,sid) {
+      let d = request.resource.data;
+      let prev = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll([
+          'childId','start','end','duration','activityType','deviceId','createdAt','createdBy',
+          'edited','pauseMs','pauseCount'
+        ])
+        && d.keys().hasOnly([
+          'childId','start','end','duration','activityType','deviceId','createdAt','createdBy',
+          'edited','pauseMs','pauseCount'
+        ])
+        && d.childId in ['older','younger'] && d.activityType == 'video' && d.deviceId == 'video'
+        && d.start is int && d.end is int && d.end > d.start
+        && d.end <= request.time.toMillis() + 60000 && d.end >= request.time.toMillis() - 60000
+        && d.duration is int && d.duration >= 1000 && d.duration <= 604800000
+        && d.pauseMs is int && d.pauseMs > 0 && d.pauseCount is int && d.pauseCount > 0 && d.pauseCount <= 100
+        && d.duration == d.end - d.start - d.pauseMs
+        && d.createdAt == request.time && d.createdBy == request.auth.uid && d.edited == false
+        && prev != null && prev.data.activeStart == 0
+        && prev.data.get('videoStartedAt',null) is timestamp
+        && math.floor(prev.data.videoStartedAt.toMillis()) == d.start
+        && prev.data.pauseCount == d.pauseCount
+        && d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
+        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000
+        && after != null && after.data.videoStartedAt == null
+        && after.data.lastSessionId == sid && after.data.restStart == d.end
+        && after.data.lastDuration == d.duration && after.data.updatedAt == request.time
+        && after.data.pauseStartedAt == null && after.data.pauseTotalMs == 0 && after.data.pauseCount == 0;
+    }
+
+
+    // v3.8: 動画開始・終了の記録とセッション整合性
+    function validKidVideoUpdate(h, playerId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let oldStarted = prev.get('videoStartedAt', null);
+      let configured = get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes', 30);
+      return prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        && next.updatedAt == request.time && (
+        (next.diff(prev).affectedKeys().hasOnly(['videoStartedAt','videoDurationMinutes','updatedAt'])
+          && oldStarted == null
+          && prev.activeStart == 0
+          && prev.restUntil <= request.time.toMillis()
+          && prev.get('manualRestUntil',0) <= request.time.toMillis()
+          && next.videoStartedAt == request.time
+          && configured is int && configured >= 1 && configured <= 240
+          && next.videoDurationMinutes == configured)
+        ||
+        (next.diff(prev).affectedKeys().hasOnly([
+            'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
+            'lastDuration','lastSessionId','updatedAt'
+          ])
+          && oldStarted is timestamp && prev.activeStart == 0
+          && next.videoStartedAt == null && next.videoDurationMinutes == 0
+          && next.endedAt == null
+          && next.restStart is int
+          && next.restStart >= math.floor(oldStarted.toMillis()) + 1000
+          && next.restStart <= request.time.toMillis() + 60000
+          && next.restStart >= request.time.toMillis() - 60000
+          && next.lastDuration == next.restStart - math.floor(oldStarted.toMillis())
+          && next.lastDuration <= 604800000
+          && next.restUntil >= prev.restUntil
+          && ((prev.restUntil <= next.restStart + next.lastDuration
+              && next.restUntil == next.restStart + next.lastDuration)
+            || (prev.restUntil > next.restStart + next.lastDuration
+              && next.restUntil == prev.restUntil))
+          && next.lastSessionId is string && next.lastSessionId.size() > 0
+          && validKidVideoSessionLink(h, playerId, next.lastSessionId, oldStarted, next))
+      );
+    }
+    function validKidVideoSessionLink(h, id, sid, oldStart, next) {
+      let s = getAfter(sessionPath(h,sid));
+      return s != null && s.data.childId == id && s.data.activityType == 'video'
+        && s.data.start == math.floor(oldStart.toMillis())
+        && s.data.end == next.restStart && s.data.duration == next.lastDuration
+        && s.data.createdAt == request.time && s.data.createdBy == request.auth.uid
+        && s.data.edited == false;
+    }
+    function validKidVideoSessionCreate(h,sid) {
+      let d = request.resource.data;
+      let prev = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll(['childId','start','end','duration','activityType','deviceId','createdAt','createdBy','edited'])
+        && d.keys().hasOnly(['childId','start','end','duration','activityType','deviceId','createdAt','createdBy','edited'])
+        && d.childId in ['older','younger']
+        && d.activityType == 'video' && d.deviceId == 'video'
+        && d.start is int && d.end is int && d.end > d.start
+        && d.duration == d.end - d.start && d.duration >= 1000 && d.duration <= 604800000
+        && d.end <= request.time.toMillis() + 60000
+        && d.end >= request.time.toMillis() - 60000
+        && d.createdAt == request.time && d.createdBy == request.auth.uid && d.edited == false
+        && prev != null && prev.data.activeStart == 0
+        && prev.data.get('pauseCount',0) == 0
+        && prev.data.get('videoStartedAt',null) is timestamp
+        && math.floor(prev.data.videoStartedAt.toMillis()) == d.start
+        && after != null && after.data.videoStartedAt == null
+        && after.data.lastSessionId == sid && after.data.restStart == d.end
+        && after.data.lastDuration == d.duration && after.data.updatedAt == request.time;
+    }
+
+    // 旧版の操作互換性。遡及を無制限に許さないよう開始下限のみ追加。
+    function validKidPlayerUpdate(h, playerId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        && next.diff(prev).affectedKeys().hasOnly([
+        'activeStart','deviceId','restStart','restUntil','lastDuration','lastSessionId','updatedAt'
+      ]) && next.updatedAt == request.time && (
+        (prev.activeStart == 0
+         && prev.get('videoStartedAt',null) == null
+         && next.activeStart is int && next.activeStart > 0
+         && next.activeStart >= prev.restUntil
+         && next.activeStart >= prev.get('manualRestUntil', 0)
+         && request.time.toMillis() >= prev.restUntil
+         && request.time.toMillis() >= prev.get('manualRestUntil', 0)
+         && next.activeStart >= request.time.toMillis() - 60000
+         && next.activeStart <= request.time.toMillis() + 60000
+         && next.deviceId in ['sw1','sw2']
+         && next.restStart == prev.restStart && next.restUntil == prev.restUntil
+         && next.lastDuration == prev.lastDuration && next.lastSessionId == prev.lastSessionId)
+        ||
+        (prev.activeStart is int && prev.activeStart > 0
+         && next.activeStart == 0 && next.deviceId == null
+         && next.lastSessionId is string && next.lastSessionId.size() > 0
+         && next.restStart is int && next.restStart >= prev.activeStart
+         && next.lastDuration == next.restStart - prev.activeStart
+         && next.lastDuration > 0 && next.lastDuration <= 604800000
+         && next.restUntil == next.restStart + next.lastDuration
+         && getAfter(/databases/$(database)/documents/households/$(h)/sessions/$(next.lastSessionId)).data.childId == playerId
+         && getAfter(/databases/$(database)/documents/households/$(h)/sessions/$(next.lastSessionId)).data.start == prev.activeStart
+         && getAfter(/databases/$(database)/documents/households/$(h)/sessions/$(next.lastSessionId)).data.end == next.restStart)
+      );
+    }
+
+    function profilePath(h, id) {
+      return /databases/$(database)/documents/households/$(h)/profiles/$(id);
+    }
+    function sessionPath(h, sid) {
+      return /databases/$(database)/documents/households/$(h)/sessions/$(sid);
+    }
+    function validV33SessionLink(h, id, sid, started, ended) {
+      let s = getAfter(sessionPath(h, sid));
+      return s != null && s.data.childId == id && s.data.start == started
+        && s.data.end == ended && s.data.createdAt == request.time
+        && s.data.createdBy == request.auth.uid && s.data.edited == false
+        && s.data.keys().hasAll(['undoPrevious'])
+        && !s.data.keys().hasAny(['pauseMs']);
+    }
+    function validV33PlayerUpdate(h, id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        && next.diff(prev).affectedKeys().hasOnly([
+        'activeStart','deviceId','startedAt','endedAt','restStart','restUntil',
+        'lastDuration','lastSessionId','updatedAt'
+      ]) && next.updatedAt == request.time && (
+        (prev.activeStart == 0 && prev.get('videoStartedAt',null) == null
+          && next.activeStart is int && next.activeStart > 0
+          && next.activeStart >= prev.restUntil
+          && next.activeStart >= prev.get('manualRestUntil',0)
+          && request.time.toMillis() >= prev.restUntil
+          && request.time.toMillis() >= prev.get('manualRestUntil',0)
+          && next.activeStart >= request.time.toMillis() - 60000
+          && next.activeStart <= request.time.toMillis() + 60000
+          && next.deviceId in ['sw1','sw2']
+          && next.startedAt == request.time && next.endedAt == null
+          && next.restStart == prev.restStart && next.restUntil == prev.restUntil
+          && next.lastDuration == prev.lastDuration && next.lastSessionId == prev.lastSessionId)
+        ||
+        (prev.activeStart is int && prev.activeStart > 0
+          && next.activeStart == 0 && next.deviceId == null
+          && next.startedAt == null && next.endedAt == request.time
+          && next.lastSessionId is string && next.lastSessionId.size() > 0
+          && next.restStart is int && next.restStart >= prev.activeStart
+          && next.restStart <= request.time.toMillis() + 60000
+          && next.lastDuration == next.restStart - prev.activeStart
+          && next.lastDuration > 0 && next.lastDuration <= 604800000
+          && next.restUntil == next.restStart + next.lastDuration
+          && validV33SessionLink(h,id,next.lastSessionId,prev.activeStart,next.restStart))
+      );
+    }
+    function validV33UndoStart() {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.activeStart is int && prev.activeStart > 0
+        && prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        && prev.get('startedAt',null) is timestamp
+        && request.time >= prev.startedAt
+        && request.time <= prev.startedAt + duration.value(30,'s')
+        && next.diff(prev).affectedKeys().hasOnly(['activeStart','deviceId','startedAt','endedAt','updatedAt'])
+        && next.activeStart == 0 && next.deviceId == null
+        && next.startedAt == null && next.endedAt == null
+        && next.updatedAt == request.time;
+    }
+    function validV33UndoEndSession(h,id,sid,prev,next) {
+      let s = get(sessionPath(h,sid));
+      return s != null && s.data.childId == id && s.data.createdBy == request.auth.uid
+        && s.data.createdAt == prev.endedAt && s.data.edited == false
+        && s.data.keys().hasAll(['undoPrevious']) && !existsAfter(sessionPath(h,sid))
+        && next.activeStart == s.data.start && next.deviceId == s.data.deviceId
+        && next.startedAt == s.data.undoPrevious.startedAt && next.endedAt == null
+        && next.restStart == s.data.undoPrevious.restStart
+        && next.restUntil == s.data.undoPrevious.restUntil
+        && next.lastDuration == s.data.undoPrevious.lastDuration
+        && next.lastSessionId == s.data.undoPrevious.lastSessionId;
+    }
+    function validV33UndoEnd(h,id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.activeStart == 0 && prev.get('endedAt',null) is timestamp
+        && prev.lastSessionId is string && prev.lastSessionId.size() > 0
+        && request.time >= prev.endedAt
+        && request.time <= prev.endedAt + duration.value(30,'s')
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','restStart','restUntil',
+          'lastDuration','lastSessionId','updatedAt'
+        ]) && next.updatedAt == request.time
+        && validV33UndoEndSession(h,id,prev.lastSessionId,prev,next);
+    }
+    function validV33SessionCreate(h,sid) {
+      let d = request.resource.data;
+      let prev = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll(['childId','start','end','duration','deviceId','createdAt','createdBy','edited','undoPrevious'])
+        && d.keys().hasOnly(['childId','start','end','duration','deviceId','createdAt','createdBy','edited','undoPrevious'])
+        && d.childId in ['older','younger']
+        && d.start is int && d.end is int && d.end > d.start
+        && d.duration == d.end - d.start && d.duration <= 604800000
+        && d.end <= request.time.toMillis() + 60000
+        && d.deviceId in ['sw1','sw2']
+        && d.createdAt == request.time && d.createdBy == request.auth.uid
+        && d.edited == false
+        && prev != null && prev.data.get('pauseCount',0) == 0
+        && prev.data.activeStart == d.start && prev.data.deviceId == d.deviceId
+        && d.undoPrevious is map
+        && d.undoPrevious.keys().hasAll(['restStart','restUntil','lastDuration','lastSessionId','startedAt'])
+        && d.undoPrevious.keys().hasOnly(['restStart','restUntil','lastDuration','lastSessionId','startedAt'])
+        && d.undoPrevious.restStart == prev.data.restStart
+        && d.undoPrevious.restUntil == prev.data.restUntil
+        && d.undoPrevious.lastDuration == prev.data.lastDuration
+        && d.undoPrevious.lastSessionId == prev.data.lastSessionId
+        && d.undoPrevious.startedAt == prev.data.get('startedAt',null)
+        && after != null && after.data.lastSessionId == sid
+        && after.data.activeStart == 0 && after.data.endedAt == request.time;
+    }
+    function validV33SessionDelete(h) {
+      let d = resource.data;
+      let p = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll(['undoPrevious']) && !d.keys().hasAny(['pauseMs'])
+        && d.createdBy == request.auth.uid && d.edited == false
+        && d.createdAt is timestamp && request.time >= d.createdAt
+        && request.time <= d.createdAt + duration.value(30,'s')
+        && p != null && p.data.activeStart == d.start
+        && p.data.deviceId == d.deviceId
+        && p.data.startedAt == d.undoPrevious.startedAt
+        && p.data.endedAt == null
+        && p.data.restStart == d.undoPrevious.restStart
+        && p.data.restUntil == d.undoPrevious.restUntil
+        && p.data.lastDuration == d.undoPrevious.lastDuration
+        && p.data.lastSessionId == d.undoPrevious.lastSessionId
+        && p.data.updatedAt == request.time;
+    }
+
+    // v3.13: 子ども用iPadの開始忘れ(最大3時間)・開始時刻訂正。
+    function validKidRetroStart(h,playerId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let now = request.time.toMillis();
+      return prev.activeStart == 0 && prev.get('videoStartedAt',null) == null
+        && prev.restUntil <= now && prev.get('manualRestUntil',0) <= now
+        && next.diff(prev).affectedKeys().hasOnly(['activeStart','deviceId','startedAt','endedAt','updatedAt'])
+        && next.activeStart is int
+        && next.activeStart >= now - 10800000 && next.activeStart < now
+        && next.activeStart >= prev.restUntil
+        && next.activeStart >= prev.get('manualRestUntil',0)
+        && next.deviceId in ['sw1','sw2']
+        && next.startedAt == request.time
+        && next.get('endedAt',null) == null && next.updatedAt == request.time;
+    }
+    function validKidRetroCorrection(h,playerId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let now = request.time.toMillis();
+      return prev.activeStart is int && prev.activeStart > 0
+        && prev.get('videoStartedAt',null) == null
+        && next.diff(prev).affectedKeys().hasOnly(['activeStart','updatedAt'])
+        && next.activeStart is int
+        && next.activeStart >= now - 10800000
+        && next.activeStart < prev.activeStart
+        && next.activeStart >= prev.restUntil
+        && next.activeStart >= prev.get('manualRestUntil',0)
+        && next.updatedAt == request.time;
+    }
+
+    function validKidManualRestUpdate(h, playerId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.activeStart == 0
+        && next.diff(prev).affectedKeys().hasOnly([
+          'manualRestUntil','manualRestMinutes','manualRestSetAt',
+          'manualRestSetBy','manualRestSetRole','updatedAt'
+        ])
+        && next.updatedAt == request.time
+        && next.manualRestSetAt == request.time
+        && next.manualRestSetBy == request.auth.uid
+        && next.manualRestSetRole == 'kid'
+        && next.manualRestMinutes is int && next.manualRestMinutes >= 1 && next.manualRestMinutes <= 1440
+        && next.manualRestUntil is int
+        && next.manualRestUntil >= prev.get('manualRestUntil',0)
+        && next.manualRestUntil >= prev.restUntil
+        && next.manualRestUntil >= request.time.toMillis() + next.manualRestMinutes * 60000 - 60000
+        && next.manualRestUntil <= request.time.toMillis() + 604800000;
+    }
+    function validParentForgottenSessionCreate(h,sid) {
+      let d = request.resource.data;
+      let prior = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      return d.keys().hasAll(['childId','start','end','duration','deviceId','createdAt','createdBy','edited','correctionReason'])
+        && d.keys().hasOnly(['childId','start','end','duration','deviceId','createdAt','createdBy','edited','correctionReason'])
+        && d.childId in ['older','younger']
+        && d.start is int && d.start > 0
+        && d.end is int && d.end > d.start && d.end <= request.time.toMillis()
+        && d.duration == d.end - d.start && d.duration <= 604800000
+        && d.deviceId in ['sw1','sw2']
+        && d.createdAt == request.time && d.createdBy == request.auth.uid
+        && d.edited == true && d.correctionReason == '終了忘れ（保護者修正）'
+        && prior.data.activeStart == d.start && prior.data.deviceId == d.deviceId
+        && after.data.activeStart == 0 && after.data.lastSessionId == sid
+        && after.data.restStart == d.end
+        && after.data.restUntil == d.end + d.duration
+        && after.data.updatedAt == request.time;
+    }
+
+    function nightSettings(h) {
+      return get(/databases/$(database)/documents/households/$(h)/settings/main).data.nightPause;
+    }
+    function localMillisOfDay(ms) { return (ms + 32400000) % 86400000; }
+    function nightEndMillis(h,ms) {
+      let s = nightSettings(h);
+      let local = localMillisOfDay(ms);
+      let base = ms - local;
+      return local < s.endMinutes * 60000
+        ? base + s.endMinutes * 60000
+        : base + 86400000 + s.endMinutes * 60000;
+    }
+    function inConfiguredNight(h,ms) {
+      let s = nightSettings(h);
+      let local = localMillisOfDay(ms);
+      return s.enabled == true
+        && s.startMinutes is int && s.endMinutes is int
+        && s.startMinutes > s.endMinutes
+        && s.startMinutes <= 1439 && s.endMinutes >= 0
+        && (local < s.endMinutes * 60000 || local >= s.startMinutes * 60000)
+        && ms >= s.enabledAt;
+    }
+    function expectedManualUntil(prev,ms,until) {
+      let raw = prev.get('manualRestUntil',0);
+      return raw > until ? raw - (until - ms) : raw;
+    }
+    function validKidNightResume(h,id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let now = request.time.toMillis();
+      let morning = nightEndMillis(h,now);
+      let manualExpected = expectedManualUntil(prev,now,morning);
+      return prev.activeStart == 0
+        && inConfiguredNight(h,now)
+        && prev.get('nightResumeWindowEnd',0) != morning
+        && next.diff(prev).affectedKeys().hasOnly(['nightResumeAt','nightResumeWindowEnd','manualRestUntil','updatedAt'])
+        && next.nightResumeAt == request.time
+        && next.nightResumeWindowEnd == morning
+        && next.updatedAt == request.time
+        && next.manualRestUntil is int
+        && next.manualRestUntil >= manualExpected - 30000
+        && next.manualRestUntil <= manualExpected + 30000
+        && next.manualRestUntil >= 0;
+    }
+
+    // 操作履歴。新規操作は「プロフィール更新」に連動する。
+    function auditActionTouchesProfile(h, d) {
+      return d.childId in ['older','younger']
+        && existsAfter(profilePath(h,d.childId))
+        && getAfter(profilePath(h,d.childId)).data.updatedAt == request.time;
+    }
+    function validV34Audit(h) {
+      let d = request.resource.data;
+      return signedIn()
+        && d.keys().hasAll(['action','childId','actorUid','actorRole','createdAt','before','after','sessionId'])
+        && d.keys().hasOnly(['action','childId','actorUid','actorRole','createdAt','before','after','sessionId'])
+        && d.action is string && d.childId is string
+        && d.actorUid == request.auth.uid && d.createdAt == request.time
+        && d.before is string && d.before.size() <= 300
+        && d.after is string && d.after.size() <= 300
+        && d.sessionId is string && d.sessionId.size() <= 180
+        && (
+          (d.action in ['activity_request','activity_approve','activity_reject']
+            && validActivityAudit(h,d))
+          ||
+          (isKid(h) && d.actorRole == 'kid'
+            && d.action in [
+              'start','end','undo_start','undo_end','manual_set','night_resume',
+              'video_start','video_stop','pokemon_claim','start_backdated','start_corrected',
+              'play_pause','play_resume'
+            ]
+            && auditActionTouchesProfile(h,d))
+          ||
+          (isParent(h) && d.actorRole == 'parent' && (
+            (d.action in [
+               'manual_set','manual_clear','forgotten_end','cheat_confirm',
+               'cheat_honest','cheat_restore','start_backdated','start_corrected',
+               'pokemon_release'
+             ] && auditActionTouchesProfile(h,d))
+            || (d.action == 'history_edit' && d.childId in ['older','younger']
+              && d.sessionId.size() > 0
+              && existsAfter(sessionPath(h,d.sessionId))
+              && getAfter(sessionPath(h,d.sessionId)).data.updatedAt == request.time)
+            || (d.action == 'settings_update' && d.childId == 'all'
+              && existsAfter(/databases/$(database)/documents/households/$(h)/settings/main)
+              && getAfter(/databases/$(database)/documents/households/$(h)/settings/main).data.updatedAt == request.time)
+            || (d.action == 'family_init' && d.childId == 'all'
+              && existsAfter(profilePath(h,'older'))
+              && getAfter(profilePath(h,'older')).data.updatedAt == request.time)
+          ))
+        );
+    }
+
+    function rewardPath(h, rid) {
+      return /databases/$(database)/documents/households/$(h)/rewards/$(rid);
+    }
+    function rewardDayOfRequest() {
+      return int(math.floor((request.time.toMillis() + 32400000) / 86400000));
+    }
+    // v3.13.3: 報酬は受取日ではなくゲーム終了日(JST)を基準にする。
+    function rewardDayOfSessionEnd(endMillis) {
+      return int(math.floor((endMillis + 32400000) / 86400000));
+    }
+    function validKidRewardProfileUpdate(h, id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let day = next.get('rewardLastDayIndex',-1);
+      let rid = id + '_' + string(day);
+      let claim = getAfter(rewardPath(h,rid));
+      return prev.activeStart == 0
+        && next.get('rewardLastSessionId','') is string
+        && next.rewardLastSessionId.size() > 0
+        && next.rewardLastSessionId != prev.get('rewardLastSessionId','')
+        && prev.get('rewardBlockedSessionId','') != next.rewardLastSessionId
+        && prev.get('rewardSuspendedUntil',0) <= request.time.toMillis()
+        && day is int && day <= rewardDayOfRequest() && day >= rewardDayOfRequest() - 2
+        && next.diff(prev).affectedKeys().hasOnly(['rewardLastSessionId','rewardLastDayIndex','updatedAt'])
+        && next.updatedAt == request.time
+        && claim != null && claim.data.kind == 'rest_completed'
+        && claim.data.childId == id
+        && claim.data.sessionId == next.rewardLastSessionId
+        && claim.data.dayIndex == day && claim.data.claimedAt == request.time;
+    }
+    function validKidPokemonReward(h, rid) {
+      let d = request.resource.data;
+      let today = rewardDayOfRequest();
+      let profile = get(profilePath(h,d.childId));
+      let after = getAfter(profilePath(h,d.childId));
+      let session = get(sessionPath(h,d.sessionId));
+      return d.keys().hasAll(['childId','sessionId','dayIndex','claimedBy','claimedAt','kind'])
+        && d.keys().hasAll(['catalogVersion','pokemonNo'])
+        && d.keys().hasOnly(['childId','sessionId','dayIndex','claimedBy','claimedAt','kind','catalogVersion','pokemonNo'])
+        && d.catalogVersion == 3 && d.pokemonNo is int && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+        && validInventoryNewReward(h,d.childId,d.pokemonNo,rid)
+        && d.childId in ['older','younger']
+        && d.sessionId is string && d.sessionId.size() > 0 && d.sessionId.size() <= 180
+        && d.dayIndex is int && d.dayIndex <= today && d.dayIndex >= today - 2
+        && rid == d.childId + '_' + string(d.dayIndex)
+        && d.claimedBy == request.auth.uid && d.claimedAt == request.time
+        && d.kind == 'rest_completed'
+        && profile.data.activeStart == 0
+        && profile.data.get('videoStartedAt',null) == null
+        && profile.data.get('rewardLastSessionId','') != d.sessionId
+        && profile.data.get('rewardBlockedSessionId','') != d.sessionId
+        && profile.data.get('rewardSuspendedUntil',0) <= request.time.toMillis()
+        && profile.data.get('manualRestUntil',0) <= request.time.toMillis()
+        && session.data.childId == d.childId && session.data.createdBy == request.auth.uid
+        && session.data.get('activityType','game') == 'game'
+        && (session.data.edited == false
+          || (session.data.edited == true && session.data.get('correctionKind','') == 'honest'))
+        && session.data.duration is int && session.data.duration >= 60000
+        && session.data.end is int
+        && rewardDayOfSessionEnd(session.data.end) == d.dayIndex
+        && session.data.end <= request.time.toMillis()
+        && session.data.end + session.data.duration <= request.time.toMillis()
+        && session.data.end >= request.time.toMillis() - 172800000
+        && after.data.rewardLastSessionId == d.sessionId
+        && after.data.rewardLastDayIndex == d.dayIndex && after.data.updatedAt == request.time;
+    }
+
+
+
+    // v3.13.0: 所持・予約・相棒・経験値・進化履歴を同一の文書で直列化する。
+    function inventoryPath(h,id) {
+      return /databases/$(database)/documents/households/$(h)/pokemonInventory/$(id);
+    }
+    function validInventoryMove(h,id) {
+      let before = get(inventoryPath(h,id));
+      let after = getAfter(inventoryPath(h,id));
+      return exists(inventoryPath(h,id))
+        && before.data.version is int && after.data.version == before.data.version + 1
+        && after.data.updatedAt == request.time;
+    }
+    function validInventoryReservation(h,id,no,requestId) {
+      let before = get(inventoryPath(h,id));
+      let after = getAfter(inventoryPath(h,id));
+      let key = string(no);
+      return validInventoryMove(h,id)
+        && before.data.owned.get(key,'') == '' && before.data.reserved.get(key,'') == ''
+        && after.data.owned.get(key,'') == '' && after.data.reserved.get(key,'') == requestId;
+    }
+    function validInventoryNewReward(h,id,no,rewardId) {
+      let before = get(inventoryPath(h,id));
+      let after = getAfter(inventoryPath(h,id));
+      let key = string(no);
+      return validInventoryMove(h,id)
+        && before.data.owned.get(key,'') == '' && before.data.reserved.get(key,'') == ''
+        && after.data.owned.get(key,'') == rewardId && after.data.reserved.get(key,'') == '';
+    }
+    function validInventoryDecision(h,id,no,requestId,rewardId,approved) {
+      let before = get(inventoryPath(h,id));
+      let after = getAfter(inventoryPath(h,id));
+      let key = string(no);
+      return validInventoryMove(h,id)
+        && before.data.reserved.get(key,'') == requestId
+        && before.data.owned.get(key,'') == ''
+        && after.data.reserved.get(key,'') == ''
+        && (approved ? after.data.owned.get(key,'') == rewardId
+                     : after.data.owned.get(key,'') == '');
+    }
+    // 6〜11件目のチャレンジ承認: ポケモン所持を変えず、経験値のみ付与。
+    function validInventoryXpCredit(h,id,amount) {
+      let before = get(inventoryPath(h,id));
+      let after = getAfter(inventoryPath(h,id));
+      let oldXp = before.data.get('experience',{});
+      let newXp = after.data.get('experience',{});
+      let oldBank = before.data.get('bankedXp',0);
+      let buddy = before.data.get('buddyId','');
+      let expectedBank = oldBank + amount > 1980 ? 1980 : oldBank + amount;
+      let expectedXp = oldXp.get(buddy,0) + oldBank + amount > 1980
+        ? 1980 : oldXp.get(buddy,0) + oldBank + amount;
+      return validInventoryMove(h,id)
+        && after.data.owned == before.data.owned
+        && after.data.reserved == before.data.reserved
+        && after.data.seen == before.data.seen
+        && after.data.get('buddyId','') == buddy
+        && after.data.get('evolutionLog',{}) == before.data.get('evolutionLog',{})
+        && ((newXp == oldXp && after.data.get('bankedXp',0) == expectedBank)
+          || (buddy != '' && newXp.diff(oldXp).affectedKeys().hasOnly([buddy])
+             && newXp.get(buddy,0) == expectedXp
+             && after.data.get('bankedXp',0) == 0));
+    }
+    function validInventoryShape(d) {
+      return d.keys().hasAll(['owned','reserved','seen','version','updatedAt'])
+        && d.keys().hasOnly(['owned','reserved','seen','version','updatedAt',
+          'buddyId','experience','evolutionLog','bankedXp'])
+        && d.owned is map && d.reserved is map && d.seen is map
+        && d.get('buddyId','') is string && d.get('buddyId','').size() <= 180
+        && d.get('experience',{}) is map && d.get('experience',{}).size() <= 1025
+        && d.get('bankedXp',0) is int && d.get('bankedXp',0) >= 0 && d.get('bankedXp',0) <= 1980
+        && d.get('evolutionLog',{}) is map && d.get('evolutionLog',{}).size() <= 1025
+        && d.owned.size() <= 1025 && d.reserved.size() <= 1025 && d.seen.size() <= 1025
+        && d.version is int && d.version > 0
+        && d.updatedAt == request.time;
+    }
+
+    // 特別ボーナス（v3.11.1）
+    function bonusGrantPath(h, grantId) {
+      return /databases/$(database)/documents/households/$(h)/bonusGrants/$(grantId);
+    }
+    function validParentBonusGrant() {
+      let d = request.resource.data;
+      return d.keys().hasAll(['childId','status','grantedBy','grantedAt'])
+        && d.keys().hasOnly(['childId','status','grantedBy','grantedAt'])
+        && d.childId in ['older','younger'] && d.status == 'available'
+        && d.grantedBy == request.auth.uid && d.grantedAt == request.time;
+    }
+    function validKidBonusConsume(h, grantId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let rewardId = 'bonus_' + grantId;
+      let reward = getAfter(rewardPath(h,rewardId));
+      return prev.status == 'available'
+        && prev.childId in ['older','younger']
+        && next.diff(prev).affectedKeys().hasOnly(['status','claimedBy','claimedAt','rewardId'])
+        && next.diff(prev).affectedKeys().hasAll(['status','claimedBy','claimedAt','rewardId'])
+        && next.status == 'claimed' && next.claimedBy == request.auth.uid
+        && next.claimedAt == request.time && next.rewardId == rewardId
+        && reward.data.kind == 'special_bonus'
+        && reward.data.grantId == grantId && reward.data.childId == prev.childId
+        && reward.data.claimedBy == request.auth.uid && reward.data.claimedAt == request.time
+        && get(profilePath(h,prev.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis();
+    }
+    function validKidBonusReward(h, rewardId) {
+      let d = request.resource.data;
+      let before = get(bonusGrantPath(h,d.grantId));
+      let after = getAfter(bonusGrantPath(h,d.grantId));
+      return d.keys().hasAll(['childId','grantId','sessionId','dayIndex','kind','claimedBy','claimedAt','catalogVersion'])
+        && d.keys().hasAll(['pokemonNo'])
+        && d.keys().hasOnly(['childId','grantId','sessionId','dayIndex','kind','claimedBy','claimedAt','catalogVersion','pokemonNo'])
+        && d.childId in ['older','younger']
+        && d.grantId is string && d.grantId.size() > 0 && d.grantId.size() <= 180
+        && rewardId == 'bonus_' + d.grantId
+        && d.kind == 'special_bonus' && d.catalogVersion == 3
+        && d.pokemonNo is int && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+        && validInventoryNewReward(h,d.childId,d.pokemonNo,rewardId)
+        && d.sessionId == '' && d.dayIndex == rewardDayOfRequest()
+        && d.claimedBy == request.auth.uid && d.claimedAt == request.time
+        && before.data.status == 'available' && before.data.childId == d.childId
+        && after.data.status == 'claimed' && after.data.rewardId == rewardId
+        && after.data.claimedBy == request.auth.uid && after.data.claimedAt == request.time
+        && get(profilePath(h,d.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis();
+    }
+
+    // 活動申請・承認（v3.10, v3.11.3）
+    function activityPath(h, id) {
+      return /databases/$(database)/documents/households/$(h)/activityRequests/$(id);
+    }
+    function activityRewardPath(h, rid) {
+      return /databases/$(database)/documents/households/$(h)/rewards/$(rid);
+    }
+    function validActivityKind(kind) {
+      return kind in ['study','reading','exercise','helping','cleaning',
+        'creating','practicing','trying','persevering','kindness','upstairs21'];
+    }
+    function activitySlotPath(h, id, day, n) {
+      let name = id + '_' + string(day) + '_' + string(n);
+      return /databases/$(database)/documents/households/$(h)/activitySlots/$(name);
+    }
+    function validKidActivityRequest(h, id) {
+      let d = request.resource.data;
+      let day = rewardDayOfRequest();
+      let slot = activitySlotPath(h,d.childId,day,d.slotNo);
+      return d.keys().hasAll(['childId','activityKind','dayIndex','status','requestedBy','requestedAt','slotNo','candidateNo'])
+        && d.keys().hasOnly(['childId','activityKind','dayIndex','status','requestedBy','requestedAt','slotNo','candidateNo'])
+        && d.childId in ['older','younger'] && validActivityKind(d.activityKind)
+        // 『21時までに2階に上がる』も他の活動同様いつでも申請可。
+        && d.dayIndex == day && id == d.childId + '_' + string(day) + '_' + d.activityKind
+        && d.status == 'pending'
+        && d.requestedBy == request.auth.uid && d.requestedAt == request.time
+        && d.slotNo is int && d.slotNo in [1,2,3,4,5,6,7,8,9,10,11]
+        && d.candidateNo is int
+        && (d.slotNo <= 5
+          ? (d.candidateNo >= 1 && d.candidateNo <= 1025
+             && validInventoryReservation(h,d.childId,d.candidateNo,id))
+          : d.candidateNo == 0)
+        && existsAfter(slot) && getAfter(slot).data.requestId == id
+        && getAfter(slot).data.updatedAt == request.time;
+    }
+    function validKidActivityRetry(h,id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      return prev.status == 'rejected'
+        && prev.keys().hasAll(['reviewedAt','reviewedBy'])
+        && prev.childId == next.childId && prev.activityKind == next.activityKind
+        && prev.dayIndex == next.dayIndex
+        && !next.keys().hasAny(['reviewedAt','reviewedBy'])
+        && next.diff(prev).affectedKeys().hasOnly([
+          'status','requestedBy','requestedAt','slotNo','candidateNo','reviewedAt','reviewedBy'
+        ]) && validKidActivityRequest(h,id);
+    }
+    function validKidActivitySlot(h, id) {
+      let d = request.resource.data;
+      let rid = d.requestId;
+      let day = rewardDayOfRequest();
+      return d.keys().hasAll(['childId','dayIndex','slotNo','requestId','candidateNo','updatedAt'])
+        && d.keys().hasOnly(['childId','dayIndex','slotNo','requestId','candidateNo','updatedAt'])
+        && d.childId in ['older','younger']
+        && d.dayIndex == day && d.slotNo is int && d.slotNo in [1,2,3,4,5,6,7,8,9,10,11]
+        && id == d.childId + '_' + string(day) + '_' + string(d.slotNo)
+        && rid is string && rid.size() > 0 && rid.size() <= 180
+        && d.updatedAt == request.time
+        && d.candidateNo is int
+        && (d.slotNo <= 5
+          ? (d.candidateNo >= 1 && d.candidateNo <= 1025)
+          : d.candidateNo == 0)
+        && (!exists(activityPath(h,rid)) || get(activityPath(h,rid)).data.status == 'rejected')
+        && existsAfter(activityPath(h,rid))
+        && getAfter(activityPath(h,rid)).data.requestedAt == request.time
+        && getAfter(activityPath(h,rid)).data.requestedBy == request.auth.uid
+        && getAfter(activityPath(h,rid)).data.childId == d.childId
+        && getAfter(activityPath(h,rid)).data.dayIndex == day
+        && getAfter(activityPath(h,rid)).data.slotNo == d.slotNo
+        && getAfter(activityPath(h,rid)).data.candidateNo == d.candidateNo;
+    }
+    function validParentActivitySlotRelease(h) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let rid = prev.requestId;
+      return prev.requestId is string && rid.size() > 0
+        && next.diff(prev).affectedKeys().hasOnly(['requestId','candidateNo','updatedAt'])
+        && next.requestId == '' && next.candidateNo == 0 && next.updatedAt == request.time
+        && get(activityPath(h,rid)).data.status == 'pending'
+        && getAfter(activityPath(h,rid)).data.status == 'rejected'
+        && getAfter(activityPath(h,rid)).data.reviewedAt == request.time
+        && getAfter(activityPath(h,rid)).data.reviewedBy == request.auth.uid;
+    }
+    function validParentActivityDecision(h, id) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let rewardId = 'activity_' + id;
+      let withSlot = prev.keys().hasAny(['slotNo']);
+      let xpOnly = prev.get('slotNo',0) > 5 && prev.get('slotNo',0) <= 11
+        && prev.get('candidateNo',-1) == 0;
+      return prev.status == 'pending'
+        && next.diff(prev).affectedKeys().hasOnly(['status','reviewedAt','reviewedBy'])
+        && next.status in ['approved','rejected']
+        && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
+        && (xpOnly
+          ? (next.status == 'rejected' || validInventoryXpCredit(h,prev.childId,2))
+          : validInventoryDecision(h,prev.childId,prev.candidateNo,id,rewardId,next.status == 'approved'))
+        && (next.status == 'rejected' || get(profilePath(h,prev.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis())
+        && (next.status == 'rejected' || (xpOnly
+          ? !existsAfter(activityRewardPath(h,rewardId))
+          : (existsAfter(activityRewardPath(h,rewardId))
+            && getAfter(activityRewardPath(h,rewardId)).data.sourceRequestId == id
+            && getAfter(activityRewardPath(h,rewardId)).data.claimedAt == request.time
+            && getAfter(activityRewardPath(h,rewardId)).data.claimedBy == request.auth.uid)))
+        && (!withSlot || (next.status == 'approved'
+          ? get(activitySlotPath(h,prev.childId,prev.dayIndex,prev.slotNo)).data.requestId == id
+          : getAfter(activitySlotPath(h,prev.childId,prev.dayIndex,prev.slotNo)).data.requestId == ''));
+    }
+    function validParentActivityReward(h, rewardId) {
+      let d = request.resource.data;
+      let rid = d.get('sourceRequestId','');
+      let before = get(activityPath(h,rid));
+      let after = getAfter(activityPath(h,rid));
+      let v3 = d.catalogVersion == 3;
+      return d.keys().hasAll(['childId','dayIndex','kind','activityKind','sourceRequestId','sessionId','claimedBy','claimedAt','catalogVersion'])
+        && d.keys().hasOnly(['childId','dayIndex','kind','activityKind','sourceRequestId','sessionId','claimedBy','claimedAt','catalogVersion','pokemonNo'])
+        && d.kind == 'activity' && d.catalogVersion == 3
+        && d.pokemonNo is int && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+        && validInventoryDecision(h,d.childId,d.pokemonNo,rid,rewardId,true)
+        && validActivityKind(d.activityKind)
+        && d.childId in ['older','younger']
+        && d.sessionId == '' && d.claimedBy == request.auth.uid
+        && d.claimedAt == request.time
+        && rid == d.childId + '_' + string(d.dayIndex) + '_' + d.activityKind
+        && rewardId == 'activity_' + rid
+        && before != null && before.data.status == 'pending'
+        && after != null && after.data.status == 'approved'
+        && after.data.reviewedAt == request.time && after.data.reviewedBy == request.auth.uid
+        && before.data.childId == d.childId && before.data.dayIndex == d.dayIndex
+        && before.data.activityKind == d.activityKind
+        && get(profilePath(h,d.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis()
+        && (v3 ? (d.keys().hasAll(['pokemonNo']) && d.pokemonNo is int
+           && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+           && before.data.get('candidateNo',0) == d.pokemonNo)
+           : (!d.keys().hasAny(['pokemonNo']) && !before.data.keys().hasAny(['candidateNo'])));
+    }
+    function validActivityAudit(h,d) {
+      let id = d.sessionId;
+      return d.childId in ['older','younger'] && id is string && id.size() > 0
+        && ((isKid(h) && d.actorRole == 'kid' && d.action == 'activity_request'
+          && existsAfter(activityPath(h,id))
+          && getAfter(activityPath(h,id)).data.requestedAt == request.time
+          && getAfter(activityPath(h,id)).data.requestedBy == request.auth.uid)
+          || (isParent(h) && d.actorRole == 'parent'
+          && d.action in ['activity_approve','activity_reject']
+          && existsAfter(activityPath(h,id))
+          && getAfter(activityPath(h,id)).data.reviewedAt == request.time
+          && getAfter(activityPath(h,id)).data.reviewedBy == request.auth.uid
+          && getAfter(activityPath(h,id)).data.status == (d.action == 'activity_approve' ? 'approved' : 'rejected')));
+    }
+
+    function teamNumberOk(t,i) { return t[i] is int && t[i] >= 0 && t[i] <= 1025; }
+    function teamUnique(t,a,b) { return t[a] == 0 || t[b] == 0 || t[a] != t[b]; }
+    function validKidFavoriteTeamUpdate() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      let team = request.resource.data.get('favoriteTeam',[]);
+      return keys.hasOnly(['favoriteTeam','teamUpdatedAt'])
+        && keys.hasAll(['favoriteTeam','teamUpdatedAt'])
+        && request.resource.data.get('teamUpdatedAt',null) == request.time
+        && team is list && team.size() == 5
+        && teamNumberOk(team,0) && teamNumberOk(team,1) && teamNumberOk(team,2)
+        && teamNumberOk(team,3) && teamNumberOk(team,4)
+        && teamUnique(team,0,1) && teamUnique(team,0,2)
+        && teamUnique(team,0,3) && teamUnique(team,0,4)
+        && teamUnique(team,1,2) && teamUnique(team,1,3)
+        && teamUnique(team,1,4) && teamUnique(team,2,3)
+        && teamUnique(team,2,4) && teamUnique(team,3,4);
+    }
+
+    // v3.13: ランダムで3匹を逃がす（保護者のみ）。
+    // 現在の獲得レコードの削除は禁止。3件の取消と通知イベントを同一トランザクションにする。
+    function releasePath(h, rid) {
+      return /databases/$(database)/documents/households/$(h)/pokemonReleases/$(rid);
+    }
+    function validParentPokemonReleaseReward(h, rewardId) {
+      let prev = resource.data;
+      let next = request.resource.data;
+      let rid = next.get('releaseEventId','');
+      return isParent(h)
+        && prev.get('revoked',false) != true
+        && prev.childId in ['older','younger']
+        && next.diff(prev).affectedKeys().hasOnly([
+          'revoked','revokedReason','revokedAt','revokedBy','releaseEventId'
+        ])
+        && next.revoked == true && next.revokedReason == 'released'
+        && next.revokedAt == request.time && next.revokedBy == request.auth.uid
+        && rid is string && rid.size() > 0 && rid.size() <= 180
+        && existsAfter(releasePath(h,rid))
+        && getAfter(releasePath(h,rid)).data.childId == prev.childId
+        && rewardId in getAfter(releasePath(h,rid)).data.rewardIds
+        && validInventoryMove(h,prev.childId);
+    }
+    function releaseRewardIsLinked(h,eventId,id,rid) {
+      let after = getAfter(rewardPath(h,rid));
+      return after != null && after.data.childId == id
+        && after.data.revoked == true
+        && after.data.revokedReason == 'released'
+        && after.data.releaseEventId == eventId
+        && after.data.revokedBy == request.auth.uid
+        && after.data.revokedAt == request.time;
+    }
+    function validParentPokemonReleaseEvent(h,eventId) {
+      let d = request.resource.data;
+      let profile = getAfter(profilePath(h,d.childId));
+      return isParent(h)
+        && d.keys().hasAll(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
+        && d.keys().hasOnly(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
+        && d.childId in ['older','younger']
+        && d.createdBy == request.auth.uid && d.createdAt == request.time
+        && d.reason == 'rules_violation' && d.count is int && d.count in [1,2,3]
+        && d.rewardIds is list && d.rewardIds.size() == d.count
+        && d.rewardIds[0] is string
+        && (d.count < 2 || (d.rewardIds[1] is string && d.rewardIds[0] != d.rewardIds[1]))
+        && (d.count < 3 || (d.rewardIds[2] is string && d.rewardIds[0] != d.rewardIds[2] && d.rewardIds[1] != d.rewardIds[2]))
+        && d.pokemon is list && d.pokemon.size() == d.count
+        && profile != null
+        && profile.data.pokemonLastReleaseEventId == eventId
+        && profile.data.updatedAt == request.time
+        && validInventoryMove(h,d.childId)
+        && releaseRewardIsLinked(h,eventId,d.childId,d.rewardIds[0])
+        && (d.count < 2 || releaseRewardIsLinked(h,eventId,d.childId,d.rewardIds[1]))
+        && (d.count < 3 || releaseRewardIsLinked(h,eventId,d.childId,d.rewardIds[2]));
+    }
+
+    match /households/{h} {
+
+      // v3.13.4: kid feedback & parent triage
+      match /feedbackReports/{reportId} {
+        // iPadアカウントは共有のため、同じ家族の子ども同士のデータ分離は
+        // UI上のフィルタのみ。Firestore上では家族アカウントで参照可能。
+        allow read: if isMember(h);
+      
+        allow create: if isKid(h)
+          && request.resource.data.keys().hasAll([
+            'childId','type','title','description','status',
+            'createdBy','createdAt','parentReply','reviewedBy','reviewedAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'childId','type','title','description','status',
+            'createdBy','createdAt','parentReply','reviewedBy','reviewedAt'
+          ])
+          && request.resource.data.childId in ['older','younger']
+          && request.resource.data.type in ['feature','bug']
+          && request.resource.data.title is string
+          && request.resource.data.title.size() >= 2
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.description is string
+          && request.resource.data.description.size() >= 2
+          && request.resource.data.description.size() <= 1000
+          && request.resource.data.status == 'new'
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.parentReply == ''
+          && request.resource.data.reviewedBy == ''
+          && request.resource.data.reviewedAt == null;
+      
+        allow update: if isParent(h)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','parentReply','reviewedBy','reviewedAt'
+          ])
+          && request.resource.data.status in ['new','reviewing','planned','done','declined']
+          && request.resource.data.parentReply is string
+          && request.resource.data.parentReply.size() <= 300
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.reviewedAt == request.time;
+      
+        allow delete: if false;
+      }
+
+      match /members/{memberUid} {
+        allow get: if signedIn() && (request.auth.uid == memberUid || isParent(h));
+        allow list: if isParent(h);
+        allow write: if false;
+      }
+      match /settings/{settingsId} {
+        allow read: if isMember(h);
+        allow create, update: if isParent(h) && settingsId == 'main';
+        allow delete: if false;
+      }
+      match /profiles/{playerId} {
+        allow read: if isMember(h);
+        allow create: if isParent(h) && playerId in ['older','younger'];
+        allow update: if (isParent(h) || (isKid(h) && (
+          validKidFavoriteTeamUpdate()
+          || validKidPauseStart()
+          || validKidPauseResume()
+          || validKidPausedGameEnd(h,playerId)
+          || validKidPausedVideoEnd(h,playerId)
+          || validKidPlayerUpdate(h, playerId)
+          || validV33PlayerUpdate(h, playerId)
+          || validKidRetroStart(h, playerId)
+          || validKidRetroCorrection(h, playerId)
+          || validV33UndoStart()
+          || validV33UndoEnd(h, playerId)
+          || validKidManualRestUpdate(h, playerId)
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['nightResumeAt','nightResumeWindowEnd'])
+              && validKidNightResume(h, playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['videoStartedAt','videoDurationMinutes'])
+              && validKidVideoUpdate(h, playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['rewardLastSessionId','rewardLastDayIndex'])
+              && validKidRewardProfileUpdate(h, playerId))
+          ))) && playerId in ['older','younger'];
+        allow delete: if false;
+      }
+      match /sessions/{sid} {
+        allow read: if isMember(h);
+        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
+              && validKidPausedVideoSessionCreate(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','undoPrevious','childId'])
+              && validKidPausedGameSessionCreate(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['activityType','childId'])
+              && validKidVideoSessionCreate(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['undoPrevious','childId'])
+              && validV33SessionCreate(h,sid))
+          || (isKid(h)
+              && request.resource.data.keys().hasAll(['childId','start','end','duration','deviceId','createdAt','createdBy','edited'])
+              && request.resource.data.keys().hasOnly(['childId','start','end','duration','deviceId','createdAt','createdBy','edited'])
+              && request.resource.data.childId in ['older','younger']
+              && request.resource.data.start is int
+              && request.resource.data.end is int && request.resource.data.end > request.resource.data.start
+              && request.resource.data.duration == request.resource.data.end - request.resource.data.start
+              && request.resource.data.duration <= 604800000
+              && request.resource.data.deviceId in ['sw1','sw2']
+              && request.resource.data.createdAt == request.time
+              && request.resource.data.createdBy == request.auth.uid
+              && request.resource.data.edited == false
+              && getAfter(/databases/$(database)/documents/households/$(h)/profiles/$(request.resource.data.childId)).data.lastSessionId == sid
+              && getAfter(/databases/$(database)/documents/households/$(h)/profiles/$(request.resource.data.childId)).data.activeStart == 0);
+        allow update: if isParent(h);
+        allow delete: if isKid(h) && validV33SessionDelete(h);
+        allow create: if isParent(h) && validParentForgottenSessionCreate(h,sid);
+      }
+      match /auditLogs/{logId} {
+        allow read: if isParent(h);
+        allow create: if validV34Audit(h);
+        allow update, delete: if false;
+      }
+      match /activityRequests/{requestId} {
+        allow read: if isMember(h);
+        allow create: if isKid(h) && validKidActivityRequest(h,requestId);
+        allow update: if (isKid(h) && validKidActivityRetry(h,requestId))
+          || (isParent(h) && validParentActivityDecision(h,requestId));
+        allow delete: if false;
+      }
+      match /activitySlots/{slotId} {
+        allow read: if isMember(h);
+        allow create: if isKid(h) && validKidActivitySlot(h,slotId);
+        allow update: if (isKid(h) && resource.data.requestId == '' && validKidActivitySlot(h,slotId))
+          || (isParent(h) && validParentActivitySlotRelease(h));
+        allow delete: if false;
+      }
+      match /bonusGrants/{grantId} {
+        allow read: if isMember(h);
+        allow create: if isParent(h) && validParentBonusGrant();
+        allow update: if isKid(h) && validKidBonusConsume(h,grantId);
+        allow delete: if false;
+      }
+
+      // 既存のズル判定の報酬取消・復旧。逃走した個体の復旧には使用不可。
+      function validParentGameRewardRevocation() {
+        let prev = resource.data;
+        let next = request.resource.data;
+        return prev.kind == 'rest_completed'
+          && prev.get('revokedReason','') != 'released'
+          && next.diff(prev).affectedKeys().hasOnly(['revoked','revokedAt','revokedBy','restoredAt','restoredBy'])
+          && ((prev.get('revoked',false) == false
+              && next.revoked == true && next.revokedBy == request.auth.uid
+              && next.revokedAt == request.time)
+            || (prev.get('revoked',false) == true
+              && next.revoked == false && next.restoredBy == request.auth.uid
+              && next.restoredAt == request.time));
+      }
+      // Parent initializes after reading the existing rewards and pending challenges.
+      // All future acquisitions and releases write this same versioned document atomically.
+      match /pokemonInventory/{childId} {
+        allow read: if isMember(h) && childId in ['older','younger'];
+        allow create: if isParent(h) && childId in ['older','younger']
+          && validInventoryShape(request.resource.data) && request.resource.data.version == 1;
+        allow update: if isMember(h) && childId in ['older','younger']
+          && validInventoryShape(request.resource.data)
+          && request.resource.data.version == resource.data.version + 1;
+        allow delete: if false;
+      }
+      match /rewards/{rewardId} {
+        allow read: if isMember(h);
+        allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
+          ? validKidBonusReward(h,rewardId) : validKidPokemonReward(h,rewardId)))
+          || (isParent(h) && validParentActivityReward(h,rewardId));
+        allow update: if isParent(h) && (
+          validParentGameRewardRevocation()
+          || validParentPokemonReleaseReward(h,rewardId));
+        allow delete: if false;
+      }
+      match /pokemonReleases/{eventId} {
+        allow read: if isMember(h);
+        allow create: if validParentPokemonReleaseEvent(h,eventId);
+        allow update, delete: if false;
+      }
+      match /presence/{presenceId} {
+        allow read: if isMember(h);
+        allow create, update: if isKid(h) && presenceId == 'ipad'
+          && request.resource.data.keys().hasOnly(['lastSeenAt','device'])
+          && request.resource.data.lastSeenAt == request.time
+          && request.resource.data.device == 'ipad';
+        allow delete: if false;
+      }
+    }
+  }
+}
