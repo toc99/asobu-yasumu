@@ -1,8 +1,9 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.4';
-import {setupFeedback} from './feedback.js?v=3.13.4';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.5';
+import {effectivePausedMillis} from './pause-timing.js?v=3.13.5';
+import {setupFeedback} from './feedback.js?v=3.13.5';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -218,9 +219,8 @@ function waitingRemaining(p,now=Date.now()){
 function pauseStartedMillis(p){return stampMillis(p?.pauseStartedAt);}
 function isPlayPaused(p){return pauseStartedMillis(p)>0&&(Number(p?.activeStart)>0||videoStartedMillis(p)>0);}
 function totalPausedMillis(p,now=Date.now()){
-  const accumulated=Math.max(0,Number(p?.pauseTotalMs)||0);
-  const pauseStart=pauseStartedMillis(p);
-  return accumulated+(pauseStart?Math.max(0,now-pauseStart):0);
+  // No pauses in this session => never inherit a stale pauseTotalMs from a previous session.
+  return effectivePausedMillis(p,now);
 }
 function activeElapsed(p,start,now=Date.now()){
   return start>0?Math.max(0,now-start-totalPausedMillis(p,now)):0;
@@ -249,7 +249,8 @@ async function togglePlayPause(id){
       if(!resume){
         const count=Number(p.pauseCount)||0;
         if(count>=100)throw Error('一時停止回数の上限に達しました。');
-        tx.update(ref,{pauseStartedAt:dbApi.serverTimestamp(),pauseCount:count+1,updatedAt:dbApi.serverTimestamp()});
+        tx.update(ref,{pauseStartedAt:dbApi.serverTimestamp(),pauseCount:count+1,
+          ...(count===0?{pauseTotalMs:0}:{}),updatedAt:dbApi.serverTimestamp()});
         appendAudit(tx,'play_pause',id,'利用中','一時停止');
       }else{
         const pausedFor=now-pauseStartedMillis(p);
@@ -1743,7 +1744,8 @@ async function startVideo(id){return runLocked(async()=>{
     if(waitingRemaining(p,Date.now())>0)throw Error('まだ休憩中です。動画を見る前に休憩を終えてください。');
     const configured=Number(settingsSnap.exists()?settingsSnap.data().videoLimitMinutes:30)||30;
     if(!Number.isInteger(configured)||configured<1||configured>240)throw Error('保護者設定の動画時間が正しくありません。');
-    tx.update(ref,{videoStartedAt:dbApi.serverTimestamp(),videoDurationMinutes:configured,updatedAt:dbApi.serverTimestamp()});
+    tx.update(ref,{videoStartedAt:dbApi.serverTimestamp(),videoDurationMinutes:configured,
+      pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:dbApi.serverTimestamp()});
     appendAudit(tx,'video_start',id,'動画視聴なし',`${configured}分の動画タイマーを開始`);
     return configured;
   });
@@ -1763,8 +1765,9 @@ async function stopVideo(id){return runLocked(async()=>{
     // 既存の休憩が残る特殊なケースでも、待ち時間を短くしない。
     const until=Math.max(Number(p.restUntil)||0,end+dur);
     tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,endedAt:null,
-      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
-      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
+      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,
+      // Normalize even an old session where pauseCount=0 but pauseTotalMs was stale.
+      pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:dbApi.serverTimestamp()});
     tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
       createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
       ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}: {})});
