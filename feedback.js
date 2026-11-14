@@ -1,6 +1,6 @@
 // v3.13.4 — family feedback (kid requests / bug reports / parent review).
 // Isolated from game sessions, rewards and the existing application state.
-export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel}){
+export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast}){
   const $=id=>document.getElementById(id);
   const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const types={feature:'こんなきのうがほしい',bug:'うごかない・こまった'};
@@ -77,13 +77,13 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel}){
     const status=card.querySelector('[data-feedback-status]').value;
     const reply=card.querySelector('[data-feedback-reply]').value.trim();
     if(!Object.hasOwn(parentStatuses,status)||reply.length>300)return;
-    if(row.status===status&&(row.parentReply||'')===reply){alert('変更はありません。');return;}
+    if(row.status===status&&(row.parentReply||'')===reply){toast('変更はありません。');return;}
     const button=card.querySelector('[data-feedback-save]');saving=true;button.disabled=true;
     try{
       verify();
       await dbApi.updateDoc(dbApi.doc(collection(),reportId),{status,parentReply:reply,reviewedBy:uid,reviewedAt:dbApi.serverTimestamp()});
-      alert('対応内容を保存しました。');
-    }catch(err){console.error('feedback review',err);alert(errorText(err));}
+      toast('対応内容を保存しました。');
+    }catch(err){console.error('feedback review',err);toast(errorText(err));}
     finally{saving=false;if(button.isConnected)button.disabled=false;}
   }
   $('feedback-form')?.addEventListener('submit',submit);
