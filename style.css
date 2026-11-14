@@ -559,6 +559,7 @@ html,body{background:radial-gradient(circle at 4% 0%,#fff2e7 0%,transparent 24%)
 .ui-focus-description strong{color:#244b69}
 .ui-focus-buttons button{background:#f1f5f9;border-color:#e2e9f2;min-height:54px;min-width:126px}
 .ui-focus-buttons button[aria-pressed="true"]{background:#e5f3ff;border-color:#72a8d0;color:#1d577e;box-shadow:none}
+#kid-primary-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
 .ui-primary-nav{grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;padding:7px;background:#e7eef5;border:1px solid #d4e1ec;border-radius:20px;margin:12px 0 5px;box-shadow:0 6px 18px #25466615}
 .ui-primary-nav.parent-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
 .ui-nav-button{min-height:66px;border-radius:14px;color:#43637c;font-weight:900;font-size:15px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.35}
