@@ -1,7 +1,7 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.5';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.6';
 import {effectivePausedMillis} from './pause-timing.js?v=3.13.5';
 import {setupFeedback} from './feedback.js?v=3.13.5';
 
@@ -2478,11 +2478,32 @@ async function loadSelectedDay(){const begin=selectedDay,end=addDays(begin,1);tr
   const docs=await dbApi.getDocs(q);model.historyExtra={day:begin,items:docs.docs.map(d=>({...d.data(),sid:d.id}))};renderHistory();
  }catch(e){toast('過去の履歴取得に失敗しました：'+errorText(e));}}
 function download(filename,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
+/* v3.13.6: Export only activity fields needed for usage analysis, excluding private profile details. */
+async function exportActivityAnalysis(){
+ if(!isParentPage)return;
+ try{
+  if(!uid||!navigator.onLine)throw Error('インターネットに接続してから操作してください。');
+  const snapshot=await dbApi.getDocsFromServer(dbApi.collection(db,'households',householdId,'activityRequests'));
+  const activityRequests=snapshot.docs.map(doc=>{
+    const d=doc.data();
+    return {childId:d.childId||'',activityKind:d.activityKind||'',status:d.status||'',
+      dayIndex:Number.isInteger(d.dayIndex)?d.dayIndex:null,
+      requestedAtMs:stampMillis(d.requestedAt)||null,reviewedAtMs:stampMillis(d.reviewedAt)||null,
+      slotNo:Number.isInteger(d.slotNo)?d.slotNo:null};
+  });
+  const data={format:'asobu-yasumu-activity-analysis-v1',appVersion:version,exportedAt:new Date().toISOString(),
+    recordCount:activityRequests.length,activityRequests};
+  download('asobu-yasumu-activity-analysis-'+dateKey(Date.now())+'.json',
+    new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'}));
+  toast('活動実績JSONを保存しました（'+activityRequests.length+'件）');
+ }catch(e){console.error('活動実績JSONの出力に失敗',e);toast('活動実績の取得に失敗：'+errorText(e));}
+}
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
- if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));const inventorySnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonInventory'));const pokemonInventory=inventorySnap.docs.map(d=>({...d.data(),childId:d.id}));const releaseSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonReleases'));const pokemonReleases=releaseSnap.docs.map(d=>({...d.data(),releaseEventId:d.id}));const data={version:5,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants,pokemonInventory,pokemonReleases};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));// Security Rules allow get only for the two known child IDs, not an unrestricted list query.
+ const inventoryDocs=await Promise.all(ids.map(id=>dbApi.getDoc(pokemonInventoryRef(id))));const pokemonInventory=inventoryDocs.filter(d=>d.exists()).map(d=>({...d.data(),childId:d.id}));const releaseSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonReleases'));const pokemonReleases=releaseSnap.docs.map(d=>({...d.data(),releaseEventId:d.id}));const data={version:5,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants,pokemonInventory,pokemonReleases};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
- }catch(e){toast(errorText(e));}}
+ }catch(e){console.error('JSON/CSVバックアップの出力に失敗',e);toast('バックアップに失敗：'+errorText(e));}}
 async function exportAuditCsv(){
  if(!isParentPage)return;
  try{
@@ -2578,6 +2599,7 @@ function initUiEvents(){
  $('settings-form')?.addEventListener('submit',saveSettings);
  $('edit-form')?.addEventListener('submit',editHistory);
  $('export-json')?.addEventListener('click',()=>exportData('json'));
+ $('export-activities')?.addEventListener('click',exportActivityAnalysis);
  $('export-csv')?.addEventListener('click',()=>exportData('csv'));
 
  $('history-date').value=dateKey(selectedDay);$('history-date').max=dateKey(Date.now());
