@@ -883,33 +883,58 @@ async function saveTeamChoice(no){
     toast(changed?no===0?'チームから はずしたよ！':'マイチームを かえたよ！':'このポケモンは もう チームに いるよ！');
   });
 }
-function lastSessionFor(id){
+// v3.13.3: ゲーム終了日（JST）を報酬日として扱う。受け取る日ではない。
+function gameRewardDateLabel(day,now=Date.now()){
+  const today=rewardDayIndex(now);
+  if(day===today)return '今日分';
+  if(day===today-1)return '昨日分';
+  if(day===today-2)return '一昨日分';
+  const date=new Date(day*POKEMON_DAY_MS-POKEMON_JST_MS);
+  return (date.getUTCMonth()+1)+'/'+date.getUTCDate()+'分';
+}
+function gameRewardCandidates(id,now=Date.now()){
   const p=model.profiles[id];
-  return model.sessions.find(s=>s.sid===p?.lastSessionId && s.childId===id) || null;
+  if(!p||!model.rewardsLoaded)return [];
+  const claimedDays=new Set(model.rewards.filter(r=>r.childId===id && r.kind==='rest_completed')
+    .map(r=>Number(r.dayIndex)));
+  const claimedSessions=new Set(model.rewards.filter(r=>r.childId===id && r.kind==='rest_completed')
+    .map(r=>r.sessionId));
+  const byDay=new Map();
+  for(const session of model.sessions){
+    if(session.childId!==id||!session.sid||session.activityType==='video'
+      ||session.createdBy!==uid||!honestCorrectionAllowed(session)
+      ||!Number.isFinite(session.end)||!Number.isFinite(session.duration)
+      ||session.duration<MIN||session.end>now||session.end<now-2*DAY
+      ||claimedSessions.has(session.sid)||session.sid===p.rewardLastSessionId
+      ||session.sid===p.rewardBlockedSessionId)continue;
+    const day=rewardDayIndex(session.end);
+    if(claimedDays.has(day))continue;
+    const old=byDay.get(day);
+    if(!old||session.end>old.end)byDay.set(day,session);
+  }
+  return [...byDay.entries()].sort(([a],[b])=>a-b)
+    .map(([day,session])=>({day,session,
+      ready:now>=session.end+session.duration &&
+        (p.lastSessionId!==session.sid || waitingRemaining(p,now)<=0)}));
 }
 function claimEligibility(id,now=Date.now()){
   const p=model.profiles[id];
-  if(!p || !model.rewardsLoaded)return {ok:false,label:'図鑑を読み込み中'};
+  if(!p||!model.rewardsLoaded)return {ok:false,label:'図鑑を読み込み中'};
   if(rewardSuspended(p,now))return {ok:false,label:rewardSuspensionText(p,now)};
-  const day=rewardDayIndex(now);
-  // 1日1回のゲーム報酬。勉強・読書・運動の獲得は別枠。
-  if(model.rewards.some(r=>r.childId===id && r.kind==='rest_completed' && r.dayIndex===day)
-     || Number(p.rewardLastDayIndex)===day)
+  if(p.activeStart>0||videoStartedMillis(p)>0)
+    return {ok:false,label:'ゲーム・動画を終えてからチャレンジ'};
+  const candidates=gameRewardCandidates(id,now),ready=candidates.filter(c=>c.ready);
+  if(!canOperate()||!model.rewardsServerConfirmed||!inventoryReady(id))
+    return {ok:false,label:'クラウドを確認中'};
+  if(ready.length)return {ok:true,label:'ポケモンをゲット！',candidates:ready};
+  if(candidates.length)return {ok:false,label:'おやすみを守ったらゲット！'};
+  if(model.rewards.some(r=>r.childId===id&&r.kind==='rest_completed'&&Number(r.dayIndex)===rewardDayIndex(now)))
     return {ok:false,label:'きょうのゲーム報酬はゲット済み'};
-  const s=lastSessionFor(id);
-  if(!s || !s.sid || s.activityType==='video')return {ok:false,label:'ゲームと休憩を守ったらチャレンジ'};
-  if(s.sid===p.rewardLastSessionId||s.sid===p.rewardBlockedSessionId)return {ok:false,label:'このゲームのごほうびは おやすみ'};
-  if(s.createdBy!==uid || !honestCorrectionAllowed(s) || s.duration<MIN || s.end<now-2*DAY)
-    return {ok:false,label:'次のゲームと休憩でチャレンジ'};
-  if(p.activeStart>0||videoStartedMillis(p)>0)return {ok:false,label:'ゲーム・動画を終えてからチャレンジ'};
-  if(waitingRemaining(p,now)>0)return {ok:false,label:'おやすみを守ったらゲット！'};
-  if(!canOperate()||!model.rewardsServerConfirmed||!inventoryReady(id))return {ok:false,label:'クラウドを確認中'};
-  return {ok:true,label:'ポケモンをゲット！'};
+  return {ok:false,label:'ゲームと休憩を守ったらチャレンジ'};
 }
 function rewardActionFor(id,now=Date.now()){
   const state=claimEligibility(id,now),junior=!isParentPage&&ageModeForChild(id,now)==='junior';
   const caption=junior?'🎁 ゲームと おやすみの ごほうび':'🎁 ゲーム・休憩のごほうび';
-  const claimLabel=junior?'ポケモンを ゲット！':'ポケモンをゲット！';
   const simpleMessages={
     '図鑑を読み込み中':'ずかんを よんでいるよ',
     'きょうのゲーム報酬はゲット済み':'きょうの ポケモンは もう もらったよ',
@@ -921,9 +946,15 @@ function rewardActionFor(id,now=Date.now()){
     'クラウドを確認中':'つながるのを まってね'
   };
   const stateLabel=junior?(simpleMessages[state.label]||state.label):state.label;
-  return `<div class="pokemon-reward-action"><span>${caption}</span>${!isParentPage && state.ok
-    ? `<button class="btn pokemon-claim" data-pokemon-claim="${id}" ${busy?'disabled':''}>${claimLabel}</button>`
-    : `<small>${safe(stateLabel)}</small>`}</div>`;
+  if(!isParentPage&&state.ok){
+    const buttons=state.candidates.map(({day,session})=>{
+      const label=gameRewardDateLabel(day,now);
+      const text=junior?label+'の ポケモンを ゲット！':label+'のポケモンをゲット！';
+      return `<button class="btn pokemon-claim" data-pokemon-claim="${id}:${day}:${safe(session.sid)}" ${busy?'disabled':''}>${safe(text)}</button>`;
+    }).join('');
+    return `<div class="pokemon-reward-action"><span>${caption}</span><div class="pokemon-reward-day-actions">${buttons}</div></div>`;
+  }
+  return `<div class="pokemon-reward-action"><span>${caption}</span><small>${safe(stateLabel)}</small></div>`;
 }
 /* v3.13: release three captured Pokemon without deleting historic claims. */
 const releaseSeenFallback=new Set();
@@ -1103,33 +1134,40 @@ function announcePokemon(id,number){
   $('pokemon-result-link').href=officialPokedexUrl(number);
   if(!dialog.open)dialog.showModal();
 }
-async function claimPokemon(id){
-  if(isParentPage||!ids.includes(id))return;
-  const initial=claimEligibility(id);
-  if(!initial.ok)return toast(initial.label);
-  if(!inventoryReady(id))return toast('ポケモンの重複防止データを確認中です。保護者画面を開いてください。');
+async function claimPokemon(id,gameDay,sessionId){
+  if(isParentPage||!ids.includes(id)||!Number.isInteger(gameDay)||!sessionId)return;
+  const eligible=claimEligibility(id);
+  if(!eligible.ok)return toast(eligible.label);
+  const candidate=eligible.candidates.find(c=>c.day===gameDay&&c.session.sid===sessionId);
+  if(!candidate)return toast('その日の報酬状況が変わりました。画面を更新してください。');
   await runLocked(async()=>{
-    const day=rewardDayIndex(),ref=refProfile(id),reward=rewardRef(id,day),invRef=pokemonInventoryRef(id);
+    const ref=refProfile(id),reward=rewardRef(id,gameDay),invRef=pokemonInventoryRef(id);
     const result=await dbApi.runTransaction(db,async tx=>{
-      const [pSnap,rewardSnap,invSnap]=await Promise.all([tx.get(ref),tx.get(reward),tx.get(invRef)]);
+      const [pSnap,rewardSnap,invSnap,sSnap]=await Promise.all([
+        tx.get(ref),tx.get(reward),tx.get(invRef),tx.get(dbApi.doc(sessionsRef(),sessionId))
+      ]);
       const inventory=inventoryState(invSnap);
       if(!pSnap.exists())throw Error('プロフィールを取得できません。');
-      if(rewardSnap.exists())throw Error('きょうのポケモンはもうゲット済みです。');
-      const p=pSnap.data(),sid=p.lastSessionId;
-      if(!sid||sid===p.rewardLastSessionId || sid===p.rewardBlockedSessionId || rewardSuspended(p) || Number(p.rewardLastDayIndex)===day || p.activeStart>0 || videoStartedMillis(p)>0)
-        throw Error('このゲーム記録ではゲットできません。');
-      const sSnap=await tx.get(dbApi.doc(sessionsRef(),sid));
-      if(!sSnap.exists())throw Error('ゲームの記録を確認できません。');
-      const s=sSnap.data(),now=Date.now();
-      if(s.childId!==id||s.activityType==='video'||s.createdBy!==uid||!honestCorrectionAllowed(s)||s.duration<MIN||s.end<now-2*DAY)
-        throw Error('この記録は獲得の対象外です。次のゲーム終了後に挑戦してください。');
-      if(waitingRemaining(p,now)>0 || now<s.end+s.duration)
-        throw Error('休憩時間が終わるまで待ってください。');
+      if(rewardSnap.exists())throw Error('その日のポケモンはすでにゲット済みです。');
+      if(!sSnap.exists())throw Error('ゲーム記録が見つかりません。');
+      const p=pSnap.data(),session=sSnap.data(),now=Date.now();
+      if(!Number.isInteger(gameDay)||rewardDayIndex(session.end)!==gameDay
+        ||gameDay>rewardDayIndex(now)||session.childId!==id||session.activityType==='video'
+        ||session.createdBy!==uid||!honestCorrectionAllowed(session)||session.duration<MIN
+        ||session.end>now||session.end<now-2*DAY||now<session.end+session.duration
+        ||sessionId===p.rewardLastSessionId||sessionId===p.rewardBlockedSessionId
+        ||rewardSuspended(p,now)||p.activeStart>0||videoStartedMillis(p)>0
+        ||(p.lastSessionId===sessionId&&waitingRemaining(p,now)>0))
+        throw Error('このゲーム記録は報酬対象外です。');
       const no=chooseUniquePokemon(inventory,reward.id);
-      nextInventory(tx,invRef,inventory,{...inventory.owned,[String(no)]:reward.id},inventory.reserved,{...inventory.seen,[String(no)]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_GAME));
-      tx.update(ref,{rewardLastSessionId:sid,rewardLastDayIndex:day,updatedAt:dbApi.serverTimestamp()});
-      tx.set(reward,{childId:id,sessionId:sid,dayIndex:day,claimedBy:uid,claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:3,pokemonNo:no});
-      appendAudit(tx,'pokemon_claim',id,'本日は未獲得','ポケモンをゲット',sid);
+      nextInventory(tx,invRef,inventory,
+        {...inventory.owned,[String(no)]:reward.id},inventory.reserved,
+        {...inventory.seen,[String(no)]:true},buddyXpUpdate(inventory,BUDDY_XP_PER_GAME));
+      tx.update(ref,{rewardLastSessionId:sessionId,rewardLastDayIndex:gameDay,updatedAt:dbApi.serverTimestamp()});
+      tx.set(reward,{childId:id,sessionId,dayIndex:gameDay,claimedBy:uid,
+        claimedAt:dbApi.serverTimestamp(),kind:'rest_completed',catalogVersion:3,pokemonNo:no});
+      appendAudit(tx,'pokemon_claim',id,gameRewardDateLabel(gameDay,now)+'未獲得',
+        gameRewardDateLabel(gameDay,now)+'のポケモンをゲット',sessionId);
       return no;
     });
     announcePokemon(id,result);
@@ -2476,7 +2514,7 @@ function initUiEvents(){
    if(btn.dataset.parentView){setParentView(btn.dataset.parentView,true,btn.dataset.focusTarget);return;}
    if(btn.dataset.action==='start')chooseStart(btn.dataset.child);
    if(btn.dataset.action==='end')chooseEnd(btn.dataset.child);
-   if(btn.dataset.pokemonClaim)claimPokemon(btn.dataset.pokemonClaim);
+   if(btn.dataset.pokemonClaim){const [id,day,sid]=btn.dataset.pokemonClaim.split(':');claimPokemon(id,Number(day),sid);}
    if(btn.dataset.teamSlot!==undefined)openTeamPicker(Number(btn.dataset.teamSlot));
    if(btn.dataset.teamPick!==undefined)saveTeamChoice(Number(btn.dataset.teamPick));
    if(btn.dataset.honestyOpen)openHonestyDialog(btn.dataset.honestyOpen);
