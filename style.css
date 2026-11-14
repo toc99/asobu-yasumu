@@ -536,3 +536,100 @@ body[data-role="kid"] .player.ui-player-focused{box-shadow:0 0 0 3px #7ab5f090,0
 /* Keep all four kid tabs in a single row, including the new feedback tab. */
 #kid-primary-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media(max-width:560px){#kid-primary-nav .ui-nav-button{font-size:12px}}
+
+
+/* v3.14.0 - task-first, calm, accessible navigation and content hierarchy.
+   Presentation only; no changes to game/bonus permissions or state. */
+:root{--ui-ink:#20364e;--ui-navy:#244a68;--ui-border:#dce7f0;--ui-wash:#f3f8fb;--ui-accent:#286a91}
+html,body{background:radial-gradient(circle at 4% 0%,#fff2e7 0%,transparent 24%),radial-gradient(circle at 94% 4%,#e1f5f5 0%,transparent 28%),#f5f8fb;color:var(--ui-ink)}
+.top{background:linear-gradient(115deg,#24486a,#326b8e);box-shadow:0 5px 18px #183f5a20}
+.brand-icon{background:#fff9eb;box-shadow:none;border-radius:17px}
+.container{max-width:1160px}
+.overview{background:linear-gradient(120deg,#fff,#f0f7fc);padding:21px 24px;border-radius:24px;border:1px solid #dce8ef;box-shadow:0 6px 22px #2545630b}
+.overview h1{font-size:clamp(24px,3vw,31px);letter-spacing:.015em;color:#24415d}
+.overview p{line-height:1.65;color:#526981}
+.overview .ui-eyebrow{color:#4e83a0}
+.card,.ui-expandable{border:1px solid var(--ui-border);box-shadow:0 7px 22px #233a560c;border-radius:22px}
+.card h2{color:#263f58}
+.section-head p{line-height:1.7}
+.rule-chip{box-shadow:none;background:#e5f3ed;color:#206a4b;border:1px solid #cce9da;white-space:normal}
+.syncbar{border:1px solid #e2e9f1;background:#ffffffd9}
+.ui-focus-toolbar{margin-top:12px;background:#fff;border:1px solid #d6e5f0;box-shadow:0 3px 11px #28455d09}
+.ui-focus-description .ui-eyebrow{font-size:12px;color:#53738d}
+.ui-focus-description strong{color:#244b69}
+.ui-focus-buttons button{background:#f1f5f9;border-color:#e2e9f2;min-height:54px;min-width:126px}
+.ui-focus-buttons button[aria-pressed="true"]{background:#e5f3ff;border-color:#72a8d0;color:#1d577e;box-shadow:none}
+#kid-primary-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+.ui-primary-nav{grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;padding:7px;background:#e7eef5;border:1px solid #d4e1ec;border-radius:20px;margin:12px 0 5px;box-shadow:0 6px 18px #25466615}
+.ui-primary-nav.parent-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+.ui-nav-button{min-height:66px;border-radius:14px;color:#43637c;font-weight:900;font-size:15px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;white-space:normal;line-height:1.35}
+.ui-nav-button .ui-tab-icon{font-size:21px;line-height:1.1}
+.ui-nav-button.is-active{background:#fff;color:#1a547d;box-shadow:0 2px 10px #274d6d16;outline:2px solid #aacbe1;outline-offset:-2px}
+.ui-nav-button[aria-current="page"]{outline-color:#a5c9e4}
+.ui-current-context{margin:4px 3px 16px;min-height:23px;font-size:13px;line-height:1.6;color:#58758a;font-weight:750}
+.ui-current-context:before{content:'▸ ';color:#2b7897}
+.ui-next-step{display:flex;gap:15px;align-items:center;margin:0 0 13px;padding:17px 20px;border:1px solid #c6e1d8;border-left:6px solid #4d9c82;border-radius:20px;background:linear-gradient(110deg,#f7fffb,#eff9f7)}
+.ui-next-step .ui-eyebrow{color:#397f68}
+.ui-next-step strong{font-size:clamp(17px,2.3vw,22px);line-height:1.45;color:#245c4d}
+.ui-next-step p{color:#476c63;font-size:14px;line-height:1.65;margin:5px 0 0}
+.ui-guide{background:#fff;border:1px solid #dce7ef;border-radius:15px;margin:12px 0 18px;padding:0 16px;color:#446179}
+.ui-guide summary{cursor:pointer;padding:13px 2px;font-weight:850;color:#37617c;min-height:48px;line-height:1.6}
+.ui-guide[open] summary{border-bottom:1px solid #e5edf4}
+.ui-guide ol{margin:15px 4px;padding-left:22px;line-height:1.95}
+.ui-guide li{padding-left:2px;margin:3px 0}
+.ui-guide p{font-size:14px;line-height:1.75;margin:12px 4px 15px;color:#556f84}
+.ui-view-pane .card,.ui-view-pane .team-section{scroll-margin-top:85px}
+body[data-role="kid"] .player{box-shadow:0 5px 22px #324e6011}
+body[data-role="kid"] .player.ui-player-focused{outline:3px solid #9bc4e4;outline-offset:2px;box-shadow:0 6px 18px #31597c1b}
+.player .big-time{border:1px solid #e4edf3;background:#fffd}
+.player .big-time .digits{color:#233d55;font-variant-numeric:tabular-nums}
+.player .forecast{border-style:solid;border-color:#e6ecf2;background:#ffffffbd}
+.player .action{box-shadow:0 4px 15px #9b5a8128}
+.ui-spotlight{border:1px solid #dce4ef;background:linear-gradient(108deg,#fff,#f0f8fc);box-shadow:0 4px 14px #2b56620c}
+.activity-person{scroll-margin-top:96px}
+.activity-person .activity-item{transition:background .1s ease}
+.activity-person .activity-item:has(button:not(:disabled)){border-color:#c6e2d9;background:#f8fffc}
+.activity-person .activity-item:has(button:not(:disabled)) button{border-color:#85bda8;color:#287259}
+.activity-person .activity-junior-item:has(button:not(:disabled)){background:#f5fffb;border-color:#b6dbc8}
+.ui-dashboard-alert{background:#f3fbf7;border-color:#d1e9dc}
+.ui-dashboard-alert strong{color:#225d43}
+.ui-dashboard-alert p{color:#436d59;line-height:1.65}
+.ui-quick-links{grid-template-columns:repeat(5,minmax(0,1fr))}
+.ui-quick-links button{min-height:60px;background:#fafdff}
+.ui-dashboard-footnote{line-height:1.7}
+.ui-parent-guide{margin-bottom:0;background:#fafdff}
+.ui-parent-focus{justify-content:flex-start;box-shadow:none;border-radius:15px;margin-top:13px}
+.ui-management-group{border:1px solid #dce7f0;border-radius:20px;background:#f8fafc;margin-bottom:20px;overflow:hidden}
+.ui-management-group>summary{cursor:pointer;list-style-position:inside;padding:17px 20px;min-height:68px;line-height:1.6;color:#305d7b}
+.ui-management-group>summary strong{display:inline;font-size:17px}
+.ui-management-group>summary span{margin-left:8px;font-size:13px;color:#6b7f92}
+.ui-management-group[open]>summary{border-bottom:1px solid #e2eaf1;background:#f1f7fc}
+.ui-management-content{padding:14px;display:grid;gap:14px}
+.ui-management-content>.card{margin:0}
+.ui-management-content .pokemon-release-admin{border-color:#ead2d2}
+.ui-export-panel{background:#f4f9fc;border:1px solid #dce9f2;border-radius:18px;padding:17px;margin-top:22px}
+.ui-export-panel h3{margin:0 0 6px;color:#2d506e;font-size:17px}
+.ui-export-panel p{line-height:1.65;margin:0;color:#5c7389;font-size:13px}
+.ui-export-panel .admin-foot{margin:14px 0}
+.ui-export-panel .btn{min-height:50px}
+.ui-export-panel p.tiny{font-size:12px}
+button:focus-visible,a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #e9a442;outline-offset:3px}
+@media(max-width:900px){.ui-quick-links{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){
+  .overview{padding:16px;border-radius:19px;align-items:stretch}
+  .rule-chip{padding:9px 13px;font-size:13px}
+  .ui-primary-nav{padding:5px;gap:3px;border-radius:15px}
+  .ui-nav-button{padding:6px 3px;min-height:62px;font-size:12px;border-radius:11px;gap:4px}
+  .ui-primary-nav.parent-nav .ui-nav-button{font-size:12px;min-height:62px}
+  .ui-nav-button .ui-tab-icon,.ui-primary-nav.parent-nav .ui-nav-button span:first-child{font-size:19px}
+  .ui-focus-toolbar{padding:12px}
+  .ui-focus-buttons button{min-width:0}
+  .ui-next-step{padding:14px;align-items:flex-start}
+  .ui-next-step strong{font-size:17px}
+  .ui-next-step p{font-size:13px}
+  .ui-management-group>summary span{display:block;margin-left:20px}
+  .ui-management-content{padding:9px;gap:10px}
+  .ui-quick-links{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:390px){.ui-nav-button{font-size:11px}.ui-primary-nav.parent-nav .ui-nav-button{font-size:11px}.ui-focus-buttons button{padding:10px 3px}.ui-next-step{padding:12px}}
+@media(prefers-reduced-motion:reduce){.activity-person .activity-item{transition:none}}

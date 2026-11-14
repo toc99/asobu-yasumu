@@ -1,10 +1,10 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.7';
-import {effectivePausedMillis} from './pause-timing.js?v=3.13.7';
-import {setupFeedback} from './feedback.js?v=3.13.7';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.13.7';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.14.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.14.0';
+import {setupFeedback} from './feedback.js?v=3.14.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.14.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -1343,7 +1343,9 @@ function renderActivities(){
     const used=dailyActivityActive(id),remaining=Math.max(0,ACTIVITY_DAILY_MAX-used);
     const approved=dailyRequests(id).filter(r=>r.status==='approved').length;
     const pokemonUsed=dailyRequests(id).filter(r=>['pending','approved'].includes(r.status)&&activityIsPokemon(r)).length;
-    const actions=Object.entries(ACTIVITY_KINDS).map(([kind,name])=>{
+    // Put available/retry actions above pending/approved items so children see what they can do first.
+    const activityOrder=kind=>{const entry=requestFor(id,kind);return !entry||entry.status==='rejected'?0:entry.status==='pending'?1:2;};
+    const actions=Object.entries(ACTIVITY_KINDS).sort(([a],[b])=>activityOrder(a)-activityOrder(b)).map(([kind,name])=>{
       const req=requestFor(id,kind),number=Number(req?.candidateNo);
       const label=Number.isInteger(number)&&number>0?`${pokemonName(number)}（No.${String(number).padStart(4,'0')}）`:'';
       const retry=req?.status==='rejected';
@@ -1369,7 +1371,7 @@ function renderActivities(){
     }).join('');
     const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
     const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの チャレンジ：${used} / ${ACTIVITY_DAILY_MAX}　くじ ${pokemonUsed} / 5</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}種類　・　ポケモンくじ ${pokemonUsed} / 5</span>`;
-    const note=junior?'11この うち できた ことを おくろう！ さいしょの5こはポケモン、6こめからは あいぼうのけいけんち。':'11種類とも申請可能（各1日1回）。最初の5件はくじ＋相棒10 XP、6件目以降は相棒2 XP。見送り後は再挑戦できます。';
+    const note=junior?'まだ おくっていない ことが さきに でるよ。できたことを えらんでね。':'まだ申請していない活動を上に表示しています。各活動1日1回。最初の5件はポケモンくじ＋相棒10 XP、6件目以降は相棒2 XPです。';
     const complete=approved===ACTIVITY_DAILY_MAX?'<div class="activity-complete-badge" role="status">🏆 きょうの全11チャレンジ達成！ がんばりバッジ獲得</div>':'';
     return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p>${complete}<div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
@@ -1864,12 +1866,12 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
  const frac=t=>Math.min(100,Math.max(0,(t-start)/(end-start)*100));
  const lines=displayIds().map((id,i)=>{const segs=sessions.filter(s=>s.childId===id).map(s=>`<i class="tseg ${themeFor(model.profiles[id])}" title="${safe(dateTime(s.start))}〜${safe(dateTime(s.end))}" style="left:${frac(s.start).toFixed(2)}%;width:${Math.max(.1,frac(s.end)-frac(s.start)).toFixed(2)}%"></i>`).join('');return `<div class="tlrow"><span>${safe(playerLabel(id))}</span><div class="tlbar">${segs}</div></div>`;}).join('');
  $('timeline').innerHTML=`<div class="tlaxis"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div><div class="timeline-people">${lines}</div>`;
- target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join(''):'<div class="empty">この日はまだゲームのきろくがありません</div>';
+ target.innerHTML=sessions.length?sessions.map(s=>`<div class="history-entry"><div><strong>${s.activityType==='video'?'📺 動画':'🎮 ゲーム'} · ${safe(playerLabel(s.childId))}</strong><small>${dateTime(s.start)} 〜 ${s.ongoing?'現在':dateTime(s.end)} ${s.edited?'（修正済み）':''}${Number(s.pauseMs)>0?`（一時停止 ${brief(Number(s.pauseMs))}）`:''}</small></div><div class="right-entry"><strong>${brief(s.duration)}</strong>${isParentPage&&!s.ongoing?`<button class="btn outline" data-edit="${safe(s.sid)}">修正</button>`:''}</div></div>`).join('') :'<div class="empty">この日のゲーム・動画の記録はまだありません</div>';
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','feedback','more','updates'];
 const PARENT_VIEWS=['home','actions','reports','more','updates'];
-const VIEW_CAPTIONS={time:'ゲームも どうがも じぶんで じかんを まもろう',challenge:'きょう できたことを おくってみよう',pokemon:'ポケモンを あつめて 相棒を そだてよう',feedback:'おうちのひとに こえを おくろう',more:'きろくと おしらせを かくにんしよう',updates:'あぷりの あたらしい ところを みてみよう'};
+const VIEW_CAPTIONS={time:'じぶんの じかんを みよう',challenge:'できた ことを えらんで おくろう',pokemon:'ゲットした ポケモンと あいぼうを みよう',feedback:'おうちのひとへ こまったことや アイデアを おくろう',more:'あそんだ じかんと おしらせを みよう',updates:'あぷりの あたらしい ところを みよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
   if(nav&&typeof nav.scrollIntoView==='function')nav.scrollIntoView({behavior:'auto',block:'start'});
@@ -1915,6 +1917,9 @@ function setParentView(view,scroll=true,targetId=''){
     button.classList.toggle('is-active',active);
     button.setAttribute('aria-current',active?'page':'false');
   });
+  const parentFocus=$('parent-focus-toolbar');
+  // The global child selector applies to calendar, buddy and Pokédex, not to the two-child home.
+  if(parentFocus)parentFocus.classList.toggle('hidden',view==='home'||view==='actions');
   if(view==='reports'&&model.ready){renderWeek();renderHistory();}
   if(view==='home')renderParentDashboard();
   if(scroll){
@@ -1935,7 +1940,7 @@ function setFocusChild(id,syncApprovals=true){
     for(const option of el.options)if(ids.includes(option.value))option.textContent=playerLabel(option.value);
     el.value=id;
   }
-  const heading=$('kid-focus-name');if(heading)heading.textContent=`${playerLabel(id)}の チャレンジと ポケモン`;
+  const heading=$('kid-focus-name');if(heading)heading.textContent=`${playerLabel(id)}の がんばり・ポケモン・いけん`;
   if(!isParentPage)document.querySelectorAll('#players [data-player-id]').forEach(card=>card.classList.toggle('ui-player-focused',card.dataset.playerId===id));
   document.querySelectorAll('[data-focus-child]').forEach(button=>{
     button.textContent=playerLabel(button.dataset.focusChild);
@@ -1943,7 +1948,7 @@ function setFocusChild(id,syncApprovals=true){
   });
   // Parent approvals default to all; switching the global child selector sets a focused filter.
   if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
-  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();
+  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();renderKidNextAction();
 }
 function renderKidSpotlight(){
   const box=$('kid-spotlight-message');if(!box||!model.ready)return;
@@ -1958,13 +1963,36 @@ function renderKidSpotlight(){
   if(waiting)pieces.push(`チャレンジ ${waiting}けん かくにんまち`);
   box.textContent=pieces.length?pieces.join('　・　'):'きょうも じぶんのペースで たのしもう！';
 }
+// A simple, current-state explanation. It describes what to do, not what an unobserved Switch is doing.
+function renderKidNextAction(now=Date.now()){
+  const title=$('kid-next-action'),details=$('kid-next-detail');
+  if(!title||!details||!model.ready)return;
+  const p=model.profiles[focusChild];
+  if(!p)return;
+  const name=playerLabel(focusChild),st=status(p,now);
+  let heading='',message='';
+  if(!canOperate()){heading='つうしんを かくにんしよう';message='あたらしい じかんを かくにんちゅう。つながるまで ボタンを おさないでね。';}
+  else if(isPlayPaused(p)){heading='いちじていし しているよ';message='ゲーム・どうがも とめよう。つづけるときは「さいかい」を おしてね。';}
+  else if(st==='playing'){heading='おわるときは ゲームも とめよう';message='Switchを おわってから「ゲームをおわる」を おしてね。';}
+  else if(st==='watching'){heading='どうがを おえたら おそう';message='どうがを とめてから「動画をおわる」を おしてね。';}
+  else if(st==='resting'){heading='いまは おやすみの じかん';message='あと '+brief(waitingRemaining(p,now))+' やすもう。やすみが おわったら また あそべるよ。';}
+  else{heading='ゲームか どうがを はじめられるよ';message='どちらかの「はじめる」を おしてね。おわるときも わすれずに おそう。';}
+  const nextHeading=name+'：'+heading;
+  if(title.textContent!==nextHeading)title.textContent=nextHeading;
+  if(details.textContent!==message)details.textContent=message;
+}
 function renderParentDashboard(now=Date.now()){
   if(!isParentPage||!$('parent-dashboard-cards'))return;
   const container=$('parent-dashboard-cards');
   const pending=model.activityRequests.filter(a=>a.status==='pending');
   const stale=pending.filter(a=>stampMillis(a.requestedAt)>0&&now-stampMillis(a.requestedAt)>=DAY).length;
   const total=pending.length;
-  $('parent-action-summary').textContent=!model.activityLoaded?'チャレンジの申請状況を確認中…':total?`チャレンジの承認待ち ${total}件${stale?`（24時間以上 ${stale}件）`:''}`:'今のところ承認待ちはありません';
+  const feedbackCountText=$('feedback-open-count')?.textContent||'';
+  const feedbackOpen=Number(feedbackCountText.match(/[0-9]+/)?.[0]||0);
+  const actionParts=[];
+  if(total)actionParts.push('活動の承認待ち '+total+'件'+(stale?'（24時間以上 '+stale+'件）':''));
+  if(feedbackOpen)actionParts.push('子どもの声・未確認 '+feedbackOpen+'件');
+  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、新しい活動申請・未確認の子どもの声はありません';
   $('dashboard-sync-status').textContent=canOperate()?'クラウド確認済み':'通信・同期を確認中';
   if(!model.ready){container.innerHTML='<p class="empty">家族の情報を読み込み中…</p>';return;}
   container.innerHTML=ids.map(id=>{
@@ -2033,6 +2061,7 @@ function render(now=Date.now()){
     renderPlayers(now);playerRenderSignature=signature;playerRenderedAt=now;
   }
   updatePlayerTimes(now);
+  if(!isParentPage)renderKidNextAction(now);
   if(isParentPage){
     if(Math.floor(now/1000)%10===0){renderParentDashboard(now);}
     if(parentView==='reports'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
