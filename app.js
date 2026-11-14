@@ -2,8 +2,8 @@ import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
 import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.13.6';
-import {effectivePausedMillis} from './pause-timing.js?v=3.13.5';
-import {setupFeedback} from './feedback.js?v=3.13.5';
+import {effectivePausedMillis} from './pause-timing.js?v=3.13.6';
+import {setupFeedback} from './feedback.js?v=3.13.6';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
