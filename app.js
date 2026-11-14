@@ -1977,7 +1977,9 @@ function renderKidNextAction(now=Date.now()){
   else if(st==='watching'){heading='どうがを おえたら おそう';message='どうがを とめてから「動画をおわる」を おしてね。';}
   else if(st==='resting'){heading='いまは おやすみの じかん';message='あと '+brief(waitingRemaining(p,now))+' やすもう。やすみが おわったら また あそべるよ。';}
   else{heading='ゲームか どうがを はじめられるよ';message='どちらかの「はじめる」を おしてね。おわるときも わすれずに おそう。';}
-  title.textContent=name+'：'+heading;details.textContent=message;
+  const nextHeading=name+'：'+heading;
+  if(title.textContent!==nextHeading)title.textContent=nextHeading;
+  if(details.textContent!==message)details.textContent=message;
 }
 function renderParentDashboard(now=Date.now()){
   if(!isParentPage||!$('parent-dashboard-cards'))return;
@@ -1990,7 +1992,7 @@ function renderParentDashboard(now=Date.now()){
   const actionParts=[];
   if(total)actionParts.push('活動の承認待ち '+total+'件'+(stale?'（24時間以上 '+stale+'件）':''));
   if(feedbackOpen)actionParts.push('子どもの声・未確認 '+feedbackOpen+'件');
-  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、未対応の活動申請・子どもの声はありません';
+  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、新しい活動申請・未確認の子どもの声はありません';
   $('dashboard-sync-status').textContent=canOperate()?'クラウド確認済み':'通信・同期を確認中';
   if(!model.ready){container.innerHTML='<p class="empty">家族の情報を読み込み中…</p>';return;}
   container.innerHTML=ids.map(id=>{
