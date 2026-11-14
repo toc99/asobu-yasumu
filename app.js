@@ -2497,7 +2497,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
 }
 function initUiEvents(){
-  feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel});
+  feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
   renderReleaseNotes();
  $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
  $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
