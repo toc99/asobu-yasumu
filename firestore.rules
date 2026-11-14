@@ -773,7 +773,7 @@ service cloud.firestore {
     }
     function validActivityKind(kind) {
       return kind in ['study','reading','exercise','helping','cleaning',
-        'creating','practicing','trying','persevering','kindness','upstairs21'];
+        'creating','practicing','trying','persevering','kindness','outingCalm','upstairs21'];
     }
     function activitySlotPath(h, id, day, n) {
       let name = id + '_' + string(day) + '_' + string(n);
@@ -786,6 +786,8 @@ service cloud.firestore {
       return d.keys().hasAll(['childId','activityKind','dayIndex','status','requestedBy','requestedAt','slotNo','candidateNo'])
         && d.keys().hasOnly(['childId','activityKind','dayIndex','status','requestedBy','requestedAt','slotNo','candidateNo'])
         && d.childId in ['older','younger'] && validActivityKind(d.activityKind)
+        // Old kindness requests/rewards remain readable and approvable, but no new kindness requests.
+        && d.activityKind != 'kindness'
         // 『21時までに2階に上がる』も他の活動同様いつでも申請可。
         && d.dayIndex == day && id == d.childId + '_' + string(day) + '_' + d.activityKind
         && d.status == 'pending'
