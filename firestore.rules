@@ -21,7 +21,8 @@ service cloud.firestore {
       return (prev.activeStart > 0 || prev.get('videoStartedAt',null) is timestamp)
         && prev.get('pauseStartedAt',null) == null
         && count is int && count >= 0 && count < 100
-        && next.diff(prev).affectedKeys().hasOnly(['pauseStartedAt','pauseCount','updatedAt'])
+        && next.diff(prev).affectedKeys().hasOnly(['pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'])
+        && next.get('pauseTotalMs',0) == (count == 0 ? 0 : prev.get('pauseTotalMs',0))
         && next.pauseStartedAt == request.time
         && next.pauseCount == count + 1
         && next.updatedAt == request.time;
@@ -178,8 +179,14 @@ service cloud.firestore {
       let oldStarted = prev.get('videoStartedAt', null);
       let configured = get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes', 30);
       return prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        // Video sessions always clear the old session's pause state (including legacy stale values).
+        && next.get('pauseStartedAt',null) == null
+        && next.get('pauseCount',0) == 0
+        && next.get('pauseTotalMs',0) == 0
         && next.updatedAt == request.time && (
-        (next.diff(prev).affectedKeys().hasOnly(['videoStartedAt','videoDurationMinutes','updatedAt'])
+        (next.diff(prev).affectedKeys().hasOnly([
+            'videoStartedAt','videoDurationMinutes','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+          ])
           && oldStarted == null
           && prev.activeStart == 0
           && prev.restUntil <= request.time.toMillis()
@@ -190,7 +197,7 @@ service cloud.firestore {
         ||
         (next.diff(prev).affectedKeys().hasOnly([
             'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
-            'lastDuration','lastSessionId','updatedAt'
+            'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
           ])
           && oldStarted is timestamp && prev.activeStart == 0
           && next.videoStartedAt == null && next.videoDurationMinutes == 0
