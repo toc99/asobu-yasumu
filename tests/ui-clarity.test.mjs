@@ -65,3 +65,17 @@ test('release and service worker use the same v3.14.0',()=>{
   assert.match(sw,/style\.css\?v=3\.14\.0/);
   assert.match(sw,/app\.js\?v=3\.14\.0/);
 });
+
+test('records tab prioritizes play history over release notes',()=>{
+  const recordsStart=kid.indexOf('id="kid-pane-more"');
+  const history=kid.indexOf('id="history"',recordsStart);
+  const release=kid.indexOf('class="card release-notes-shortcut"',recordsStart);
+  assert.ok(recordsStart>=0&&history>recordsStart&&release>history);
+});
+
+test('parent settings and exports appear before the large Pokédex',()=>{
+  const settingsStart=parent.indexOf('id="parent-pane-more"');
+  const settings=parent.indexOf('⚙️ 家族の設定',settingsStart);
+  const pokedex=parent.indexOf('id="pokemon-collection"',settingsStart);
+  assert.ok(settingsStart>=0&&settings>settingsStart&&pokedex>settings);
+});
