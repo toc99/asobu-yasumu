@@ -773,7 +773,7 @@ service cloud.firestore {
             && d.action in [
               'start','end','undo_start','undo_end','manual_set','night_resume',
               'video_start','video_stop','pokemon_claim','start_backdated','start_corrected',
-              'play_pause','play_resume'
+              'play_pause','play_resume','mode_switch'
             ]
             && auditActionTouchesProfile(h,d))
           ||
@@ -781,7 +781,7 @@ service cloud.firestore {
             (d.action in [
                'manual_set','manual_clear','forgotten_end','cheat_confirm',
                'cheat_honest','cheat_restore','start_backdated','start_corrected',
-               'pokemon_release'
+               'pokemon_release','rest_exception_grant','rest_exception_cancel'
              ] && auditActionTouchesProfile(h,d))
             || (d.action == 'history_edit' && d.childId in ['older','younger']
               && d.sessionId.size() > 0
@@ -852,6 +852,9 @@ service cloud.firestore {
         && profile.data.get('manualRestUntil',0) <= request.time.toMillis()
         && session.data.childId == d.childId && session.data.createdBy == request.auth.uid
         && session.data.get('activityType','game') == 'game'
+        && session.data.get('exceptionPlay',false) == false
+        && profile.data.restUntil <= request.time.toMillis()
+        && profile.data.get('cycleUsedMs',0) == 0
         && (session.data.edited == false
           || (session.data.edited == true && session.data.get('correctionKind','') == 'honest'))
         && session.data.duration is int && session.data.duration >= 60000
@@ -1334,6 +1337,9 @@ service cloud.firestore {
           validKidFavoriteTeamUpdate()
           || validKidPauseStart()
           || validKidPauseResume()
+          || validKidExceptionStart(h,playerId)
+          || validKidCycleSwitch(h,playerId)
+          || validKidSpecialEnd(h,playerId)
           || validKidPausedGameEnd(h,playerId)
           || validKidPausedVideoEnd(h,playerId)
           || validKidPlayerUpdate(h, playerId)
@@ -1354,7 +1360,11 @@ service cloud.firestore {
       }
       match /sessions/{sid} {
         allow read: if isMember(h);
-        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
+        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['transition','childId'])
+              && validKidCycleSwitchSession(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['cycleFinal','childId'])
+              && validKidSpecialSession(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
               && validKidPausedVideoSessionCreate(h,sid))
           || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','undoPrevious','childId'])
               && validKidPausedGameSessionCreate(h,sid))
