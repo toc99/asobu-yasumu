@@ -2,8 +2,16 @@
 // バージョンを公開するたび、先頭に1件追加すること。
 // date は確認済みの公開日だけ記入。推測で日付を付けないこと。
 // 旧版は当時の主要変更をまとめたもの。細かな修正をすべて列挙しているわけではありません。
-export const APP_VERSION = 'v3.16.1';
+export const APP_VERSION = 'v3.16.2';
 export const RELEASE_NOTES = Object.freeze([
+  {
+    version:'v3.16.2',title:'保護者設定の生年月日入力を修正',
+    changes:[
+      '保護者画面「設定・図鑑」の子ども1・子ども2の生年月日入力が枠からはみ出す問題を修正',
+      'iPhoneの標準日付入力欄の最小幅を調整し、画面内に収まるレイアウトに変更',
+      'ゲーム・休憩・動画・報酬・Firestore Rulesの処理は変更なし'
+    ]
+  },
   {
     version:'v3.16.1',title:'保護者画面の横はみ出し対策',
     changes:[

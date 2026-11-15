@@ -57,13 +57,13 @@ test('backup tools clearly distinguish private full export and minimal activity 
   assert.match(parent,/活動実績JSONには氏名・生年月日を含みません/);
 });
 
-test('release and service worker use the same v3.16.1',()=>{
-  assert.match(release,/APP_VERSION = 'v3\.16\.1'/);
-  assert.match(kid,/v3\.16\.1/);
-  assert.match(parent,/v3\.16\.1/);
-  assert.match(sw,/asobu-yasumu-v3-16-1/);
-  assert.match(sw,/style\.css\?v=3\.16\.1/);
-  assert.match(sw,/app\.js\?v=3\.16\.1/);
+test('release and service worker use the same v3.16.2',()=>{
+  assert.match(release,/APP_VERSION = 'v3\.16\.2'/);
+  assert.match(kid,/v3\.16\.2/);
+  assert.match(parent,/v3\.16\.2/);
+  assert.match(sw,/asobu-yasumu-v3-16-2/);
+  assert.match(sw,/style\.css\?v=3\.16\.2/);
+  assert.match(sw,/app\.js\?v=3\.16\.2/);
 });
 
 test('records tab prioritizes play history over release notes',()=>{
