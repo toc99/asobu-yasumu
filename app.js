@@ -1,10 +1,10 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.14.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.14.0';
-import {setupFeedback} from './feedback.js?v=3.14.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.14.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.15.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.15.0';
+import {setupFeedback} from './feedback.js?v=3.15.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.15.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -1870,7 +1870,7 @@ function renderHistory(){const target=$('history-list');if(!target)return;const 
 }
 // v3.12.0 UI navigation: changing tabs never mutates rewards, sessions or Firestore.
 const KID_VIEWS=['time','challenge','pokemon','feedback','more','updates'];
-const PARENT_VIEWS=['home','actions','reports','more','updates'];
+const PARENT_VIEWS=['home','actions','feedback','reports','more','updates'];
 const VIEW_CAPTIONS={time:'じぶんの じかんを みよう',challenge:'できた ことを えらんで おくろう',pokemon:'ゲットした ポケモンと あいぼうを みよう',feedback:'おうちのひとへ こまったことや アイデアを おくろう',more:'あそんだ じかんと おしらせを みよう',updates:'あぷりの あたらしい ところを みよう'};
 function revealNavigation(){
   const nav=$(isParentPage?'parent-primary-nav':'kid-primary-nav');
@@ -1919,7 +1919,7 @@ function setParentView(view,scroll=true,targetId=''){
   });
   const parentFocus=$('parent-focus-toolbar');
   // The global child selector applies to calendar, buddy and Pokédex, not to the two-child home.
-  if(parentFocus)parentFocus.classList.toggle('hidden',view==='home'||view==='actions');
+  if(parentFocus)parentFocus.classList.toggle('hidden',view==='home'||view==='actions'||view==='feedback');
   if(view==='reports'&&model.ready){renderWeek();renderHistory();}
   if(view==='home')renderParentDashboard();
   if(scroll){
@@ -1991,8 +1991,8 @@ function renderParentDashboard(now=Date.now()){
   const feedbackOpen=Number(feedbackCountText.match(/[0-9]+/)?.[0]||0);
   const actionParts=[];
   if(total)actionParts.push('活動の承認待ち '+total+'件'+(stale?'（24時間以上 '+stale+'件）':''));
-  if(feedbackOpen)actionParts.push('子どもの声・未確認 '+feedbackOpen+'件');
-  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、新しい活動申請・未確認の子どもの声はありません';
+  if(feedbackOpen)actionParts.push('いけんばこ・要確認 '+feedbackOpen+'件');
+  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、新しい活動申請・要確認の意見はありません';
   $('dashboard-sync-status').textContent=canOperate()?'クラウド確認済み':'通信・同期を確認中';
   if(!model.ready){container.innerHTML='<p class="empty">家族の情報を読み込み中…</p>';return;}
   container.innerHTML=ids.map(id=>{
