@@ -2459,25 +2459,46 @@ function updateRetroPreview(){
 async function saveRetroStart(event){
   event.preventDefault();
   const id=retroStartChild,start=new Date($('retro-start-at').value).getTime(),deviceId=$('retro-start-device').value;
-  if(!ids.includes(id)||!Number.isFinite(start)||!['sw1','sw2'].includes(deviceId))return toast('入力内容を確認してください。');
-  if(!confirm(playerLabel(id)+'の開始時刻を '+dateTime(start)+' に設定しますか？'))return;
+  const origin=isParentPage?'prompted':document.querySelector('[name="retro-report-origin"]:checked')?.value;
+  const parentRecord=isParentPage&&$('retro-parent-incident')?.checked===true;
+  if(!ids.includes(id)||!Number.isFinite(start)||!['sw1','sw2'].includes(deviceId)||
+    (!isParentPage&&!['self','prompted'].includes(origin)))return toast('入力内容を確認してください。');
+  const context=!isParentPage&&origin==='self'?'\n自分で正直に伝えたことにペナルティはありません。':
+    parentRecord?'\n本人に指摘した履歴を残します。回数への加算は保護者画面で別途確認します。':'';
+  if(!confirm(playerLabel(id)+'の開始時刻を '+dateTime(start)+' に設定しますか？'+context))return;
+  const newReportRef=dbApi.doc(retroCollection());
   await runLocked(async()=>{
     const mode=await dbApi.runTransaction(db,async tx=>{
-      const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('プロフィールがありません。');
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('プロフィールがありません。');
       const p=snap.data(),now=Date.now();
       if(videoStartedMillis(p)>0)throw Error('動画視聴中のため変更できません。');
       const min=retroEarliest(p,now),max=p.activeStart>0?p.activeStart-1000:now-1000;
       if(start<min||start>max)throw Error('開始時刻が設定可能な範囲外です。');
+      const reportNeeded=(!isParentPage||parentRecord)&&!sameRetroSession(p);
+      const reportId=reportNeeded?newReportRef.id:(sameRetroSession(p)?p.retroReportId:'');
+      const startStamp=p.activeStart>0?p.startedAt:dbApi.serverTimestamp();
+      const reportFields=reportNeeded?{retroReportId:reportId,retroReportStartedAt:startStamp}:{};
+      if(reportNeeded){
+        tx.set(newReportRef,{childId:id,source:origin,reportedBy:uid,reportedAt:dbApi.serverTimestamp(),
+          sessionStartedAt:startStamp,actualStartMs:start,reviewStatus:'pending',
+          reviewedAt:null,reviewedBy:'',penaltyEventId:''});
+      }
       if(p.activeStart>0){
-        tx.update(ref,{activeStart:start,updatedAt:dbApi.serverTimestamp()});
-        appendAudit(tx,'start_corrected',id,dateTime(p.activeStart),dateTime(start));return 'corrected';
+        tx.update(ref,{activeStart:start,...reportFields,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'start_corrected',id,dateTime(p.activeStart),dateTime(start),reportId);
+        return 'corrected';
       }
       if(restEnd(p)>now)throw Error('まだ休憩中なので開始できません。');
-      tx.update(ref,{activeStart:start,deviceId,startedAt:dbApi.serverTimestamp(),endedAt:null,updatedAt:dbApi.serverTimestamp()});
-      appendAudit(tx,'start_backdated',id,'開始押し忘れ',dateTime(start)+'にゲーム開始');return 'started';
+      tx.update(ref,{activeStart:start,deviceId,startedAt:dbApi.serverTimestamp(),
+        endedAt:null,...reportFields,updatedAt:dbApi.serverTimestamp()});
+      appendAudit(tx,'start_backdated',id,'開始押し忘れ',dateTime(start)+'にゲーム開始',reportId);
+      return 'started';
     });
     $('retro-start-dialog').close();retroStartChild=null;
-    toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
+    if(isParentPage){if($('retro-parent-incident'))$('retro-parent-incident').checked=false;}
+    if(!isParentPage&&origin==='self')toast('しょうじきに おしえてくれて ありがとう！ おやすみじかんも きちんと きろくするよ。');
+    else toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
   });
 }
 
