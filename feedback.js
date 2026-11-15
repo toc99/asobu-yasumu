@@ -89,6 +89,8 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
   function render(){
     const kidList=$('feedback-kid-list'),parentList=$('feedback-parent-list');
     if($('feedback-child-name'))$('feedback-child-name').textContent=playerLabel(child);
+    const byChild=$('feedback-filter-child');
+    if(byChild)for(const option of byChild.options)if(['older','younger'].includes(option.value))option.textContent=playerLabel(option.value);
     const pendingCount=reports.filter(needsParent).length;
     if($('feedback-open-count'))$('feedback-open-count').textContent='要確認 '+pendingCount+'件';
     if(kidList){
