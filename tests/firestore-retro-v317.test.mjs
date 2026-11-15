@@ -84,4 +84,57 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
       endedAt:null,updatedAt:serverTimestamp()
     }));
   });
+
+  test('three reviewed notices settle atomically with exactly one released Pokémon',async()=>{
+    const h='retro-release-three',now=Date.now(),ids=['n1','n2','n3'];
+    await seed(h,{pokemonLastReleaseEventId:'',favoriteTeam:[1,0,0,0,0]});
+    await env.withSecurityRulesDisabled(async ctx=>{
+      const db=ctx.firestore();
+      await setDoc(doc(db,'households',h,'pokemonInventory','older'),{
+        owned:{'1':'reward-one'},reserved:{},seen:{'1':true},version:1,
+        buddyId:'reward-one',updatedAt:Timestamp.fromMillis(now)
+      });
+      await setDoc(doc(db,'households',h,'rewards','reward-one'),{
+        childId:'older',pokemonNo:1,revoked:false
+      });
+      for(const [i,id] of ids.entries()){
+        const at=Timestamp.fromMillis(now-(3-i)*60000);
+        await setDoc(report(db,h,id),{
+          childId:'older',source:'prompted',reportedBy:'kid-user',reportedAt:at,
+          sessionStartedAt:at,actualStartMs:at.toMillis()-10000,reviewStatus:'counted',
+          reviewedAt:at,reviewedBy:'parent-user',penaltyEventId:''
+        });
+      }
+    });
+    const db=parent.firestore(),pRef=ref(db,h),invRef=doc(db,'households',h,'pokemonInventory','older');
+    const rewardRef=doc(db,'households',h,'rewards','reward-one');
+    const event=doc(collection(db,'households',h,'pokemonReleases'));
+    const reports=ids.map(id=>report(db,h,id));
+    await assertSucceeds(runTransaction(db,async tx=>{
+      const [p,inv,reward,...records]=await Promise.all([
+        tx.get(pRef),tx.get(invRef),tx.get(rewardRef),...reports.map(r=>tx.get(r))
+      ]);
+      assert.ok(p.exists()&&inv.exists()&&reward.exists()&&records.every(r=>r.exists()));
+      tx.update(invRef,{owned:{},version:2,buddyId:'',updatedAt:serverTimestamp()});
+      tx.update(rewardRef,{revoked:true,revokedReason:'released',revokedAt:serverTimestamp(),
+        revokedBy:'parent-user',releaseEventId:event.id});
+      tx.set(event,{
+        childId:'older',createdBy:'parent-user',createdAt:serverTimestamp(),reason:'retro_three_notices',
+        triggerReports:ids,rewardIds:['reward-one'],pokemon:[{rewardId:'reward-one',no:1,name:'sample'}],count:1
+      });
+      for(const r of reports)tx.update(r,{penaltyEventId:event.id});
+      tx.update(pRef,{
+        pokemonLastReleaseEventId:event.id,updatedAt:serverTimestamp(),
+        favoriteTeam:[0,0,0,0,0],teamUpdatedAt:serverTimestamp()
+      });
+      tx.set(doc(collection(db,'households',h,'auditLogs')),{
+        action:'pokemon_release',childId:'older',actorUid:'parent-user',actorRole:'parent',
+        createdAt:serverTimestamp(),before:'3 confirmed notices',after:'one released',
+        sessionId:event.id
+      });
+    }));
+    assert.equal((await getDoc(rewardRef)).data().revoked,true);
+    assert.equal((await getDoc(invRef)).data().version,2);
+    assert.ok((await Promise.all(reports.map(r=>getDoc(r)))).every(snap=>snap.data().penaltyEventId===event.id));
+  });
 }
