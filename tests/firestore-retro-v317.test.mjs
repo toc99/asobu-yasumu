@@ -5,7 +5,7 @@ import {initializeTestEnvironment,assertFails,assertSucceeds} from '@firebase/ru
 import {collection,doc,getDoc,getDocs,runTransaction,serverTimestamp,setDoc,Timestamp,updateDoc} from 'firebase/firestore';
 
 const rules=readFileSync(new URL('../firestore.rules',import.meta.url),'utf8');
-const projectId='demo-asobu-v317';
+const projectId='demo-asobu-v316';
 if(!process.env.FIRESTORE_EMULATOR_HOST){
   test('Firestore Rules retro integration requires emulator',{skip:true},()=>{});
 }else{
