@@ -80,7 +80,7 @@ service cloud.firestore {
       let old = prev.get('videoStartedAt',null);
       let s = getAfter(sessionPath(h,next.lastSessionId));
       return old is timestamp && prev.activeStart == 0
-        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) > 0
+        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) >= 0
         && next.diff(prev).affectedKeys().hasOnly([
           'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
           'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
@@ -96,9 +96,10 @@ service cloud.firestore {
         && s != null && s.data.childId == id && s.data.activityType == 'video'
         && s.data.start == math.floor(old.toMillis()) && s.data.end == next.restStart
         && s.data.duration == next.lastDuration && s.data.pauseCount == prev.pauseCount
-        && s.data.pauseMs is int && s.data.pauseMs > 0
-        && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
-        && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000
+        && s.data.pauseMs is int && s.data.pauseMs >= 0
+        && (prev.pauseCount == 0 ? s.data.pauseMs == 0 :
+          (s.data.pauseMs > 0 && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
+           && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000))
         && next.lastDuration == next.restStart - math.floor(old.toMillis()) - s.data.pauseMs;
     }
     // セッションには実開始・実終了・中断を除いた実利用時間を保存する。
@@ -156,15 +157,16 @@ service cloud.firestore {
         && d.start is int && d.end is int && d.end > d.start
         && d.end <= request.time.toMillis() + 60000 && d.end >= request.time.toMillis() - 60000
         && d.duration is int && d.duration >= 1000 && d.duration <= 604800000
-        && d.pauseMs is int && d.pauseMs > 0 && d.pauseCount is int && d.pauseCount > 0 && d.pauseCount <= 100
+        && d.pauseMs is int && d.pauseMs >= 0 && d.pauseCount is int && d.pauseCount >= 0 && d.pauseCount <= 100
+        && (d.pauseCount == 0 ? d.pauseMs == 0 : d.pauseMs > 0)
         && d.duration == d.end - d.start - d.pauseMs
         && d.createdAt == request.time && d.createdBy == request.auth.uid && d.edited == false
         && prev != null && prev.data.activeStart == 0
         && prev.data.get('videoStartedAt',null) is timestamp
         && math.floor(prev.data.videoStartedAt.toMillis()) == d.start
         && prev.data.pauseCount == d.pauseCount
-        && d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
-        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000
+        && (prev.data.pauseCount == 0 || (d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
+        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000))
         && after != null && after.data.videoStartedAt == null
         && after.data.lastSessionId == sid && after.data.restStart == d.end
         && after.data.lastDuration == d.duration && after.data.updatedAt == request.time
@@ -525,6 +527,228 @@ service cloud.firestore {
         && next.manualRestUntil >= 0;
     }
 
+
+    // v3.16: parent-granted, single-use exception for an existing rest debt.
+    function hasActiveRestException(d) {
+      return d.get('restException',null) is map
+        && d.restException.get('state','') == 'active';
+    }
+    function specialRestDebt(d) {
+      return hasActiveRestException(d) ? d.restException.debtMs : 0;
+    }
+    function validKidExceptionStart(h,id) {
+      let prev=resource.data;
+      let next=request.resource.data;
+      let permit=prev.get('restException',null);
+      let now=request.time.toMillis();
+      let configured=get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes',30);
+      return isKid(h) && permit is map && permit.get('state','')=='offered'
+        && permit.get('grantedAt',null) is timestamp
+        && permit.get('expiresAt',0) is int && permit.expiresAt>now
+        && permit.expiresAt<=permit.grantedAt.toMillis()+660000
+        && permit.get('debtMs',0) is int && permit.debtMs>0 && permit.debtMs<=604800000
+        && permit.get('maxMinutes',0) in [15,30,60]
+        && prev.activeStart==0 && prev.get('videoStartedAt',null)==null
+        && prev.get('cycleUsedMs',0)==0
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
+          'pauseStartedAt','pauseTotalMs','pauseCount','restException','updatedAt'
+        ])
+        && next.restException is map
+        && next.restException.diff(permit).affectedKeys().hasOnly(['state','startedAt'])
+        && next.restException.state=='active' && next.restException.startedAt==request.time
+        && next.updatedAt==request.time
+        && (
+          (next.activeStart is int && next.activeStart>=now-60000 && next.activeStart<=now+60000
+            && next.deviceId in ['sw1','sw2'] && next.startedAt==request.time
+            && next.endedAt==null && next.get('videoStartedAt',null)==null)
+          ||
+          (next.activeStart==0 && next.videoStartedAt==request.time
+            && configured is int && configured>=1 && configured<=240
+            && next.videoDurationMinutes==configured
+            && next.get('pauseStartedAt',null)==null
+            && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0)
+        );
+    }
+
+
+    function validKidCycleSwitch(h,id) {
+      let prev=resource.data;
+      let next=request.resource.data;
+      let sid=next.get('lastSwitchSessionId','');
+      let segment=getAfter(sessionPath(h,sid));
+      let now=request.time.toMillis();
+      let configured=get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes',30);
+      return isKid(h) && sid is string && sid.size()>0 && sid.size()<=180
+        && sid!=prev.get('lastSwitchSessionId','')
+        && prev.get('cycleUsedMs',0) is int && prev.get('cycleUsedMs',0)>=0
+        && segment!=null && segment.data.childId==id && segment.data.get('transition',false)==true
+        && segment.data.duration is int && segment.data.duration>=1000
+        && next.get('cycleUsedMs',0)==prev.get('cycleUsedMs',0)+segment.data.duration
+        && next.cycleUsedMs<=604800000
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
+          'pauseStartedAt','pauseTotalMs','pauseCount','cycleUsedMs','lastSwitchSessionId','updatedAt'
+        ])
+        && prev.get('pauseStartedAt',null)==null
+        && next.get('pauseStartedAt',null)==null
+        && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0
+        && next.updatedAt==request.time
+        && (
+          (prev.activeStart is int && prev.activeStart>0
+            && prev.get('videoStartedAt',null)==null
+            && next.activeStart==0 && next.deviceId==null
+            && next.startedAt==null && next.endedAt==null
+            && next.videoStartedAt==request.time
+            && configured is int && configured>=1 && configured<=240
+            && next.videoDurationMinutes==configured
+            && segment.data.activityType=='game' && segment.data.start==prev.activeStart
+            && segment.data.deviceId==prev.deviceId)
+          ||
+          (prev.activeStart==0 && prev.get('videoStartedAt',null) is timestamp
+            && next.videoStartedAt==null && next.videoDurationMinutes==0
+            && next.activeStart is int && next.activeStart>=now-60000 && next.activeStart<=now+60000
+            && next.deviceId=='sw1' && next.startedAt==request.time && next.endedAt==null
+            && segment.data.activityType=='video'
+            && segment.data.start==prev.videoStartedAt.toMillis()
+            && segment.data.deviceId=='video')
+        );
+    }
+    function validKidCycleSwitchSession(h,sid) {
+      let d=request.resource.data;
+      let prev=get(profilePath(h,d.childId));
+      let after=getAfter(profilePath(h,d.childId));
+      let now=request.time.toMillis();
+      return isKid(h)
+        && d.keys().hasAll([
+          'childId','start','end','duration','activityType','deviceId','transition',
+          'exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.keys().hasOnly([
+          'childId','start','end','duration','activityType','deviceId','transition',
+          'exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.childId in ['older','younger'] && d.transition==true
+        && d.exceptionPlay is bool && d.activityType in ['game','video']
+        && d.deviceId in ['sw1','sw2','video']
+        && d.start is int && d.end is int && d.end>d.start
+        && d.end>=now-60000 && d.end<=now+60000
+        && d.duration is int && d.duration>=1000
+        && d.pauseCount is int && d.pauseCount>=0 && d.pauseCount<=100
+        && d.pauseMs is int && d.pauseMs>=0
+        && (d.pauseCount==0 ? d.pauseMs==0 :
+          (d.pauseMs>0 && d.pauseMs>=pauseMsAtEnd(prev.data,d.end)-60000
+            && d.pauseMs<=pauseMsAtEnd(prev.data,d.end)+60000))
+        && d.duration==d.end-d.start-d.pauseMs
+        && d.createdAt==request.time && d.createdBy==request.auth.uid && d.edited==false
+        && prev!=null && after!=null
+        && prev.data.get('pauseCount',0)==d.pauseCount
+        && prev.data.get('pauseStartedAt',null)==null
+        && d.exceptionPlay==hasActiveRestException(prev.data)
+        && after.data.lastSwitchSessionId==sid
+        && after.data.get('cycleUsedMs',0)==prev.data.get('cycleUsedMs',0)+d.duration
+        && after.data.updatedAt==request.time
+        && (
+          (d.activityType=='game'
+            && prev.data.activeStart==d.start && prev.data.deviceId==d.deviceId
+            && after.data.activeStart==0 && after.data.get('videoStartedAt',null)==request.time)
+          ||
+          (d.activityType=='video'
+            && prev.data.get('videoStartedAt',null) is timestamp
+            && d.start==prev.data.videoStartedAt.toMillis()
+            && after.data.get('videoStartedAt',null)==null && after.data.activeStart>0)
+        );
+    }
+
+
+    function validKidSpecialEnd(h,id) {
+      let prev=resource.data;
+      let next=request.resource.data;
+      let sid=next.get('lastSessionId','');
+      let segment=getAfter(sessionPath(h,sid));
+      let now=request.time.toMillis();
+      let expected=segment.data.end+segment.data.duration+prev.get('cycleUsedMs',0)+specialRestDebt(prev);
+      return isKid(h) && (hasActiveRestException(prev)||prev.get('cycleUsedMs',0)>0)
+        && sid is string && sid.size()>0 && sid.size()<=180
+        && segment!=null && segment.data.childId==id
+        && segment.data.get('cycleFinal',false)==true
+        && segment.data.get('exceptionPlay',false)==hasActiveRestException(prev)
+        && segment.data.pauseCount==prev.get('pauseCount',0)
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
+          'restStart','restUntil','lastDuration','lastSessionId','cycleUsedMs','restException',
+          'pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+        ])
+        && next.updatedAt==request.time
+        && next.get('cycleUsedMs',0)==0
+        && next.get('pauseStartedAt',null)==null
+        && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0
+        && next.restStart==segment.data.end && next.restStart>=now-60000 && next.restStart<=now+60000
+        && next.lastDuration==prev.get('cycleUsedMs',0)+segment.data.duration
+        && next.restUntil==(prev.restUntil>expected?prev.restUntil:expected)
+        && (
+          hasActiveRestException(prev)
+          ? (next.restException is map && next.restException.state=='used'
+            && next.restException.finishedAt==request.time
+            && next.restException.diff(prev.restException).affectedKeys().hasOnly(['state','finishedAt']))
+          : next.get('restException',null)==prev.get('restException',null)
+        )
+        && (
+          (prev.activeStart is int && prev.activeStart>0
+            && segment.data.activityType=='game'
+            && segment.data.start==prev.activeStart && segment.data.deviceId==prev.deviceId
+            && next.activeStart==0 && next.deviceId==null
+            && next.startedAt==null && next.endedAt==request.time)
+          ||
+          (prev.activeStart==0 && prev.get('videoStartedAt',null) is timestamp
+            && segment.data.activityType=='video'
+            && segment.data.start==prev.videoStartedAt.toMillis()
+            && next.videoStartedAt==null && next.videoDurationMinutes==0 && next.endedAt==null)
+        );
+    }
+    function validKidSpecialSession(h,sid) {
+      let d=request.resource.data;
+      let prev=get(profilePath(h,d.childId));
+      let after=getAfter(profilePath(h,d.childId));
+      let now=request.time.toMillis();
+      let expected=d.end+d.duration+prev.data.get('cycleUsedMs',0)+specialRestDebt(prev.data);
+      return isKid(h) && d.keys().hasAll([
+          'childId','start','end','duration','activityType','deviceId',
+          'cycleFinal','exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.keys().hasOnly([
+          'childId','start','end','duration','activityType','deviceId',
+          'cycleFinal','exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.childId in ['older','younger'] && d.cycleFinal==true
+        && d.exceptionPlay==hasActiveRestException(prev.data)
+        && (hasActiveRestException(prev.data)||prev.data.get('cycleUsedMs',0)>0)
+        && d.activityType in ['game','video'] && d.deviceId in ['sw1','sw2','video']
+        && d.start is int && d.end is int && d.end>d.start
+        && d.end>=now-60000 && d.end<=now+60000
+        && d.duration is int && d.duration>=1000 && d.duration<=604800000
+        && d.pauseCount is int && d.pauseCount>=0 && d.pauseCount<=100
+        && d.pauseMs is int && d.pauseMs>=0
+        && (d.pauseCount==0 ? d.pauseMs==0 :
+          (d.pauseMs>0 && d.pauseMs>=pauseMsAtEnd(prev.data,d.end)-60000
+            && d.pauseMs<=pauseMsAtEnd(prev.data,d.end)+60000))
+        && d.duration==d.end-d.start-d.pauseMs
+        && d.createdAt==request.time && d.createdBy==request.auth.uid && d.edited==false
+        && prev!=null && after!=null && prev.data.get('pauseCount',0)==d.pauseCount
+        && after.data.lastSessionId==sid && after.data.updatedAt==request.time
+        && after.data.activeStart==0 && after.data.get('videoStartedAt',null)==null
+        && after.data.get('cycleUsedMs',0)==0
+        && after.data.lastDuration==prev.data.get('cycleUsedMs',0)+d.duration
+        && after.data.restStart==d.end
+        && after.data.restUntil==(prev.data.restUntil>expected?prev.data.restUntil:expected)
+        && (
+          (d.activityType=='game' && prev.data.activeStart==d.start && prev.data.deviceId==d.deviceId)
+          ||
+          (d.activityType=='video' && prev.data.get('videoStartedAt',null) is timestamp
+            && d.start==prev.data.videoStartedAt.toMillis() && d.deviceId=='video')
+        );
+    }
+
     // 操作履歴。新規操作は「プロフィール更新」に連動する。
     function auditActionTouchesProfile(h, d) {
       return d.childId in ['older','younger']
@@ -549,7 +773,7 @@ service cloud.firestore {
             && d.action in [
               'start','end','undo_start','undo_end','manual_set','night_resume',
               'video_start','video_stop','pokemon_claim','start_backdated','start_corrected',
-              'play_pause','play_resume'
+              'play_pause','play_resume','mode_switch'
             ]
             && auditActionTouchesProfile(h,d))
           ||
@@ -557,7 +781,7 @@ service cloud.firestore {
             (d.action in [
                'manual_set','manual_clear','forgotten_end','cheat_confirm',
                'cheat_honest','cheat_restore','start_backdated','start_corrected',
-               'pokemon_release'
+               'pokemon_release','rest_exception_grant','rest_exception_cancel'
              ] && auditActionTouchesProfile(h,d))
             || (d.action == 'history_edit' && d.childId in ['older','younger']
               && d.sessionId.size() > 0
@@ -628,6 +852,9 @@ service cloud.firestore {
         && profile.data.get('manualRestUntil',0) <= request.time.toMillis()
         && session.data.childId == d.childId && session.data.createdBy == request.auth.uid
         && session.data.get('activityType','game') == 'game'
+        && session.data.get('exceptionPlay',false) == false
+        && profile.data.restUntil <= request.time.toMillis()
+        && profile.data.get('cycleUsedMs',0) == 0
         && (session.data.edited == false
           || (session.data.edited == true && session.data.get('correctionKind','') == 'honest'))
         && session.data.duration is int && session.data.duration >= 60000
@@ -1110,6 +1337,12 @@ service cloud.firestore {
           validKidFavoriteTeamUpdate()
           || validKidPauseStart()
           || validKidPauseResume()
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
+                && validKidExceptionStart(h,playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
+                && validKidCycleSwitch(h,playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
+                && validKidSpecialEnd(h,playerId))
           || validKidPausedGameEnd(h,playerId)
           || validKidPausedVideoEnd(h,playerId)
           || validKidPlayerUpdate(h, playerId)
@@ -1130,7 +1363,11 @@ service cloud.firestore {
       }
       match /sessions/{sid} {
         allow read: if isMember(h);
-        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
+        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['transition','childId'])
+              && validKidCycleSwitchSession(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['cycleFinal','childId'])
+              && validKidSpecialSession(h,sid))
+          || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
               && validKidPausedVideoSessionCreate(h,sid))
           || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','undoPrevious','childId'])
               && validKidPausedGameSessionCreate(h,sid))
