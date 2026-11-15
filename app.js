@@ -966,6 +966,121 @@ function rewardActionFor(id,now=Date.now()){
   }
   return `<div class="pokemon-reward-action"><span>${caption}</span><small>${safe(stateLabel)}</small></div>`;
 }
+// v3.17.0: Self-reported forgotten starts are never penalized.
+// Only a parent's explicit confirmation counts once per recorded play, for 30 days.
+const retroCollection=()=>dbApi.collection(db,'households',householdId,'retroReports');
+const retroRef=id=>dbApi.doc(db,'households',householdId,'retroReports',id);
+function renderRetroAdmin(){
+  const root=$('retro-report-list'),summary=$('retro-report-summary');
+  if(!isParentPage||!root||!summary)return;
+  if(!model.retroReportsLoaded){summary.textContent='開始忘れの申告履歴を確認中…';root.innerHTML='<p class="empty">クラウドを確認中…</p>';return;}
+  const now=Date.now(),fresh=model.retroReports.filter(x=>stampMillis(x.reportedAt)>=now-30*DAY);
+  summary.innerHTML=displayIds().map(id=>{
+    const self=fresh.filter(x=>x.childId===id&&x.source==='self').length;
+    const counted=unresolvedNotices(model.retroReports,id,now).length;
+    return '<div class="retro-count"><strong>'+safe(playerLabel(id))+'</strong><span>自主申告 '+self+'件 ／ 指摘 '+counted+' / '+RETRO_PENALTY_THRESHOLD+'回</span></div>';
+  }).join('');
+  const pending=model.retroReports.filter(x=>x.reviewStatus==='pending');
+  const reviewed=model.retroReports.filter(x=>x.reviewStatus!=='pending').slice(0,25);
+  root.innerHTML=[...pending,...reviewed].slice(0,70).map(x=>{
+    const type=x.source==='self'?'自分からの申告':'保護者に言われて申告';
+    const status={pending:'未確認',acknowledged:'自主申告を確認',counted:'指摘あり',excused:'事情を確認・免除'}[x.reviewStatus]||'確認中';
+    const locked=!!x.penaltyEventId||busy||!canOperate()||!model.retroReportsServerConfirmed;
+    const controls=x.penaltyEventId?'<small>指摘3回による対応済み</small>':
+      '<div class="retro-review-actions">'+
+      (x.reviewStatus!=='acknowledged'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':acknowledged" '+(locked?'disabled':'')+'>自主申告として確認</button>':'')+
+      (x.reviewStatus!=='counted'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':counted" '+(locked?'disabled':'')+'>保護者の指摘として1回</button>':'')+
+      (x.reviewStatus!=='excused'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':excused" '+(locked?'disabled':'')+'>今回は免除</button>':'')+'</div>';
+    return '<article class="retro-record"><div><strong>'+safe(playerLabel(x.childId))+'</strong> · '+safe(type)+'</div>'+
+      '<small>'+safe(dateTime(stampMillis(x.reportedAt)))+' ／ '+safe(status)+'</small>'+
+      '<p>申告した開始時刻：'+safe(dateTime(x.actualStartMs))+'</p>'+controls+'</article>';
+  }).join('')||'<p class="empty">まだ開始忘れの申告はありません。</p>';
+  const thresholds=ids.filter(id=>unresolvedNotices(model.retroReports,id,now).length>=RETRO_PENALTY_THRESHOLD);
+  if(thresholds.length){
+    root.insertAdjacentHTML('afterbegin',thresholds.map(id=>{
+      const owned=releaseCandidatesFor(id).length;
+      const disabled=busy||!canOperate()||!model.retroReportsServerConfirmed||
+        !model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!inventoryReady(id);
+      return '<section class="retro-threshold" role="status"><strong>'+safe(playerLabel(id))+'：指摘が3回になりました</strong>'+
+        '<p>30日以内の指摘を3件確認しました。事情を確認してから判断してください。自動でポケモンは逃げません。</p>'+
+        (owned?'<button type="button" class="btn finish" data-retro-penalty="'+id+'" '+(disabled?'disabled':'')+'>ランダムで1匹逃がす</button>':'<p>現在の所持ポケモンは0匹です。</p>')+
+        '<button type="button" class="btn outline" data-retro-penalty-excuse="'+id+'" '+(busy||!canOperate()?'disabled':'')+'>今回は免除する</button></section>';
+    }).join(''));
+  }
+}
+async function reviewRetroReport(reportId,reviewStatus){
+  if(!isParentPage||busy||!['acknowledged','counted','excused'].includes(reviewStatus))return;
+  const item=model.retroReports.find(x=>x.reportId===reportId);
+  if(!item||item.penaltyEventId)return;
+  const action={acknowledged:'自主申告として確認',counted:'保護者の指摘として1回加算',excused:'今回は免除'}[reviewStatus];
+  if(!confirm(playerLabel(item.childId)+'の開始忘れを「'+action+'」として記録しますか？'))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=retroRef(reportId),snap=await tx.get(ref);
+      if(!snap.exists()||snap.data().penaltyEventId)throw Error('すでに別の対応が行われています。');
+      if(snap.data().reviewStatus===reviewStatus)throw Error('すでに確認済みです。');
+      tx.update(ref,{reviewStatus,reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
+    });
+    toast(action+'を記録しました。');
+  });
+}
+async function excuseRetroPenalty(id){
+  if(!isParentPage||!ids.includes(id))return;
+  const list=availablePenalty(model.retroReports,id);
+  if(list.length!==RETRO_PENALTY_THRESHOLD)return toast('最新の指摘回数を確認してください。');
+  const chosen=list[list.length-1];
+  await reviewRetroReport(chosen.reportId,'excused');
+}
+async function applyRetroPenalty(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate())return;
+  if(!model.retroReportsServerConfirmed||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!inventoryReady(id))
+    return toast('クラウドの最新情報を確認中です。');
+  const reports=availablePenalty(model.retroReports,id);
+  if(reports.length!==RETRO_PENALTY_THRESHOLD)return toast('30日以内の未処理の指摘が3件必要です。');
+  const choices=releaseCandidatesFor(id);
+  if(!choices.length)return toast('現在の所持ポケモンがありません。今回は免除を選択してください。');
+  if(!confirm(playerLabel(id)+'について30日以内の指摘3件を確認しましたか？\nランダムで所持ポケモンを1匹逃がします。元に戻せません。実行しますか？'))return;
+  const choice=chooseThreeRandom(choices)[0];
+  const eventRef=dbApi.doc(dbApi.collection(db,'households',householdId,'pokemonReleases'));
+  const rewardRef=dbApi.doc(db,'households',householdId,'rewards',choice.rewardId);
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const profileRef=refProfile(id),inventoryRef=pokemonInventoryRef(id);
+      const notices=reports.map(x=>retroRef(x.reportId));
+      const [profileSnap,invSnap,rewardSnap,...reportSnaps]=await Promise.all([
+        tx.get(profileRef),tx.get(inventoryRef),tx.get(rewardRef),...notices.map(ref=>tx.get(ref))
+      ]);
+      if(!profileSnap.exists()||!rewardSnap.exists()||rewardSnap.data().childId!==id||rewardSnap.data().revoked===true)
+        throw Error('最新のポケモン所持記録が一致しません。');
+      const inventory=inventoryState(invSnap),profile=profileSnap.data(),now=Date.now();
+      if(inventory.owned[String(choice.no)]!==choice.rewardId)throw Error('ポケモンの所持状態が変わりました。');
+      if(reportSnaps.some(snap=>!snap.exists()||snap.data().childId!==id||
+        snap.data().reviewStatus!=='counted'||snap.data().penaltyEventId||
+        stampMillis(snap.data().reviewedAt)<now-30*DAY))
+        throw Error('指摘3件の状態が変わりました。もう一度確認してください。');
+      const newOwned={...inventory.owned};delete newOwned[String(choice.no)];
+      nextInventory(tx,inventoryRef,inventory,newOwned,inventory.reserved,inventory.seen,
+        inventory.buddyId===choice.rewardId?{buddyId:''}:{});
+      const remaining=new Set(Object.keys(newOwned).map(Number));
+      const oldTeam=teamFromProfile(profile),newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
+      tx.update(rewardRef,{revoked:true,revokedReason:'released',revokedAt:dbApi.serverTimestamp(),
+        revokedBy:uid,releaseEventId:eventRef.id});
+      const details=[{rewardId:choice.rewardId,no:choice.no,name:pokemonName(choice.no)}];
+      tx.set(eventRef,{childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),
+        reason:'retro_three_notices',triggerReports:reports.map(x=>x.reportId),
+        rewardIds:[choice.rewardId],pokemon:details,count:1});
+      for(const ref of notices)tx.update(ref,{penaltyEventId:eventRef.id});
+      const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
+      if(newTeam.some((v,i)=>v!==oldTeam[i])){changes.favoriteTeam=newTeam;changes.teamUpdatedAt=dbApi.serverTimestamp();}
+      tx.update(profileRef,changes);
+      appendAudit(tx,'pokemon_release',id,'開始忘れ指摘が30日以内に3回',
+        pokemonName(choice.no)+'がランダムで1匹逃げた',eventRef.id);
+    });
+    toast(playerLabel(id)+'の開始忘れ指摘3回により、'+pokemonName(choice.no)+'が逃げました。');
+    renderRetroAdmin();renderReleaseAdmin();
+  });
+}
+
 /* v3.13: release three captured Pokemon without deleting historic claims. */
 const releaseSeenFallback=new Set();
 let pokemonReleasePending=null;
@@ -1081,7 +1196,7 @@ function showReleaseNotice(){
   pokemonReleasePending=next.eventId;
   $('pokemon-release-title').textContent=playerLabel(next.childId)+'へ おしらせ';
   const pokemon=Array.isArray(next.pokemon)?next.pokemon:[];
-  $('pokemon-release-message').textContent='ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
+  $('pokemon-release-message').textContent=next.reason==='retro_three_notices'?'開始忘れを3回指摘されたので、ポケモンが1ぴき たびに でたよ。':'ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
   $('pokemon-release-names').textContent=pokemon.map(p=>p.name||pokemonName(p.no)).join('・');
   dialog.showModal();
 }
