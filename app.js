@@ -1,11 +1,11 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.16.2';
-import {effectivePausedMillis} from './pause-timing.js?v=3.16.2';
-import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.16.2';
-import {setupFeedback} from './feedback.js?v=3.16.2';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.16.2';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.17.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.17.0';
+import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.17.0';
+import {setupFeedback} from './feedback.js?v=3.17.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.17.0';
 import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.17.0';
 
 const $ = id => document.getElementById(id);
@@ -1857,7 +1857,7 @@ function checkVideoNotices(now=Date.now()){
     showRestNotice(`${playerLabel(id)}：動画の時間だよ！`,`${videoLimitOf(p)}分になりました。動画をいったん終わろう。`,`video-${id}-${due}`);
   }
 }
-// v3.16.2: 保護者承認制の例外利用。以前の休憩残量を消さず次回に繰り越す。
+// v3.17.0: 保護者承認制の例外利用。以前の休憩残量を消さず次回に繰り越す。
 function exceptionOffer(p,now=Date.now()){
   const e=p?.restException;
   return e?.state==='offered' && Number(e.expiresAt)>now && Number(e.debtMs)>0 && [15,30,60].includes(Number(e.maxMinutes));
