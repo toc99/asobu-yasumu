@@ -412,35 +412,72 @@ service cloud.firestore {
         && p.data.updatedAt == request.time;
     }
 
-    // v3.13: 子ども用iPadの開始忘れ(最大3時間)・開始時刻訂正。
+    // v3.17: First retro correction creates exactly one declaration tied to this play.
+    // Additional corrections to the same play reuse the recorded declaration.
+    function retroReportPath(h,id) {
+      return /databases/$(database)/documents/households/$(h)/retroReports/$(id);
+    }
+    function retroHasCurrentDeclaration(d) {
+      return d.get('retroReportId','') is string
+        && d.get('retroReportId','').size()>0
+        && d.get('retroReportStartedAt',null) is timestamp
+        && d.get('startedAt',null) is timestamp
+        && d.retroReportStartedAt==d.startedAt;
+    }
+    function validRetroDeclarationLink(h,playerId,after) {
+      let id=after.get('retroReportId','');
+      return id is string && id.size()>0 && id.size()<=180
+        && existsAfter(retroReportPath(h,id))
+        && getAfter(retroReportPath(h,id)).data.childId==playerId
+        && getAfter(retroReportPath(h,id)).data.reportedAt==request.time
+        && getAfter(retroReportPath(h,id)).data.sessionStartedAt==after.startedAt
+        && getAfter(retroReportPath(h,id)).data.actualStartMs==after.activeStart;
+    }
     function validKidRetroStart(h,playerId) {
-      let prev = resource.data;
-      let next = request.resource.data;
-      let now = request.time.toMillis();
-      return prev.activeStart == 0 && prev.get('videoStartedAt',null) == null
-        && prev.restUntil <= now && prev.get('manualRestUntil',0) <= now
-        && next.diff(prev).affectedKeys().hasOnly(['activeStart','deviceId','startedAt','endedAt','updatedAt'])
+      let prev=resource.data;
+      let next=request.resource.data;
+      let now=request.time.toMillis();
+      return prev.activeStart==0 && prev.get('videoStartedAt',null)==null
+        && prev.restUntil<=now && prev.get('manualRestUntil',0)<=now
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','updatedAt',
+          'retroReportId','retroReportStartedAt'
+        ])
+        && next.diff(prev).affectedKeys().hasAll(['retroReportId','retroReportStartedAt'])
         && next.activeStart is int
-        && next.activeStart >= now - 10800000 && next.activeStart < now
-        && next.activeStart >= prev.restUntil
-        && next.activeStart >= prev.get('manualRestUntil',0)
+        && next.activeStart>=now-10800000 && next.activeStart<now
+        && next.activeStart>=prev.restUntil
+        && next.activeStart>=prev.get('manualRestUntil',0)
         && next.deviceId in ['sw1','sw2']
-        && next.startedAt == request.time
-        && next.get('endedAt',null) == null && next.updatedAt == request.time;
+        && next.startedAt==request.time
+        && next.retroReportStartedAt==request.time
+        && next.get('endedAt',null)==null && next.updatedAt==request.time
+        && validRetroDeclarationLink(h,playerId,next);
     }
     function validKidRetroCorrection(h,playerId) {
-      let prev = resource.data;
-      let next = request.resource.data;
-      let now = request.time.toMillis();
-      return prev.activeStart is int && prev.activeStart > 0
-        && prev.get('videoStartedAt',null) == null
-        && next.diff(prev).affectedKeys().hasOnly(['activeStart','updatedAt'])
+      let prev=resource.data;
+      let next=request.resource.data;
+      let now=request.time.toMillis();
+      return prev.activeStart is int && prev.activeStart>0
+        && prev.get('videoStartedAt',null)==null
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','updatedAt','retroReportId','retroReportStartedAt'
+        ])
         && next.activeStart is int
-        && next.activeStart >= now - 10800000
-        && next.activeStart < prev.activeStart
-        && next.activeStart >= prev.restUntil
-        && next.activeStart >= prev.get('manualRestUntil',0)
-        && next.updatedAt == request.time;
+        && next.activeStart>=now-10800000
+        && next.activeStart<prev.activeStart
+        && next.activeStart>=prev.restUntil
+        && next.activeStart>=prev.get('manualRestUntil',0)
+        && next.updatedAt==request.time
+        && (
+          (retroHasCurrentDeclaration(prev)
+            && next.diff(prev).affectedKeys().hasOnly(['activeStart','updatedAt']))
+          ||
+          (!retroHasCurrentDeclaration(prev)
+            && next.diff(prev).affectedKeys().hasAll(['retroReportId','retroReportStartedAt'])
+            && next.retroReportStartedAt==prev.startedAt
+            && validRetroDeclarationLink(h,playerId,next))
+        );
     }
 
     function validKidManualRestUpdate(h, playerId) {
