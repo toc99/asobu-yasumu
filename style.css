@@ -633,3 +633,69 @@ button:focus-visible,a:focus-visible,summary:focus-visible,select:focus-visible,
 }
 @media(max-width:390px){.ui-nav-button{font-size:11px}.ui-primary-nav.parent-nav .ui-nav-button{font-size:11px}.ui-focus-buttons button{padding:10px 3px}.ui-next-step{padding:12px}}
 @media(prefers-reduced-motion:reduce){.activity-person .activity-item{transition:none}}
+
+
+/* v3.15.0: opinion-box ticketing, conversation and archival UX */
+.ui-primary-nav.parent-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+.feedback-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;align-items:end;background:#f5f9fd;border:1px solid #dfeaf3;padding:15px;border-radius:17px}
+.feedback-filters label{display:grid;gap:6px;min-width:0;font-size:13px;font-weight:850;color:#48627b}
+.feedback-filters select,.feedback-filters input{min-height:46px;width:100%;min-width:0;border:1px solid #cbdbe8;background:white;border-radius:12px;padding:10px 12px;color:#284764;font-size:14px}
+.feedback-filters .feedback-keyword{grid-column:span 3}
+.feedback-filters button{min-height:46px;font-size:13px}
+.feedback-list{gap:13px}
+.feedback-ticket{border:1px solid #d7e3ed;border-radius:18px;background:#fff;overflow:hidden;box-shadow:0 4px 16px #1f3e5410;scroll-margin-top:90px}
+.feedback-ticket>summary{list-style:none;cursor:pointer}
+.feedback-ticket>summary::-webkit-details-marker{display:none}
+.feedback-ticket-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:17px 18px;min-height:66px;background:#fdfefe}
+.feedback-ticket-head:before{content:'▸';font-size:17px;color:#5a7e98;font-weight:900;margin-right:1px}
+.feedback-ticket[open] .feedback-ticket-head:before{content:'▾'}
+.feedback-ticket-main{min-width:0;flex:1;display:grid;gap:5px}
+.feedback-ticket-main strong{font-size:16px;line-height:1.5;color:#203e59;overflow-wrap:anywhere}
+.feedback-ticket-main small{font-size:12px;line-height:1.5;color:#74879a}
+.feedback-ticket-state{border-radius:99px;background:#e8f3fb;color:#32648a;font-size:12px;padding:7px 10px;font-weight:850;white-space:normal;max-width:185px;text-align:center}
+.feedback-ticket-state.needs-parent{background:#fff2dd;color:#926019}
+.feedback-ticket-state.is-closed{background:#edf1f5;color:#5b7084}
+.feedback-ticket-body{padding:16px 18px 19px;border-top:1px solid #e7eff4}
+.feedback-thread{display:grid;gap:10px;margin-bottom:16px}
+.feedback-bubble{padding:12px 15px;border-radius:14px;background:#f2f7fb;max-width:90%;border:1px solid #e1eaf2}
+.feedback-bubble.parent{margin-left:auto;background:#edf8f3;border-color:#d3e9dc}
+.feedback-bubble span{display:block;font-weight:800;font-size:11px;color:#557286;margin-bottom:6px}
+.feedback-bubble p{margin:0;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.feedback-message-form{border-top:1px solid #e4edf4;padding-top:15px;display:grid;gap:10px}
+.feedback-message-form label{display:grid;gap:8px;font-weight:850;color:#405e79;font-size:13px}
+.feedback-message-form textarea{width:100%;min-height:80px;resize:vertical;border:1px solid #c8d9e7;border-radius:12px;padding:12px;color:#263e55;font:inherit;font-size:15px;line-height:1.5}
+.feedback-message-form button{justify-self:start;min-width:145px}
+.feedback-ticket-controls{display:flex;align-items:end;flex-wrap:wrap;gap:11px;border-top:1px solid #e6edf3;padding:14px 0}
+.feedback-ticket-controls label{display:grid;gap:5px;font-weight:800;color:#405e79;font-size:13px}
+.feedback-ticket-controls select{min-width:145px;border:1px solid #c8d9e7;border-radius:12px;padding:10px 12px;min-height:45px;background:white;color:#304b64}
+.feedback-ticket-controls .btn{min-height:45px;font-size:13px}
+.feedback-delete{color:#9b3c44!important;border-color:#eac9cf!important;margin-left:auto}
+.feedback-awaiting{border-left:4px solid #deb36a;background:#fff9ed;padding:11px 13px;border-radius:8px;font-size:13px;font-weight:800;color:#825d25;line-height:1.6}
+.feedback-child-decision{display:grid;justify-items:start;gap:8px;background:#fff9e9;padding:14px 15px;border:1px solid #f0e0b5;border-radius:15px;margin:12px 0}
+.feedback-child-decision p{font-weight:900;color:#825d22;margin:0;line-height:1.6}
+.feedback-child-decision small{color:#7d775d;line-height:1.5}
+.feedback-delete-help{margin-bottom:0}
+#feedback-parent-summary,#feedback-kid-summary{font-weight:800;color:#496982}
+#feedback-kid-archive-toggle{min-height:45px}
+body[data-role="kid"] .feedback-message-form textarea{min-height:100px;font-size:16px}
+body[data-role="kid"] .feedback-ticket-head{padding:17px}
+@media(max-width:850px){.feedback-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.feedback-filters .feedback-keyword{grid-column:span 1}}
+@media(max-width:650px){
+  .ui-primary-nav.parent-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .ui-primary-nav.parent-nav .ui-nav-button{font-size:11px;padding:5px 1px}
+  .ui-primary-nav.parent-nav .ui-nav-button span:first-child{font-size:19px}
+  .feedback-filters{gap:9px;padding:11px}
+  .feedback-filters select,.feedback-filters input{font-size:13px;padding:9px}
+  .feedback-filters button{grid-column:1/-1}
+  .feedback-ticket-head{flex-wrap:wrap;gap:8px;padding:13px}
+  .feedback-ticket-main strong{font-size:15px}
+  .feedback-ticket-state{margin-left:18px}
+  .feedback-ticket-body{padding:12px}
+  .feedback-bubble{max-width:96%}
+  .feedback-ticket-controls{align-items:stretch}
+  .feedback-ticket-controls label{flex:1 1 100%}
+  .feedback-ticket-controls select{width:100%}
+  .feedback-ticket-controls .btn{flex:1 1 140px}
+  .feedback-ticket-controls .feedback-delete{margin-left:0;flex:1 1 100%}
+  .feedback-message-form button{width:100%}
+}

@@ -992,12 +992,78 @@ service cloud.firestore {
 
     match /households/{h} {
 
-      // v3.13.4: kid feedback & parent triage
+      // v3.15.0: ticketed feedback with in-document thread and child acknowledgement.
+      // Legacy feedbackReports (without messages/closed) remain valid and readable.
+      function validFeedbackAppendedMessage(roleName) {
+        let before = resource.data.get('messages',[]);
+        let after = request.resource.data.get('messages',[]);
+        let message = after[after.size()-1];
+        let now = request.time.toMillis();
+        return before is list && after is list
+          && before.size() < 100 && after.size() == before.size()+1
+          && after == before.concat([message])
+          && message is map
+          && message.keys().hasAll(['text','authorRole','authorUid','postedAtMs'])
+          && message.keys().hasOnly(['text','authorRole','authorUid','postedAtMs'])
+          && message.text is string && message.text.size() >= 1 && message.text.size() <= 500
+          && message.authorRole == roleName
+          && message.authorUid == request.auth.uid
+          && message.postedAtMs is int
+          && message.postedAtMs >= now-300000 && message.postedAtMs <= now+300000;
+      }
+      function validKidFeedbackMessage() {
+        let prev = resource.data;
+        let next = request.resource.data;
+        return !prev.get('closed',false)
+          && prev.get('status','') in ['new','reviewing','planned','done','declined']
+          && next.diff(prev).affectedKeys().hasOnly([
+            'messages','lastActivityAt','needsParentReply','status'])
+          && next.status == (prev.status in ['done','declined'] ? 'reviewing' : prev.status)
+          && next.needsParentReply == true && next.lastActivityAt == request.time
+          && validFeedbackAppendedMessage('kid');
+      }
+      function validParentFeedbackMessage() {
+        let prev = resource.data;
+        let next = request.resource.data;
+        return !prev.get('closed',false)
+          && next.diff(prev).affectedKeys().hasOnly([
+            'messages','lastActivityAt','needsParentReply','status','reviewedBy','reviewedAt'])
+          && next.status == (prev.status == 'new' ? 'reviewing' : prev.status)
+          && next.needsParentReply == false && next.lastActivityAt == request.time
+          && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
+          && validFeedbackAppendedMessage('parent');
+      }
+      function validParentFeedbackStatus() {
+        let prev = resource.data;
+        let next = request.resource.data;
+        return next.diff(prev).affectedKeys().hasOnly([
+            'status','needsParentReply','reviewedBy','reviewedAt',
+            'lastActivityAt','closed','closedAt','closedBy'])
+          && next.status in ['new','reviewing','planned','done','declined']
+          && next.needsParentReply == false
+          && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
+          && next.lastActivityAt == request.time
+          && (prev.get('closed',false) == false
+            ? (next.get('closed',false) == false
+                && !next.diff(prev).affectedKeys().hasAny(['closed','closedAt','closedBy']))
+            : (next.status in ['new','reviewing','planned']
+                && next.closed == false && next.closedAt == null && next.closedBy == ''));
+      }
+      function validKidFeedbackAck() {
+        let prev = resource.data;
+        let next = request.resource.data;
+        return !prev.get('closed',false)
+          && prev.status in ['done','declined']
+          && next.diff(prev).affectedKeys().hasOnly([
+            'closed','closedAt','closedBy','needsParentReply','lastActivityAt'])
+          && next.closed == true && next.closedAt == request.time
+          && next.closedBy == request.auth.uid
+          && next.needsParentReply == false && next.lastActivityAt == request.time;
+      }
       match /feedbackReports/{reportId} {
-        // iPadアカウントは共有のため、同じ家族の子ども同士のデータ分離は
-        // UI上のフィルタのみ。Firestore上では家族アカウントで参照可能。
+        // Shared iPad user: separation by childId is in the UI, not per-child Auth UID.
         allow read: if isMember(h);
-      
+        // Keep creation format unchanged for backward compatibility and rollback.
         allow create: if isKid(h)
           && request.resource.data.keys().hasAll([
             'childId','type','title','description','status',
@@ -1021,18 +1087,10 @@ service cloud.firestore {
           && request.resource.data.parentReply == ''
           && request.resource.data.reviewedBy == ''
           && request.resource.data.reviewedAt == null;
-      
-        allow update: if isParent(h)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status','parentReply','reviewedBy','reviewedAt'
-          ])
-          && request.resource.data.status in ['new','reviewing','planned','done','declined']
-          && request.resource.data.parentReply is string
-          && request.resource.data.parentReply.size() <= 300
-          && request.resource.data.reviewedBy == request.auth.uid
-          && request.resource.data.reviewedAt == request.time;
-      
-        allow delete: if false;
+        allow update: if (isKid(h) && (validKidFeedbackMessage() || validKidFeedbackAck()))
+          || (isParent(h) && (validParentFeedbackMessage() || validParentFeedbackStatus()));
+        // Physical deletion, including the entire embedded thread, is parent-only.
+        allow delete: if isParent(h);
       }
 
       match /members/{memberUid} {
