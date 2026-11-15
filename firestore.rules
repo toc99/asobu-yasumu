@@ -80,7 +80,7 @@ service cloud.firestore {
       let old = prev.get('videoStartedAt',null);
       let s = getAfter(sessionPath(h,next.lastSessionId));
       return old is timestamp && prev.activeStart == 0
-        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) > 0
+        && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) >= 0
         && next.diff(prev).affectedKeys().hasOnly([
           'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
           'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
@@ -96,9 +96,10 @@ service cloud.firestore {
         && s != null && s.data.childId == id && s.data.activityType == 'video'
         && s.data.start == math.floor(old.toMillis()) && s.data.end == next.restStart
         && s.data.duration == next.lastDuration && s.data.pauseCount == prev.pauseCount
-        && s.data.pauseMs is int && s.data.pauseMs > 0
-        && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
-        && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000
+        && s.data.pauseMs is int && s.data.pauseMs >= 0
+        && (prev.pauseCount == 0 ? s.data.pauseMs == 0 :
+          (s.data.pauseMs > 0 && s.data.pauseMs >= pauseMsAtEnd(prev,next.restStart) - 60000
+           && s.data.pauseMs <= pauseMsAtEnd(prev,next.restStart) + 60000))
         && next.lastDuration == next.restStart - math.floor(old.toMillis()) - s.data.pauseMs;
     }
     // セッションには実開始・実終了・中断を除いた実利用時間を保存する。
@@ -156,15 +157,16 @@ service cloud.firestore {
         && d.start is int && d.end is int && d.end > d.start
         && d.end <= request.time.toMillis() + 60000 && d.end >= request.time.toMillis() - 60000
         && d.duration is int && d.duration >= 1000 && d.duration <= 604800000
-        && d.pauseMs is int && d.pauseMs > 0 && d.pauseCount is int && d.pauseCount > 0 && d.pauseCount <= 100
+        && d.pauseMs is int && d.pauseMs >= 0 && d.pauseCount is int && d.pauseCount >= 0 && d.pauseCount <= 100
+        && (d.pauseCount == 0 ? d.pauseMs == 0 : d.pauseMs > 0)
         && d.duration == d.end - d.start - d.pauseMs
         && d.createdAt == request.time && d.createdBy == request.auth.uid && d.edited == false
         && prev != null && prev.data.activeStart == 0
         && prev.data.get('videoStartedAt',null) is timestamp
         && math.floor(prev.data.videoStartedAt.toMillis()) == d.start
         && prev.data.pauseCount == d.pauseCount
-        && d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
-        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000
+        && (prev.data.pauseCount == 0 || (d.pauseMs >= pauseMsAtEnd(prev.data,d.end) - 60000
+        && d.pauseMs <= pauseMsAtEnd(prev.data,d.end) + 60000))
         && after != null && after.data.videoStartedAt == null
         && after.data.lastSessionId == sid && after.data.restStart == d.end
         && after.data.lastDuration == d.duration && after.data.updatedAt == request.time
