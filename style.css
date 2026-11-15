@@ -699,3 +699,48 @@ body[data-role="kid"] .feedback-ticket-head{padding:17px}
   .feedback-ticket-controls .feedback-delete{margin-left:0;flex:1 1 100%}
   .feedback-message-form button{width:100%}
 }
+
+
+/* v3.16.1: narrow-screen parent page must fit the viewport without horizontal document scrolling.
+   Keep the five tabs and the optional rest-exception button in the usable layout. */
+body[data-role="parent"] { min-width:0; overflow-x:clip; }
+body[data-role="parent"] .topinner,
+body[data-role="parent"] .container,
+body[data-role="parent"] #app-screen,
+body[data-role="parent"] .ui-view-pane,
+body[data-role="parent"] .ui-dashboard,
+body[data-role="parent"] .ui-dashboard-people,
+body[data-role="parent"] .ui-person-summary,
+body[data-role="parent"] .ui-dashboard-alert,
+body[data-role="parent"] .ui-quick-links,
+body[data-role="parent"] .ui-management-content { min-width:0; max-width:100%; }
+body[data-role="parent"] .ui-primary-nav.parent-nav { width:100%; grid-template-columns:repeat(5,minmax(0,1fr)); }
+body[data-role="parent"] .ui-primary-nav.parent-nav .ui-nav-button {
+  min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:normal;
+}
+body[data-role="parent"] .ui-dashboard-people > *,
+body[data-role="parent"] .ui-quick-links > *,
+body[data-role="parent"] .ui-person-summary > *,
+body[data-role="parent"] .ui-dashboard-alert > * { min-width:0; }
+body[data-role="parent"] .ui-person-summary strong,
+body[data-role="parent"] .ui-person-summary small,
+body[data-role="parent"] .ui-person-summary button,
+body[data-role="parent"] .ui-quick-links button,
+body[data-role="parent"] .ui-dashboard-alert strong,
+body[data-role="parent"] .ui-dashboard-alert p { overflow-wrap:anywhere; white-space:normal; }
+@media(max-width:780px) {
+  body[data-role="parent"] .container {width:100%; }
+  body[data-role="parent"] .topinner {gap:8px; width:100%; }
+  body[data-role="parent"] .brand {min-width:0;flex:1 1 auto;gap:9px;}
+  body[data-role="parent"] .brand > div:last-child {min-width:0;}
+  body[data-role="parent"] .brand-title,
+  body[data-role="parent"] .brand-sub {overflow-wrap:anywhere;}
+  body[data-role="parent"] .brand-icon {flex:0 0 auto;}
+  body[data-role="parent"] .topright {flex:0 0 auto;min-width:0;}
+}
+@media(max-width:390px) {
+  body[data-role="parent"] .ui-primary-nav.parent-nav {gap:2px;padding:4px;}
+  body[data-role="parent"] .ui-primary-nav.parent-nav .ui-nav-button {font-size:10px;padding:5px 0;line-height:1.25;}
+  body[data-role="parent"] .ui-primary-nav.parent-nav .ui-nav-button span:first-child {font-size:18px;}
+  body[data-role="parent"] .ui-person-summary {padding:12px;}
+}
