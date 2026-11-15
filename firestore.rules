@@ -1324,6 +1324,64 @@ service cloud.firestore {
           && next.closedBy == request.auth.uid
           && next.needsParentReply == false && next.lastActivityAt == request.time;
       }
+      // v3.17: Self-reporting cannot trigger a punishment.
+      // Only a parent can confirm a notice, waive it, or settle it in a release.
+      match /retroReports/{reportId} {
+        allow read: if isMember(h);
+        allow create: if (isKid(h)||isParent(h))
+          && request.resource.data.keys().hasAll([
+            'childId','source','reportedBy','reportedAt','sessionStartedAt',
+            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'childId','source','reportedBy','reportedAt','sessionStartedAt',
+            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && request.resource.data.childId in ['older','younger']
+          && request.resource.data.source in ['self','prompted']
+          && request.resource.data.reportedBy==request.auth.uid
+          && request.resource.data.reportedAt==request.time
+          && request.resource.data.sessionStartedAt is timestamp
+          && request.resource.data.actualStartMs is int
+          && request.resource.data.actualStartMs<=request.time.toMillis()
+          && request.resource.data.actualStartMs>=request.time.toMillis()-86400000
+          && request.resource.data.reviewStatus=='pending'
+          && request.resource.data.reviewedAt==null
+          && request.resource.data.reviewedBy==''
+          && request.resource.data.penaltyEventId==''
+          && existsAfter(profilePath(h,request.resource.data.childId))
+          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportId==reportId
+          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportStartedAt==request.resource.data.sessionStartedAt
+          && getAfter(profilePath(h,request.resource.data.childId)).data.activeStart==request.resource.data.actualStartMs
+          && getAfter(profilePath(h,request.resource.data.childId)).data.startedAt==request.resource.data.sessionStartedAt;
+        allow update: if isParent(h)
+          && resource.data.penaltyEventId==''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && (
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewStatus','reviewedAt','reviewedBy'])
+              && request.resource.data.reviewStatus in ['acknowledged','counted','excused']
+              && request.resource.data.reviewStatus != resource.data.reviewStatus
+              && request.resource.data.reviewedBy==request.auth.uid
+              && request.resource.data.reviewedAt==request.time
+              && request.resource.data.penaltyEventId==''
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penaltyEventId'])
+              && resource.data.reviewStatus=='counted'
+              && request.resource.data.penaltyEventId is string
+              && request.resource.data.penaltyEventId.size()>0
+              && existsAfter(releasePath(h,request.resource.data.penaltyEventId))
+              && getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.reason=='retro_three_notices'
+              && reportId in getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.triggerReports
+            )
+          );
+        allow delete: if false;
+      }
+
       match /feedbackReports/{reportId} {
         // Shared iPad user: separation by childId is in the UI, not per-child Auth UID.
         allow read: if isMember(h);
