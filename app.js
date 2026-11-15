@@ -2457,6 +2457,9 @@ function openRetroStart(id){
   inp.value=preciseDateInput(Math.max(min,Math.min(max,suggested)));
   for(const opt of sel.options)opt.textContent=model.settings.devices?.[opt.value]||({sw1:'Switch',sw2:'Switch 2'}[opt.value]);
   sel.value=p.activeStart>0?(p.deviceId||'sw1'):'sw1';sel.disabled=p.activeStart>0;
+  const selfChoice=document.querySelector('[name="retro-report-origin"][value="self"]');
+  if(selfChoice)selfChoice.checked=true;
+  if($('retro-parent-incident'))$('retro-parent-incident').checked=false;
   updateRetroPreview();$('retro-start-dialog').showModal();
 }
 function updateRetroPreview(){
