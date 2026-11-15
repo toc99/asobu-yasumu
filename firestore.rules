@@ -1231,15 +1231,37 @@ service cloud.firestore {
         && after.data.revokedBy == request.auth.uid
         && after.data.revokedAt == request.time;
     }
+    function retroPenaltyReportLinked(h,eventId,childId,id) {
+      let record=getAfter(retroReportPath(h,id));
+      return id is string && id.size()>0 && id.size()<=180
+        && record!=null && record.data.childId==childId
+        && record.data.reviewStatus=='counted'
+        && record.data.penaltyEventId==eventId
+        && record.data.reviewedAt is timestamp
+        && record.data.reviewedAt>=request.time-duration.value(30,'d')
+        && record.data.reviewedAt<=request.time;
+    }
     function validParentPokemonReleaseEvent(h,eventId) {
       let d = request.resource.data;
       let profile = getAfter(profilePath(h,d.childId));
       return isParent(h)
         && d.keys().hasAll(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
-        && d.keys().hasOnly(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
+        && d.keys().hasOnly(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count','triggerReports'])
         && d.childId in ['older','younger']
         && d.createdBy == request.auth.uid && d.createdAt == request.time
-        && d.reason == 'rules_violation' && d.count is int && d.count in [1,2,3]
+        && d.reason in ['rules_violation','retro_three_notices']
+        && d.count is int && d.count in [1,2,3]
+        && (d.reason=='rules_violation'
+          ? d.get('triggerReports',[]).size()==0
+          : (d.count==1
+            && d.get('triggerReports',[]) is list
+            && d.triggerReports.size()==3
+            && d.triggerReports[0]!=d.triggerReports[1]
+            && d.triggerReports[0]!=d.triggerReports[2]
+            && d.triggerReports[1]!=d.triggerReports[2]
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[0])
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[1])
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[2])))
         && d.rewardIds is list && d.rewardIds.size() == d.count
         && d.rewardIds[0] is string
         && (d.count < 2 || (d.rewardIds[1] is string && d.rewardIds[0] != d.rewardIds[1]))
