@@ -1,11 +1,11 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.15.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.16.0';
 import {effectivePausedMillis} from './pause-timing.js?v=3.16.0';
 import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.16.0';
-import {setupFeedback} from './feedback.js?v=3.15.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.15.0';
+import {setupFeedback} from './feedback.js?v=3.16.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.16.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
