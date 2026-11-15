@@ -92,7 +92,7 @@
 <p class="hint" id="retro-start-help"></p>
 <label>実際にゲームを開始した日時<input type="datetime-local" step="1" id="retro-start-at" required></label>
 <label>使ったゲーム機<select id="retro-start-device"><option value="sw1">Switch</option><option value="sw2">Switch 2</option></select></label>
-<p class="hint" id="retro-start-preview" role="status"></p>
+<fieldset class="retro-report-why"><legend>どうして じかんを なおすの？</legend><label><input type="radio" name="retro-report-origin" value="self" checked> じぶんで きづいた</label><label><input type="radio" name="retro-report-origin" value="prompted"> おうちのひとに いわれた</label><p class="tiny">じぶんから しょうじきに おしえてくれたら、ばつはないよ。あそんだじかん・おやすみは ただしく なおそうね。</p></fieldset><p class="hint" id="retro-start-preview" role="status"></p>
 <div class="dialog-buttons"><button type="button" class="btn secondary" data-close>もどる</button><button type="submit" class="btn primary">開始時刻を保存</button></div>
 </form></dialog>
 <dialog id="end-dialog"><div class="dialog-body"><div class="dialog-head"><h2>ゲームをおわる？</h2><button class="x" data-close="">×</button></div><div aria-live="assertive" class="finish-warning" role="alert">
