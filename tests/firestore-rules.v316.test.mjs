@@ -136,4 +136,84 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
       writeAudit(tx,db,h,'video_stop',finish.id);
     }));
   });
+
+  test('parent-granted special play ends with the old rest debt plus new use, not a waived rest',async()=>{
+    const now=Date.now(),h='exception-finish',remaining=20*min;
+    await seed(h,{restStart:now-2*min,restUntil:now+remaining});
+    await assertSucceeds(updateDoc(profileRef(parent.firestore(),h),{
+      restException:{state:'offered',reason:'friend',debtMs:remaining,maxMinutes:30,
+        grantedAt:serverTimestamp(),expiresAt:Date.now()+10*min},
+      updatedAt:serverTimestamp()
+    }));
+    const db=kid.firestore(),ref=profileRef(db,h);
+    await assertSucceeds(runTransaction(db,async tx=>{
+      const snap=await tx.get(ref),p=snap.data();
+      tx.update(ref,{
+        activeStart:Date.now(),deviceId:'sw1',startedAt:serverTimestamp(),endedAt:null,
+        restException:{...p.restException,state:'active',startedAt:serverTimestamp()},
+        updatedAt:serverTimestamp()
+      });
+      writeAudit(tx,db,h,'start');
+    }));
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const session=sessionRef(db,h);
+    await assertSucceeds(runTransaction(db,async tx=>{
+      const snap=await tx.get(ref),p=snap.data(),end=Date.now(),duration=end-p.activeStart;
+      const endRest=Math.max(p.restUntil,end+duration+p.restException.debtMs);
+      tx.update(ref,{
+        activeStart:0,deviceId:null,startedAt:null,endedAt:serverTimestamp(),
+        restStart:end,restUntil:endRest,lastDuration:duration,lastSessionId:session.id,
+        cycleUsedMs:0,
+        restException:{...p.restException,state:'used',finishedAt:serverTimestamp()},
+        pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:serverTimestamp()
+      });
+      tx.set(session,{
+        childId:'older',start:p.activeStart,end,duration,activityType:'game',deviceId:'sw1',
+        cycleFinal:true,exceptionPlay:true,pauseMs:0,pauseCount:0,
+        createdAt:serverTimestamp(),createdBy:'kid-user',edited:false
+      });
+      writeAudit(tx,db,h,'end',session.id);
+    }));
+    // The same period must not create a routine Pokémon game reward.
+    const updated=await import('firebase/firestore').then(({getDoc})=>getDoc(ref));
+    assert.equal(updated.data().restException.state,'used');
+    assert.ok(updated.data().restUntil>Date.now()+remaining-5_000);
+  });
+  test('video to game transition and final game end preserve total use',async()=>{
+    const now=Date.now(),h='video-to-game-cycle';
+    await seed(h,{videoStartedAt:Timestamp.fromMillis(now-3*min),videoDurationMinutes:30});
+    const db=kid.firestore(),ref=profileRef(db,h),transition=sessionRef(db,h);
+    await assertSucceeds(runTransaction(db,async tx=>{
+      const snap=await tx.get(ref),p=snap.data(),start=p.videoStartedAt.toMillis(),end=Date.now(),dur=end-start;
+      tx.update(ref,{
+        videoStartedAt:null,videoDurationMinutes:0,activeStart:end,
+        deviceId:'sw1',startedAt:serverTimestamp(),endedAt:null,
+        pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,
+        cycleUsedMs:dur,lastSwitchSessionId:transition.id,updatedAt:serverTimestamp()
+      });
+      tx.set(transition,{
+        childId:'older',start,end,duration:dur,activityType:'video',deviceId:'video',
+        transition:true,exceptionPlay:false,pauseMs:0,pauseCount:0,
+        createdAt:serverTimestamp(),createdBy:'kid-user',edited:false
+      });
+      writeAudit(tx,db,h,'mode_switch',transition.id);
+    }));
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const finish=sessionRef(db,h);
+    await assertSucceeds(runTransaction(db,async tx=>{
+      const snap=await tx.get(ref),p=snap.data(),end=Date.now(),dur=end-p.activeStart;
+      const total=dur+p.cycleUsedMs;
+      tx.update(ref,{
+        activeStart:0,deviceId:null,startedAt:null,endedAt:serverTimestamp(),
+        restStart:end,restUntil:end+total,lastDuration:total,lastSessionId:finish.id,
+        cycleUsedMs:0,pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:serverTimestamp()
+      });
+      tx.set(finish,{
+        childId:'older',start:p.activeStart,end,duration:dur,activityType:'game',
+        deviceId:'sw1',cycleFinal:true,exceptionPlay:false,pauseMs:0,pauseCount:0,
+        createdAt:serverTimestamp(),createdBy:'kid-user',edited:false
+      });
+      writeAudit(tx,db,h,'end',finish.id);
+    }));
+  });
 }
