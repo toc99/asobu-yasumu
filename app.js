@@ -979,7 +979,7 @@ function renderRetroAdmin(){
       const own=model.retroReports.filter(x=>x.childId===id&&x.source==='self'&&
         x.reviewStatus!=='counted'&&stampMillis(x.reportedAt)>=now-30*DAY).length;
       const noticed=unresolvedNotices(model.retroReports,id,now).length;
-      kid.textContent='じぶんから つたえた '+own+'かい ／ おうちのひとからの しどう '+noticed+'かい（30にちかん）';
+      kid.textContent='じぶんから つたえた '+own+'かい ／ おうちのひとと かくにんした '+noticed+'かい（30にちかん）';
     }
   }
   const root=$('retro-report-list'),summary=$('retro-report-summary');
