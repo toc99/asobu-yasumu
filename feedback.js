@@ -215,13 +215,13 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
   }
   $('feedback-form')?.addEventListener('submit',submit);
   $('feedback-kid-archive-toggle')?.addEventListener('click',()=>{kidShowArchive=!kidShowArchive;render();});
-  $('feedback-kid-list')?.addEventListener('submit',e=>{const form=e.target.closest('[data-feedback-message-form]');if(form){e.preventDefault();sendMessage(form.dataset.feedbackMessageForm,form);}});
-  $('feedback-kid-list')?.addEventListener('click',e=>{const button=e.target.closest('[data-feedback-accept]');if(button)acknowledge(button.dataset.feedbackAccept);});
-  $('feedback-parent-list')?.addEventListener('submit',e=>{const form=e.target.closest('[data-feedback-message-form]');if(form){e.preventDefault();sendMessage(form.dataset.feedbackMessageForm,form);}});
+  $('feedback-kid-list')?.addEventListener('submit',e=>{const form=e.target.closest('[data-feedback-message-form]');if(form){e.preventDefault();return sendMessage(form.dataset.feedbackMessageForm,form);}});
+  $('feedback-kid-list')?.addEventListener('click',e=>{const button=e.target.closest('[data-feedback-accept]');if(button)return acknowledge(button.dataset.feedbackAccept);});
+  $('feedback-parent-list')?.addEventListener('submit',e=>{const form=e.target.closest('[data-feedback-message-form]');if(form){e.preventDefault();return sendMessage(form.dataset.feedbackMessageForm,form);}});
   $('feedback-parent-list')?.addEventListener('click',e=>{
     const status=e.target.closest('[data-feedback-status-save]'),del=e.target.closest('[data-feedback-delete]');
-    if(status)saveStatus(status.dataset.feedbackStatusSave,status.closest('[data-feedback-ticket]'));
-    if(del)removeTicket(del.dataset.feedbackDelete);
+    if(status)return saveStatus(status.dataset.feedbackStatusSave,status.closest('[data-feedback-ticket]'));
+    if(del)return removeTicket(del.dataset.feedbackDelete);
   });
   for(const [field,key] of [['feedback-filter-scope','scope'],['feedback-filter-child','child'],
     ['feedback-filter-type','type'],['feedback-filter-status','status'],['feedback-filter-keyword','keyword']]){
