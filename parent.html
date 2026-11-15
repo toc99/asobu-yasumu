@@ -28,6 +28,12 @@
 <p>ルール違反への対応として、所持ポケモンを最大3匹逃がします。所持が1〜2匹ならすべて対象です。実行するとiPadに名前を通知します。</p></div></div>
 <p class="tiny" id="pokemon-inventory-status" role="status">重複防止情報を確認しています。</p><div class="pokemon-release-actions" id="pokemon-release-actions"><p class="empty">獲得情報を読み込み中…</p></div>
 <p class="tiny">※最大3匹を抽選します。所持0匹では操作できません。操作前に確認画面を表示します。</p>
+</section><section class="card retro-report-admin" id="retro-report-admin">
+<div class="section-head"><div><h2>⏮️ 開始忘れの申告・指摘</h2>
+<p>自分で正直に報告した場合は罰なし。保護者が実際に指摘したプレイだけ、確認後に30日間の指摘回数へ加算します。同じプレイは1回しか数えません。</p></div></div>
+<div class="retro-summary" id="retro-report-summary">申告履歴を読み込み中…</div>
+<div class="retro-report-list" id="retro-report-list"><p class="empty">申告履歴を確認中…</p></div>
+<p class="tiny">3回に達した場合も自動では逃がしません。保護者が事情を確認し、1匹逃がすか免除するか決定します。所持ポケモンがいない場合は免除できます。</p>
 </section><section class="card honesty-admin" id="honesty-admin">
 <div class="section-head"><div><h2>⚠️ 終了申告の確認・休憩の修正</h2>
 <p>Switchで実際にゲームを終了したことを確認してから操作。アプリだけではズルを自動判定できません。</p></div></div>
@@ -90,7 +96,7 @@
 <p class="hint" id="retro-start-help"></p>
 <label>実際にゲームを開始した日時<input type="datetime-local" step="1" id="retro-start-at" required></label>
 <label>使ったゲーム機<select id="retro-start-device"><option value="sw1">Switch</option><option value="sw2">Switch 2</option></select></label>
-<p class="hint" id="retro-start-preview" role="status"></p>
+<label class="retro-parent-record"><input type="checkbox" id="retro-parent-incident"> このプレイの開始忘れを本人に指摘した（指摘記録を作成する）</label><p class="tiny">保護者が時刻だけを訂正する場合は、チェック不要です。記録を作成した場合も、指摘回数の加算は別途「開始忘れの申告・指摘」から確認します。</p><p class="hint" id="retro-start-preview" role="status"></p>
 <div class="dialog-buttons"><button type="button" class="btn secondary" data-close>もどる</button><button type="submit" class="btn primary">開始時刻を保存</button></div>
 </form></dialog>
 <dialog id="edit-dialog"><form class="dialog-body" id="edit-form" method="dialog"><div class="dialog-head"><h2 id="edit-title">履歴を修正</h2><button class="x" data-close="" type="button">×</button></div><label>開始日時<input id="edit-start" required="" type="datetime-local"/></label><label>終了日時<input id="edit-end" required="" type="datetime-local"/></label><p class="hint">利用時間と休憩時間が再計算されます。直近のプレイなら休憩終了時刻にも反映します。</p><div class="dialog-buttons"><button class="btn secondary" data-close="" type="button">キャンセル</button><button class="btn primary" type="submit">修正を保存</button></div></form></dialog>
