@@ -527,6 +527,50 @@ service cloud.firestore {
         && next.manualRestUntil >= 0;
     }
 
+
+    // v3.16: parent-granted, single-use exception for an existing rest debt.
+    function hasActiveRestException(d) {
+      return d.get('restException',null) is map
+        && d.restException.get('state','') == 'active';
+    }
+    function specialRestDebt(d) {
+      return hasActiveRestException(d) ? d.restException.debtMs : 0;
+    }
+    function validKidExceptionStart(h,id) {
+      let prev=resource.data;
+      let next=request.resource.data;
+      let permit=prev.get('restException',null);
+      let now=request.time.toMillis();
+      let configured=get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes',30);
+      return isKid(h) && permit is map && permit.get('state','')=='offered'
+        && permit.get('grantedAt',null) is timestamp
+        && permit.get('expiresAt',0) is int && permit.expiresAt>now
+        && permit.expiresAt<=permit.grantedAt.toMillis()+660000
+        && permit.get('debtMs',0) is int && permit.debtMs>0 && permit.debtMs<=604800000
+        && permit.get('maxMinutes',0) in [15,30,60]
+        && prev.activeStart==0 && prev.get('videoStartedAt',null)==null
+        && prev.get('cycleUsedMs',0)==0
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
+          'pauseStartedAt','pauseTotalMs','pauseCount','restException','updatedAt'
+        ])
+        && next.restException is map
+        && next.restException.diff(permit).affectedKeys().hasOnly(['state','startedAt'])
+        && next.restException.state=='active' && next.restException.startedAt==request.time
+        && next.updatedAt==request.time
+        && (
+          (next.activeStart is int && next.activeStart>=now-60000 && next.activeStart<=now+60000
+            && next.deviceId in ['sw1','sw2'] && next.startedAt==request.time
+            && next.endedAt==null && next.get('videoStartedAt',null)==null)
+          ||
+          (next.activeStart==0 && next.videoStartedAt==request.time
+            && configured is int && configured>=1 && configured<=240
+            && next.videoDurationMinutes==configured
+            && next.get('pauseStartedAt',null)==null
+            && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0)
+        );
+    }
+
     // 操作履歴。新規操作は「プロフィール更新」に連動する。
     function auditActionTouchesProfile(h, d) {
       return d.childId in ['older','younger']
