@@ -54,7 +54,7 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
     const draft=safe(preserved.drafts.get(r.reportId)||'');
     const count=Array.isArray(r.messages)?r.messages.length:0;
     const header='<summary class="feedback-ticket-head"><span class="feedback-ticket-main"><strong>'+safe(r.title)+'</strong>'+
-      '<small>'+safe(playerLabel(r.childId))+' ・ '+safe(types[r.type]||r.type)+' ・ '+
+      '<small>チケット #'+safe(String(r.reportId).slice(-6))+' ・ '+safe(playerLabel(r.childId))+' ・ '+safe(types[r.type]||r.type)+' ・ '+
       (when?safe(displayDate(when)):'日時確認中')+' ・ 返信'+count+'件</small></span>'+
       '<span class="feedback-ticket-state '+(closed?'is-closed':awaiting?'needs-parent':'')+'">'+
       safe(closed?'完了・保管済み':status)+'</span></summary>';
@@ -117,7 +117,7 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
           (parentFilters.type==='all'||r.type===parentFilters.type)&&
           (parentFilters.status==='all'||r.status===parentFilters.status)&&
           (!parentFilters.keyword||(
-            (r.title+' '+r.description+' '+(r.parentReply||'')+' '+(Array.isArray(r.messages)?r.messages.map(m=>m.text).join(' '):''))
+            (r.reportId+' '+r.title+' '+r.description+' '+(r.parentReply||'')+' '+(Array.isArray(r.messages)?r.messages.map(m=>m.text).join(' '):''))
               .toLocaleLowerCase('ja-JP').includes(parentFilters.keyword.toLocaleLowerCase('ja-JP')))));
         filtered.sort((a,b)=>Number(needsParent(b))-Number(needsParent(a))||dateOf(b)-dateOf(a));
         if($('feedback-parent-summary'))$('feedback-parent-summary').textContent='表示 '+filtered.length+'件 / 全'+reports.length+'件（要確認 '+pendingCount+'件）';
