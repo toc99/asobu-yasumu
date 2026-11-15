@@ -167,9 +167,11 @@ function nightCarryoverInfo(p,now=Date.now()){
 
 function displayTimeRange(){const p=pausePolicy();return p?`${model.settings.nightPause.start}〜${model.settings.nightPause.end}`:'';}
 function renderNightPolicy(){const e=$('night-policy');if(!e)return;
-  const p=pausePolicy();e.classList.toggle('hidden',!p);
-  if(!p)return;
+  const p=pausePolicy();
+  if(!p){e.classList.add('hidden');return;}
   const entries=ids.map(id=>({id,info:nightCarryoverInfo(model.profiles[id])})).filter(x=>x.info);
+  // 設定時刻の常時バナーは不要。実際に持ち越し中のときだけ表示。
+  e.classList.toggle('hidden',entries.length===0);
   if(entries.length){
     e.classList.add('night-policy-carryover');
     e.innerHTML='<strong>🌙 夜間休憩の持ち越し</strong>'+entries.map(x=>'<p>'+safe(playerLabel(x.id))+'：'+safe(x.info.message)+'</p>').join('')+'<small>夜間停止の設定 '+safe(displayTimeRange())+'</small>';
@@ -1774,9 +1776,9 @@ async function stopVideo(id){return runLocked(async()=>{
       restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,
       // Normalize even an old session where pauseCount=0 but pauseTotalMs was stale.
       pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:dbApi.serverTimestamp()});
+    // paused/unpausedを同一Rules検証経路へ統一。旧セッションの累積停止時間を引き継がない。
     tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
-      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
-      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}: {})});
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,pauseMs,pauseCount});
     appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
       `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
     return dur;
