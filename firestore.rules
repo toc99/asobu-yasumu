@@ -1001,7 +1001,7 @@ service cloud.firestore {
         let now = request.time.toMillis();
         return before is list && after is list
           && before.size() < 100 && after.size() == before.size()+1
-          && after.hasAll(before)
+          && after == before.concat([message])
           && message is map
           && message.keys().hasAll(['text','authorRole','authorUid','postedAtMs'])
           && message.keys().hasOnly(['text','authorRole','authorUid','postedAtMs'])
