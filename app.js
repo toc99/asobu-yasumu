@@ -987,7 +987,7 @@ function renderRetroAdmin(){
   if(!model.retroReportsLoaded){summary.textContent='開始忘れの申告履歴を確認中…';root.innerHTML='<p class="empty">クラウドを確認中…</p>';return;}
   const now=Date.now(),fresh=model.retroReports.filter(x=>stampMillis(x.reportedAt)>=now-30*DAY);
   summary.innerHTML=displayIds().map(id=>{
-    const self=fresh.filter(x=>x.childId===id&&x.source==='self').length;
+    const self=fresh.filter(x=>x.childId===id&&x.source==='self'&&x.reviewStatus!=='counted').length;
     const counted=unresolvedNotices(model.retroReports,id,now).length;
     return '<div class="retro-count"><strong>'+safe(playerLabel(id))+'</strong><span>自主申告 '+self+'件 ／ 指摘 '+counted+' / '+RETRO_PENALTY_THRESHOLD+'回</span></div>';
   }).join('');
