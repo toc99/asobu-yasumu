@@ -65,6 +65,11 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
     await seed(h,{videoStartedAt:Timestamp.fromMillis(now-5*min)});
     await assertSucceeds(stopVideo(h));
   });
+  test('a legacy zero-pause video can end even when obsolete pauseTotalMs remains',async()=>{
+    const now=Date.now(),h='video-legacy-zero';
+    await seed(h,{videoStartedAt:Timestamp.fromMillis(now-5*min),pauseCount:0,pauseTotalMs:3*min});
+    await assertSucceeds(stopVideo(h,0,0));
+  });
   test('a video previously paused can also end',async()=>{
     const now=Date.now(),h='video-paused';
     await seed(h,{videoStartedAt:Timestamp.fromMillis(now-5*min),pauseCount:1,pauseTotalMs:min});
