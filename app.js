@@ -971,6 +971,17 @@ function rewardActionFor(id,now=Date.now()){
 const retroCollection=()=>dbApi.collection(db,'households',householdId,'retroReports');
 const retroRef=id=>dbApi.doc(db,'households',householdId,'retroReports',id);
 function renderRetroAdmin(){
+  const kid=$('retro-kid-summary');
+  if(kid){
+    if(!model.retroReportsLoaded)kid.textContent='きろくを かくにんちゅう…';
+    else {
+      const now=Date.now(),id=focusChild;
+      const own=model.retroReports.filter(x=>x.childId===id&&x.source==='self'&&
+        x.reviewStatus!=='counted'&&stampMillis(x.reportedAt)>=now-30*DAY).length;
+      const noticed=unresolvedNotices(model.retroReports,id,now).length;
+      kid.textContent='じぶんから つたえた '+own+'かい ／ おうちのひとからの しどう '+noticed+'かい（30にちかん）';
+    }
+  }
   const root=$('retro-report-list'),summary=$('retro-report-summary');
   if(!isParentPage||!root||!summary)return;
   if(!model.retroReportsLoaded){summary.textContent='開始忘れの申告履歴を確認中…';root.innerHTML='<p class="empty">クラウドを確認中…</p>';return;}
@@ -993,7 +1004,7 @@ function renderRetroAdmin(){
       (x.reviewStatus!=='excused'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':excused" '+(locked?'disabled':'')+'>今回は免除</button>':'')+'</div>';
     return '<article class="retro-record"><div><strong>'+safe(playerLabel(x.childId))+'</strong> · '+safe(type)+'</div>'+
       '<small>'+safe(dateTime(stampMillis(x.reportedAt)))+' ／ '+safe(status)+'</small>'+
-      '<p>申告した開始時刻：'+safe(dateTime(x.actualStartMs))+'</p>'+controls+'</article>';
+      '<p>最初に申告した開始時刻：'+safe(dateTime(x.actualStartMs))+'</p>'+controls+'</article>';
   }).join('')||'<p class="empty">まだ開始忘れの申告はありません。</p>';
   const thresholds=ids.filter(id=>unresolvedNotices(model.retroReports,id,now).length>=RETRO_PENALTY_THRESHOLD);
   if(thresholds.length){
@@ -2181,7 +2192,7 @@ function setFocusChild(id,syncApprovals=true){
   });
   // Parent approvals default to all; switching the global child selector sets a focused filter.
   if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
-  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();renderKidNextAction();
+  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();renderKidNextAction();renderRetroAdmin();
 }
 function renderKidSpotlight(){
   const box=$('kid-spotlight-message');if(!box||!model.ready)return;
