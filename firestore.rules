@@ -1383,7 +1383,7 @@ service cloud.firestore {
           ])
           && (
             (
-              request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewStatus','reviewedAt','reviewedBy'])
+              request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewStatus','reviewedAt'])
               && request.resource.data.reviewStatus in ['acknowledged','counted','excused']
               && request.resource.data.reviewStatus != resource.data.reviewStatus
               && request.resource.data.reviewedBy==request.auth.uid
