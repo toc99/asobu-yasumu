@@ -188,7 +188,7 @@ function appendAudit(writer,action,childId,before,after,sessionId=''){
 }
 const AUDIT_ACTIONS={play_pause:'ゲーム・動画の一時停止',play_resume:'ゲーム・動画の再開',pokemon_release:'ポケモンを3匹逃がす',start_backdated:'開始忘れを遡及入力',start_corrected:'ゲーム開始時刻の訂正',start:'ゲーム開始',end:'ゲーム終了',undo_start:'開始取り消し',undo_end:'終了取り消し',
   manual_set:'手動待ち時間の設定',manual_clear:'手動待ち時間の解除',activity_request:'報酬申請',activity_approve:'報酬承認',activity_reject:'報酬却下',night_resume:'夜間の前倒し再開',forgotten_end:'終了忘れ修正',
-  rest_exception_grant:'休憩中の特例許可',rest_exception_cancel:'未使用の特例取消',history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
+  rest_exception_grant:'休憩中の特例許可',rest_exception_cancel:'未使用の特例取消',mode_switch:'ゲーム・動画の切替',history_edit:'履歴修正',settings_update:'保護者設定の変更',family_init:'家族の初期化',video_start:'動画視聴開始',video_stop:'動画視聴終了',pokemon_claim:'ポケモンをゲット',cheat_confirm:'ズル確認・休憩修正',cheat_honest:'正直な申告・休憩修正',cheat_restore:'誤判定の解除'};
 function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
   node.innerHTML=entries.length?entries.map(a=>{
@@ -1714,13 +1714,14 @@ function renderVideoAction(id,p,now=Date.now()){
   const remaining=Math.max(0,due-now),overdue=now>=due;
   const label=paused?`一時停止中・残り ${hms(remaining)}`:overdue?'時間になったよ！':`あと ${hms(remaining)}`;
   const nativeAction=!isParentPage&&!paused&&!overdue?`<a class="btn video-shortcut" href="${safe(videoShortcutUrl(Math.max(1,Math.ceil(remaining/MIN))))}" aria-label="iPadの標準タイマーを残り${Math.max(1,Math.ceil(remaining/MIN))}分で設定する">🔔 iPadの通知タイマーをセット</a>`:'';
+  const switchAction=!isParentPage&&!paused?`<button type="button" class="btn outline" data-switch-mode="${id}:game" ${busy||!canOperate()?'disabled':''}>🎮 ゲームにきりかえる</button>`:'';
   const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>${junior?'⏹️ どうがを やめたよ':'⏹️ 動画をおわる'}</button>`:'';
   const pauseAction=!isParentPage?`<button type="button" class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ 動画を再開':'⏸️ 動画を一時停止'}</button>`:'';
   return `<div class="video-box ${paused?'video-paused':overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の${junior?'おしらせ':'お知らせ'}</small></div>`+
     `<div class="video-countdown">${safe(label)}</div>`+
     (paused?'<p class="video-note">動画を止めてね。iPad標準タイマーは自動停止しないため、使っている場合は手動で停止し、再開後に設定し直してください。</p>':overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
     (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
-    `<div class="video-actions">${pauseAction}${nativeAction}${stopAction}</div></div>`;
+    `<div class="video-actions">${pauseAction}${switchAction}${nativeAction}${stopAction}</div></div>`;
 }
 const videoNoticeSent = new Set();
 function checkVideoNotices(now=Date.now()){
@@ -1821,6 +1822,49 @@ async function startVideo(id){return runLocked(async()=>{
   });
   toast(`動画タイマーを開始しました（${startedMinutes}分）。iPadの通知タイマーもセットしてください。`);
 });}
+// 🎮⇔📺 切替時は同一利用サイクルの休憩を保留し、各区間は履歴へ残す。
+// 最終終了時だけ全区間の実利用時間を休憩として確定する。
+async function switchUseMode(id,nextMode){
+  if(isParentPage||!ids.includes(id)||!['game','video'].includes(nextMode))return;
+  const current=model.profiles[id];
+  if(!current||isPlayPaused(current))return toast('切り替える前に一時停止を解除してください。');
+  if(nextMode==='video'&&!current.activeStart || nextMode==='game'&&!videoStartedMillis(current))return;
+  if(!confirm(playerLabel(id)+'：'+(nextMode==='video'?'ゲームから動画':'動画からゲーム')+'に切り替えますか？\n切替では休憩は発生せず、最後にまとめて休みます。'))return;
+  await runLocked(async()=>{
+    const ref=refProfile(id),sidRef=dbApi.doc(sessionsRef());
+    const ended=await dbApi.runTransaction(db,async tx=>{
+      const [profileSnap,settingsSnap]=await Promise.all([tx.get(ref),tx.get(refSettings())]);
+      if(!profileSnap.exists())throw Error('子どもの記録がありません。');
+      const p=profileSnap.data();
+      if(isPlayPaused(p))throw Error('先に一時停止を解除してください。');
+      if(nextMode==='video'&&!p.activeStart||nextMode==='game'&&!videoStartedMillis(p))throw Error('切替元の利用記録がありません。');
+      const end=Date.now(),start=nextMode==='video'?p.activeStart:videoStartedMillis(p);
+      const pauseCount=Number(p.pauseCount)||0,pauseMs=totalPausedMillis(p,end),duration=activeElapsed(p,start,end);
+      if(duration<1000||cycleUsedMs(p)+duration>7*DAY)throw Error('利用区間が1秒未満、または7日を超えています。');
+      const fromMode=nextMode==='video'?'game':'video';
+      const update={cycleUsedMs:cycleUsedMs(p)+duration,lastSwitchSessionId:sidRef.id,
+        pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:dbApi.serverTimestamp()};
+      if(nextMode==='video'){
+        const configured=Number(settingsSnap.data()?.videoLimitMinutes)||30;
+        if(!Number.isInteger(configured)||configured<1||configured>240)throw Error('動画設定が正しくありません。');
+        Object.assign(update,{activeStart:0,deviceId:null,startedAt:null,endedAt:null,
+          videoStartedAt:dbApi.serverTimestamp(),videoDurationMinutes:configured});
+      }else{
+        Object.assign(update,{videoStartedAt:null,videoDurationMinutes:0,activeStart:end,
+          deviceId:'sw1',startedAt:dbApi.serverTimestamp(),endedAt:null});
+      }
+      tx.update(ref,update);
+      tx.set(sidRef,{childId:id,start,end,duration,activityType:fromMode,
+        deviceId:fromMode==='game'?(p.deviceId||'sw1'):'video',
+        transition:true,exceptionPlay:exceptionActive(p),pauseMs,pauseCount,
+        createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false});
+      appendAudit(tx,'mode_switch',id,fromMode+' '+brief(duration),nextMode+'へ切替（休憩は持ち越し）',sidRef.id);
+      return duration;
+    });
+    toast((nextMode==='video'?'動画':'ゲーム')+'に切り替えました。前の利用'+brief(ended)+'も最後の休憩に加算します。');
+  });
+}
+
 async function stopVideo(id){return runLocked(async()=>{
   if(!ids.includes(id))throw Error('対象の子どもが不正です。');
   const ref=refProfile(id),sidRef=dbApi.doc(sessionsRef());
@@ -1833,14 +1877,16 @@ async function stopVideo(id){return runLocked(async()=>{
     if(dur<1000)throw Error('開始から1秒以上経過してから終了してください。');
     if(dur>7*DAY)throw Error('動画視聴が7日を超えています。保護者が記録を確認してください。');
     // 既存の休憩が残る特殊なケースでも、待ち時間を短くしない。
-    const until=Math.max(Number(p.restUntil)||0,end+dur);
+    const special=specialSession(p),total=specialTotalMs(p,dur),until=special?specialRestUntil(p,end,dur):Math.max(Number(p.restUntil)||0,end+dur);
     tx.update(ref,{videoStartedAt:null,videoDurationMinutes:0,endedAt:null,
-      restStart:end,restUntil:until,lastDuration:dur,lastSessionId:sidRef.id,
+      restStart:end,restUntil:until,lastDuration:total,lastSessionId:sidRef.id,
+      ...(special?{cycleUsedMs:0,...closeExceptionChange(p)}:{}),
       // Normalize even an old session where pauseCount=0 but pauseTotalMs was stale.
       pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:dbApi.serverTimestamp()});
-    // paused/unpausedを同一Rules検証経路へ統一。旧セッションの累積停止時間を引き継がない。
+    // 通常終了/一時停止後を同じ形式へ。切替・特例は別途厳密検証する。
     tx.set(sidRef,{childId:id,start,end,duration:dur,activityType:'video',deviceId:'video',
-      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,pauseMs,pauseCount});
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,pauseMs,pauseCount,
+      ...(special?{cycleFinal:true,exceptionPlay:exceptionActive(p)}:{})});
     appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
       `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
     return dur;
@@ -1872,6 +1918,7 @@ function renderPlayers(now=Date.now()){
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actionText=st==='resting'&&exceptionOffer(p,now)?'🎟️ とくべつに あそぶ':junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${(st==='resting'&&!exceptionOffer(p,now))||st==='watching'||busy||!canOperate()?'disabled':''}>${actionText}</button>`;
+    const modeSwitch=!isParentPage&&st==='playing'&&!paused?`<button type="button" class="btn outline" data-switch-mode="${id}:video" ${busy||!canOperate()?'disabled':''}>📺 どうがにきりかえる</button>`:'';
     const pauseAction=!isParentPage&&st==='playing'?`<button class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ ゲームを再開':'⏸️ ゲームを一時停止'}</button>`:'';
     const pausedNote=paused?`<div class="play-paused-note" role="status">一時停止中：この時間はゲーム・動画の利用時間に含まれません。必ず実機も止めてください。</div>`:'';
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
@@ -1899,7 +1946,7 @@ function renderPlayers(now=Date.now()){
     return `<article class="player ${themeFor(p)} ${junior?'age-junior':''} ${!isParentPage&&id===focusChild?'ui-player-focused':''}" data-player-id="${id}" data-age-mode="${junior?'junior':'standard'}"><div class="player-head"><div><div class="player-name"><span class="emoji">${symbolFor(p)}</span>${safe(playerLabel(id))}</div><div class="player-sub">${safe(subtitle)}${junior?' · 🌱 やさしい がめん':''}</div></div><span class="pill ${st}">${junior?juniorTitle:title}</span></div>
       <div class="big-time"><div class="caption">${junior?juniorMainTitle:mainTitle}</div><div class="digits">${hms(summaryFor(p,now))}</div><div class="detail">${safe(junior?juniorSub:sub)}</div></div>
       <div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div><div class="forecast"><strong>${junior?'⏰ じかんの おやくそく':st==='playing'?'⏰ いま終わったら':st==='watching'?'📺 いま終わったら':st==='resting'?'⌛ 前の利用時間':'✨ じぶんでじかんを決めよう'}</strong><div class="forecast-line">${safe(junior?juniorDetail:detail)}</div>${!junior&&st==='playing'?'<small>あと5分あそぶと、休憩時間も5分増えるよ</small>':''}</div>
-      <div class="player-primary-actions">${actions}${pauseAction}${videoAction}</div>${pausedNote}${exceptionNote}${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
+      <div class="player-primary-actions">${actions}${pauseAction}${modeSwitch}${videoAction}</div>${pausedNote}${exceptionNote}${carryBadge}${undoAction}${!isParentPage?retroAction:''}${penaltyBanner}${pokemonReward}
       <details class="player-tools" data-player-tools="${id}" ${keepOpen.has(id)?'open':''}>
         <summary>⏳ 待ち時間の調整・その他の操作</summary>
         <div class="player-tools-content">${retroAction}${manualAction}${nightAction}${correction}<div class="manual-info">${safe(recordText)}${p.manualRestUntil>now?`<strong>手動設定の残り：${brief(manualWaitRemaining(p,now))}</strong>`:''}</div></div>
@@ -2328,11 +2375,16 @@ async function endPlay(id){return runLocked(async()=>{
     const dur=activeElapsed(p,p.activeStart,now);
     if(dur<1000)throw Error('実際のプレイ時間が1秒以上になるまで終了できません。');
     if(dur>7*DAY)throw Error('7日以上計測されています。保護者が開始時刻を確認してください。');
-    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,restUntil:now+dur,lastDuration:dur,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
-      ...(pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
-    tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
-      ...(pauseCount>0?{pauseMs:pauseMs,pauseCount}:{ }),
-      undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}});
+    const special=specialSession(p),total=specialTotalMs(p,dur);
+    tx.update(ref,{activeStart:0,deviceId:null,startedAt:null,endedAt:dbApi.serverTimestamp(),restStart:now,
+      restUntil:special?specialRestUntil(p,now,dur):now+dur,lastDuration:total,lastSessionId:sidRef.id,updatedAt:dbApi.serverTimestamp(),
+      ...(special?{cycleUsedMs:0,...closeExceptionChange(p),pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{}),
+      ...(!special&&pauseCount>0?{pauseStartedAt:null,pauseTotalMs:0,pauseCount:0}:{})});
+    tx.set(sidRef,{childId:id,start:p.activeStart,end:now,duration:dur,deviceId:p.deviceId||'sw1',
+      createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,
+      ...(special?{activityType:'game',cycleFinal:true,exceptionPlay:exceptionActive(p),pauseMs,pauseCount}:{}),
+      ...(!special&&pauseCount>0?{pauseMs,pauseCount}:{}),
+      ...(!special?{undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}}:{})});
     appendAudit(tx,'end',id,'ゲーム中',`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
     return dur;
   });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
@@ -2652,6 +2704,7 @@ function initUiEvents(){
    if(btn.dataset.activityReview){const [rid,action]=btn.dataset.activityReview.split(':');reviewActivity(rid,action);}
    if(btn.dataset.effortDay){effortCalendarDay=Number(btn.dataset.effortDay);renderEffortCalendar();}
    if(btn.dataset.videoStart)startVideo(btn.dataset.videoStart);
+    if(btn.dataset.switchMode){const [id,mode]=btn.dataset.switchMode.split(':');switchUseMode(id,mode);}
    if(btn.dataset.videoStop)stopVideo(btn.dataset.videoStop);
     if(btn.dataset.playPause)togglePlayPause(btn.dataset.playPause);
    if(btn.dataset.edit)editOpen(btn.dataset.edit);
