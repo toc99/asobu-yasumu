@@ -571,6 +571,95 @@ service cloud.firestore {
         );
     }
 
+
+    function validKidCycleSwitch(h,id) {
+      let prev=resource.data;
+      let next=request.resource.data;
+      let sid=next.get('lastSwitchSessionId','');
+      let segment=getAfter(sessionPath(h,sid));
+      let now=request.time.toMillis();
+      let configured=get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes',30);
+      return isKid(h) && sid is string && sid.size()>0 && sid.size()<=180
+        && sid!=prev.get('lastSwitchSessionId','')
+        && prev.get('cycleUsedMs',0) is int && prev.get('cycleUsedMs',0)>=0
+        && segment!=null && segment.data.childId==id && segment.data.get('transition',false)==true
+        && segment.data.duration is int && segment.data.duration>=1000
+        && next.get('cycleUsedMs',0)==prev.get('cycleUsedMs',0)+segment.data.duration
+        && next.cycleUsedMs<=604800000
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
+          'pauseStartedAt','pauseTotalMs','pauseCount','cycleUsedMs','lastSwitchSessionId','updatedAt'
+        ])
+        && prev.get('pauseStartedAt',null)==null
+        && next.get('pauseStartedAt',null)==null
+        && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0
+        && next.updatedAt==request.time
+        && (
+          (prev.activeStart is int && prev.activeStart>0
+            && prev.get('videoStartedAt',null)==null
+            && next.activeStart==0 && next.deviceId==null
+            && next.startedAt==null && next.endedAt==null
+            && next.videoStartedAt==request.time
+            && configured is int && configured>=1 && configured<=240
+            && next.videoDurationMinutes==configured
+            && segment.data.activityType=='game' && segment.data.start==prev.activeStart
+            && segment.data.deviceId==prev.deviceId)
+          ||
+          (prev.activeStart==0 && prev.get('videoStartedAt',null) is timestamp
+            && next.videoStartedAt==null && next.videoDurationMinutes==0
+            && next.activeStart is int && next.activeStart>=now-60000 && next.activeStart<=now+60000
+            && next.deviceId=='sw1' && next.startedAt==request.time && next.endedAt==null
+            && segment.data.activityType=='video'
+            && segment.data.start==prev.videoStartedAt.toMillis()
+            && segment.data.deviceId=='video')
+        );
+    }
+    function validKidCycleSwitchSession(h,sid) {
+      let d=request.resource.data;
+      let prev=get(profilePath(h,d.childId));
+      let after=getAfter(profilePath(h,d.childId));
+      let now=request.time.toMillis();
+      return isKid(h)
+        && d.keys().hasAll([
+          'childId','start','end','duration','activityType','deviceId','transition',
+          'exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.keys().hasOnly([
+          'childId','start','end','duration','activityType','deviceId','transition',
+          'exceptionPlay','pauseMs','pauseCount','createdAt','createdBy','edited'
+        ])
+        && d.childId in ['older','younger'] && d.transition==true
+        && d.exceptionPlay is bool && d.activityType in ['game','video']
+        && d.deviceId in ['sw1','sw2','video']
+        && d.start is int && d.end is int && d.end>d.start
+        && d.end>=now-60000 && d.end<=now+60000
+        && d.duration is int && d.duration>=1000
+        && d.pauseCount is int && d.pauseCount>=0 && d.pauseCount<=100
+        && d.pauseMs is int && d.pauseMs>=0
+        && (d.pauseCount==0 ? d.pauseMs==0 :
+          (d.pauseMs>0 && d.pauseMs>=pauseMsAtEnd(prev.data,d.end)-60000
+            && d.pauseMs<=pauseMsAtEnd(prev.data,d.end)+60000))
+        && d.duration==d.end-d.start-d.pauseMs
+        && d.createdAt==request.time && d.createdBy==request.auth.uid && d.edited==false
+        && prev!=null && after!=null
+        && prev.data.get('pauseCount',0)==d.pauseCount
+        && prev.data.get('pauseStartedAt',null)==null
+        && d.exceptionPlay==hasActiveRestException(prev.data)
+        && after.data.lastSwitchSessionId==sid
+        && after.data.get('cycleUsedMs',0)==prev.data.get('cycleUsedMs',0)+d.duration
+        && after.data.updatedAt==request.time
+        && (
+          (d.activityType=='game'
+            && prev.data.activeStart==d.start && prev.data.deviceId==d.deviceId
+            && after.data.activeStart==0 && after.data.get('videoStartedAt',null)==request.time)
+          ||
+          (d.activityType=='video'
+            && prev.data.get('videoStartedAt',null) is timestamp
+            && d.start==prev.data.videoStartedAt.toMillis()
+            && after.data.get('videoStartedAt',null)==null && after.data.activeStart>0)
+        );
+    }
+
     // 操作履歴。新規操作は「プロフィール更新」に連動する。
     function auditActionTouchesProfile(h, d) {
       return d.childId in ['older','younger']
