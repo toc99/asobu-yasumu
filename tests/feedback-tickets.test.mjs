@@ -48,7 +48,7 @@ test('replies use an append-only transaction and retain existing legacy replies'
   assert.match(source,/if\(d\.closed===true\)throw/);
   assert.match(rules,/function validFeedbackAppendedMessage\(roleName\)/);
   assert.match(rules,/after\.size\(\) == before\.size\(\)\+1/);
-  assert.match(rules,/after\.hasAll\(before\)/);
+  assert.match(rules,/after == before\.concat\(\[message\]\)/);
   assert.match(rules,/message\.authorUid == request\.auth\.uid/);
   assert.match(rules,/message\.text\.size\(\) <= 500/);
   assert.match(rules,/before\.size\(\) < 100/);
