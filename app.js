@@ -2,7 +2,8 @@ import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
 import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.15.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.15.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.16.0';
+import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.16.0';
 import {setupFeedback} from './feedback.js?v=3.15.0';
 import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.15.0';
 
@@ -178,7 +179,7 @@ function renderNightPolicy(){const e=$('night-policy');if(!e)return;
     e.innerHTML='<strong>🌙 夜間休憩の持ち越し</strong>'+entries.map(x=>'<p>'+safe(playerLabel(x.id))+'：'+safe(x.info.message)+'</p>').join('')+'<small>夜間停止の設定 '+safe(displayTimeRange())+'</small>';
   }else{
     e.classList.remove('night-policy-carryover');
-    e.textContent=`夜間持ち越し設定：${displayTimeRange()}は原則として待ち時間が減りません${isNightPaused()?'／子ども別に前倒し再開できます':''}`;
+    e.textContent='';
   }
 }
 function auditRef(){return dbApi.doc(dbApi.collection(db,'households',householdId,'auditLogs'));}
@@ -1754,8 +1755,8 @@ function exceptionStartChange(p){
 function closeExceptionChange(p){
   return exceptionActive(p)?{restException:{...p.restException,state:'used',finishedAt:dbApi.serverTimestamp()}}:{};
 }
-function specialTotalMs(p,duration){return cycleUsedMs(p)+duration;}
-function specialRestUntil(p,end,duration){return Math.max(Number(p.restUntil)||0,end+specialTotalMs(p,duration)+exceptionDebt(p));}
+function specialTotalMs(p,duration){return totalCycleUseMs(cycleUsedMs(p),duration);}
+function specialRestUntil(p,end,duration){return restEndWithDebt(Number(p.restUntil)||0,end,cycleUsedMs(p),duration,exceptionDebt(p));}
 function specialSession(p){return exceptionActive(p)||cycleUsedMs(p)>0;}
 async function grantRestException(id){
   if(!isParentPage||!ids.includes(id)||!canOperate())return;
@@ -1888,8 +1889,8 @@ async function stopVideo(id){return runLocked(async()=>{
       createdAt:dbApi.serverTimestamp(),createdBy:uid,edited:false,pauseMs,pauseCount,
       ...(special?{cycleFinal:true,exceptionPlay:exceptionActive(p)}:{})});
     appendAudit(tx,'video_stop',id,`${videoLimitOf(p)}分設定・視聴中`,
-      `${brief(dur)}視聴／${brief(dur)}の休憩を開始`,sidRef.id);
-    return dur;
+      `${brief(total)}利用／${brief(special?total+exceptionDebt(p):dur)}の休憩を開始`,sidRef.id);
+    return special?total+exceptionDebt(p):dur;
   });
   toast(`動画を終了しました。${brief(duration)}の休憩を開始します。iPad標準タイマーは必要なら停止してください。`);
 });}
@@ -1902,7 +1903,7 @@ function renderPlayers(now=Date.now()){
     const junior=!isParentPage&&ageModeFor(p,now)==='junior';
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
-    const restDuration=Math.max(1,manualControlling ? (p.manualRestMinutes||1)*MIN : (p.lastDuration||1));
+    const restDuration=Math.max(1,manualControlling?(p.manualRestMinutes||1)*MIN:Math.max(p.lastDuration||1,(p.restUntil||0)-(p.restStart||0)));
     const title=paused?'一時停止中':st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
     const juniorTitle=paused?'⏸️ とめてるよ':st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
     const mainTitle=paused?'一時停止までに あそんだじかん':st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
@@ -1931,7 +1932,9 @@ function renderPlayers(now=Date.now()){
       ? `<button class="btn early-resume-action" data-night-resume="${id}" ${busy||!canOperate()||!hasNightResumeRuleConfig()?'disabled':''}>☀️ いまから休憩の消化を再開</button><p class="early-resume-hint">夜間の停止だけを解除。残りの休憩時間はそのまま守ろう。</p>${!hasNightResumeRuleConfig()?'<p class="early-resume-hint">保護者画面で夜間停止設定を一度保存してください。</p>':''}`
       : (!isParentPage&&resumedThisNight(p,now)&&waitingRemaining(p,now)>0?'<p class="early-resume-hint early-active">☀️ 今夜は休憩時間を消化中</p>':'');
     const videoAction=renderVideoAction(id,p,now);
-    const exceptionNote=exceptionActive(p)?`<p class="feedback-reply">🎟️ 特例で利用中。残っていた休憩 ${brief(exceptionDebt(p))} と、追加利用した時間は終了後にまとめて休もう。最大 ${Number(p.restException.maxMinutes)}分。</p>`:exceptionOffer(p,now)?'<p class="feedback-reply">🎟️ 保護者が特例を許可したよ。10分以内にゲームか動画を始めてね。</p>':'';
+    const exceptionUsed=cycleUsedMs(p)+(st==='playing'?gameDuration(p,now):st==='watching'?videoElapsed(p,now):0);
+    const exceptionOver=exceptionActive(p)&&exceptionUsed>Number(p.restException.maxMinutes)*MIN;
+    const exceptionNote=exceptionActive(p)?`<p class="feedback-reply" role="status">🎟️ 特例利用中：最大${Number(p.restException.maxMinutes)}分。以前の休憩${brief(exceptionDebt(p))}と、今回の利用分は終了後に休もう。${exceptionOver?'<strong>許可時間を過ぎています。いま終了しよう。</strong>':''}</p>`:exceptionOffer(p,now)?'<p class="feedback-reply">🎟️ 保護者が特例を許可したよ。10分以内にゲームか動画を始めてね。</p>':'';
     const undo=undoKind(p,now);
     const undoAction=undo?`<button class="btn outline undo-action" data-undo="${id}" ${busy||!canOperate()?'disabled':''}>↩️ まちがえた！ あと${Math.max(1,Math.ceil((30000-(now-stampMillis(undo==='start'?p.startedAt:p.endedAt)))/1000))}秒</button>`:'';
     const retroAction=(st==='ready'||st==='playing')?`<button class="btn outline retro-start" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>${st==='playing'?'⏮️ 開始時刻を修正':'⏮️ 開始忘れ・時刻を指定'}</button>`:'';
@@ -2387,8 +2390,8 @@ async function endPlay(id){return runLocked(async()=>{
       ...(special?{activityType:'game',cycleFinal:true,exceptionPlay:exceptionActive(p),pauseMs,pauseCount}:{}),
       ...(!special&&pauseCount>0?{pauseMs,pauseCount}:{}),
       ...(!special?{undoPrevious:{restStart:p.restStart||0,restUntil:p.restUntil||0,lastDuration:p.lastDuration||0,lastSessionId:p.lastSessionId||'',startedAt:p.startedAt||null}}:{})});
-    appendAudit(tx,'end',id,'ゲーム中',`${brief(dur)}プレイ／通常の休憩 ${brief(dur)}`,sidRef.id);
-    return dur;
+    appendAudit(tx,'end',id,'ゲーム中',`${brief(total)}利用／${brief(special?total+exceptionDebt(p):dur)}の休憩`,sidRef.id);
+    return special?total+exceptionDebt(p):dur;
   });$('end-dialog').close();toast(`おつかれさま！ ${brief(duration)}の休憩スタート`);
  });
 }
