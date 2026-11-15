@@ -744,3 +744,31 @@ body[data-role="parent"] .ui-dashboard-alert p { overflow-wrap:anywhere; white-s
   body[data-role="parent"] .ui-primary-nav.parent-nav .ui-nav-button span:first-child {font-size:18px;}
   body[data-role="parent"] .ui-person-summary {padding:12px;}
 }
+
+/* v3.16.2: iOS Safari's native date control has an intrinsic minimum width.
+   Only constrain the two birth-date fields in the parent settings form. */
+body[data-role="parent"] #settings-form .child-settings,
+body[data-role="parent"] #settings-form .child-settings label {
+  min-width:0;
+  max-width:100%;
+}
+body[data-role="parent"] #settings-form .child-settings label {
+  grid-template-columns:minmax(0,1fr);
+}
+body[data-role="parent"] #settings-form input[type="date"] {
+  display:block;
+  box-sizing:border-box;
+  width:100%;
+  min-width:0;
+  max-width:100%;
+  padding-inline:9px;
+  font-size:16px;
+}
+body[data-role="parent"] #settings-form input[type="date"]::-webkit-date-and-time-value {
+  min-width:0;
+}
+@media(max-width:390px){
+  body[data-role="parent"] #settings-form input[type="date"] {
+    padding-inline:6px;
+  }
+}
