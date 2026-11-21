@@ -1541,15 +1541,17 @@ service cloud.firestore {
         allow read: if isMember(h);
         allow create: if isParent(h) && playerId in ['older','younger'];
         allow update: if (isParent(h) || (isKid(h) && (
-          validKidFavoriteTeamUpdate()
-          || validKidPauseStart()
-          || validKidPauseResume()
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
-                && validKidExceptionStart(h,playerId))
+          // Route multi-step session transitions first to avoid Firestore's 1,000-expression
+          // evaluation limit when validating a profile, its session and an audit entry.
+          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
+                && validKidSpecialEnd(h,playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
                 && validKidCycleSwitch(h,playerId))
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
-                && validKidSpecialEnd(h,playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
+                && validKidExceptionStart(h,playerId))
+          || validKidFavoriteTeamUpdate()
+          || validKidPauseStart()
+          || validKidPauseResume()
           || validKidPausedGameEnd(h,playerId)
           || validKidPausedVideoEnd(h,playerId)
           || validKidPlayerUpdate(h, playerId)
