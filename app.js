@@ -205,6 +205,7 @@ function renderAudit(){const node=$('audit-list');if(!node)return;
   }).join(''):'<p class="empty">v3.4導入後の操作履歴はまだありません。</p>';
 }
 function restEnd(p){return Math.max(normalRestEnd(p),p?.manualRestUntil||0);}
+function restWasOverridden(p){const at=stampMillis(p?.restOverrideAt);return at>0&&Math.abs(at-(Number(p?.restStart)||0))<60000;}
 function normalWaitRemaining(p, now=Date.now()){
   const raw=Number(p?.restUntil)||0,start=Number(p?.restStart)||0,policy=pausePolicy();
   if(!policy||raw<=start||raw<=policy.enabledAt)return Math.max(0,raw-now);
@@ -2101,6 +2102,7 @@ function renderPlayers(now=Date.now()){
     const p=model.profiles[id]||playerBase(id),st=status(p,now),elapsed=gameDuration(p,now),until=restEnd(p),paused=isPlayPaused(p);
     const junior=!isParentPage&&ageModeFor(p,now)==='junior';
     const manualControlling=(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now);
+    const restAdjusted=st==='resting'&&restWasOverridden(p);
     const restStart=manualControlling?(p.manualRestSetAt?.toMillis?.()||now):(p.restStart||now);
     const restDuration=Math.max(1,manualControlling?(p.manualRestMinutes||1)*MIN:(p.restUntil||0)-(p.restStart||0));
     const title=paused?'一時停止中':st==='playing'?'ゲーム中':st==='watching'?'動画視聴中':st==='resting'?'休憩中':'利用OK';
@@ -2108,11 +2110,11 @@ function renderPlayers(now=Date.now()){
     const mainTitle=paused?'一時停止までに あそんだじかん':st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
     const sub=paused?'計測は一時停止中。ゲームや動画の再開時に「再開」を押してください':st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
     const detail=(st==='playing'||st==='watching')?stopForecastText(p,now,st):
-      st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+      st==='resting'?(restAdjusted?'おうちの人が残り休憩を '+(p.restOverrideMinutes||0)+'分に調整したよ':manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const juniorMainTitle=st==='playing'?'あそんでいる じかん':st==='watching'?'どうがを みている じかん':st==='resting'?'あと これだけ おやすみ':'いまは あそべるよ！';
     const juniorSub=paused?'ゲーム・どうがも とめよう。おわったら さいかいしてね':st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
     const juniorDetail=(st==='playing'||st==='watching')?stopForecastText(p,now,st,true):
-      st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
+      st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ${restAdjusted?'（おうちの人が調整）':''}`:'ゲームを はじめられるよ！';
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actionText=st==='resting'&&exceptionOffer(p,now)?'🎟️ とくべつに あそぶ':junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
     const actions=isParentPage?'':`<button class="action ${st==='playing'?'stop':''}" data-action="${st==='playing'?'end':'start'}" data-child="${id}" ${(st==='resting'&&!exceptionOffer(p,now))||st==='watching'||busy||!canOperate()?'disabled':''}>${actionText}</button>`;
@@ -2123,7 +2125,7 @@ function renderPlayers(now=Date.now()){
     const recordTime=p.manualRestSetAt?.toMillis?.()||0;
     const carried=cycleUsedMs(p);
     const cycleNote=carried>0?`<p class="video-note">🔄 切替前の利用${brief(carried)}も、最後の休憩に加算されるよ。</p>`:'';
-    const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
+    const recordText=restAdjusted?`保護者が残り休憩を${p.restOverrideMinutes||0}分に短縮したよ` : recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
     const restOverrideAction=isParentPage&&st==='resting'?`<button type="button" class="btn outline" data-rest-override="${id}" ${busy||!canOperate()?'disabled':''}>休憩の残りを上書き（保護者）</button>`:'';
     const earlyPossible=canEarlyResume(p,now);
@@ -2348,9 +2350,9 @@ function updatePlayerTimes(now=Date.now()){
       if(st==='playing'||st==='watching'){
         line.textContent=(paused?'⏸️ 計測は一時停止中 ／ ':'')+stopForecastText(p,now,st,junior);
       }else if(junior){
-        line.textContent=st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
+        line.textContent=st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ${restWasOverridden(p)?'（おうちの人が調整）':''}`:'ゲームを はじめられるよ！';
       }else{
-        line.textContent=st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+        line.textContent=st==='resting'?(restWasOverridden(p)?'おうちの人が残り休憩を '+(p.restOverrideMinutes||0)+'分に調整したよ':(p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
       }
     }
     const prog=card.querySelector('.progress i');
