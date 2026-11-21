@@ -194,7 +194,7 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
         videoStartedAt:null,videoDurationMinutes:0,activeStart:end,
         deviceId:'sw1',startedAt:serverTimestamp(),endedAt:null,
         pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,
-        cycleUsedMs:dur,lastSwitchSessionId:transition.id,updatedAt:serverTimestamp()
+        cycleUsedMs:dur,cycleVideoUsedMs:dur,lastSwitchSessionId:transition.id,updatedAt:serverTimestamp()
       });
       tx.set(transition,{
         childId:'older',start,end,duration:dur,activityType:'video',deviceId:'video',
@@ -211,7 +211,7 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
       tx.update(ref,{
         activeStart:0,deviceId:null,startedAt:null,endedAt:serverTimestamp(),
         restStart:end,restUntil:end+total,lastDuration:total,lastSessionId:finish.id,
-        cycleUsedMs:0,pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:serverTimestamp()
+        cycleUsedMs:0,cycleVideoUsedMs:0,pauseStartedAt:null,pauseTotalMs:0,pauseCount:0,updatedAt:serverTimestamp()
       });
       tx.set(finish,{
         childId:'older',start:p.activeStart,end,duration:dur,activityType:'game',
