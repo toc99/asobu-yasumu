@@ -12,3 +12,8 @@ test('別の所持・予約済み・逃走したものは復元候補にしな�
    evolutionLog:{active:[{from:1,to:2},{from:4,to:2}],released:[{from:3,to:4}]}};
  assert.deepEqual(legacyEvolutionRecoveryCandidates(state),[]);
 });
+test('復元後に逃がしたポケモンはもう復元しない',()=>{
+ const state={owned:{'3':'original'},reserved:{},seen:{'1':true,'2':true,'3':true},
+   evolutionLog:{original:[{from:1,to:2},{from:2,to:3}]}};
+ assert.deepEqual(legacyEvolutionRecoveryCandidates(state,1025,[1]).map(c=>c.no),[2]);
+});

@@ -1130,6 +1130,12 @@ function chooseThreeRandom(items){
   }
   return pool.slice(0,3);
 }
+function legacyRecoveryCandidatesFor(id,state=model.pokemonInventories[id]){
+  // A Pokémon deliberately released after an old-data repair must not be resurrected.
+  const released=rewardClaims(id).filter(r=>r.kind==='evolution_restore'
+    && r.revoked===true&&r.revokedReason==='released').map(r=>Number(r.pokemonNo));
+  return legacyEvolutionRecoveryCandidates(state,POKEDEX_TOTAL,released);
+}
 function renderReleaseAdmin(){
   const root=$('pokemon-release-actions');if(!root||!isParentPage)return;
   if(!model.rewardsLoaded||!model.ready){root.textContent='ポケモンの獲得記録を読み込み中…';return;}
@@ -1138,7 +1144,7 @@ function renderReleaseAdmin(){
     statusNode.textContent=errors.length?errors.join(' ／ '):ids.every(inventoryReady)?'重複防止管理は有効です。':'重複防止データを確認中です。保護者画面で初回移行します。';}
   root.innerHTML=displayIds().map(id=>{
     const count=releaseCandidatesFor(id).length;
-    const recoveries=legacyEvolutionRecoveryCandidates(model.pokemonInventories[id],POKEDEX_TOTAL);
+    const recoveries=legacyRecoveryCandidatesFor(id);
     const recoveryDisabled=busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!canOperate();
     const disabled=count===0||busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
     return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹</small></div>'+
@@ -1147,7 +1153,7 @@ function renderReleaseAdmin(){
 }
 async function recoverLegacyEvolution(id){
   if(!isParentPage||!ids.includes(id)||!canOperate()||!inventoryReady(id)||!model.rewardsServerConfirmed)return;
-  const list=legacyEvolutionRecoveryCandidates(model.pokemonInventories[id],POKEDEX_TOTAL);
+  const list=legacyRecoveryCandidatesFor(id);
   if(!list.length)return toast('復元対象の進化元はありません。');
   const names=list.map(c=>pokemonName(c.no)).join('、');
   if(!confirm(playerLabel(id)+'の以前の進化で未所持になった '+list.length+'匹（'+names+'）を復元しますか？\n逃がしたポケモンは復元しません。'))return;
@@ -1164,7 +1170,7 @@ async function recoverLegacyEvolution(id){
         const inv=inventoryState(snap);
         if(!sourceSnap.exists()||sourceSnap.data().childId!==id||sourceSnap.data().revoked===true)
           throw Error('進化元の獲得記録が無効です。');
-        const eligible=legacyEvolutionRecoveryCandidates(inv,POKEDEX_TOTAL)
+        const eligible=legacyRecoveryCandidatesFor(id,inv)
           .some(c=>c.no===candidate.no&&c.sourceRewardId===candidate.sourceRewardId);
         if(!eligible)throw Error('復元状況が変更されています。最新画面で確認してください。');
         nextInventory(tx,invRef,inv,{...inv.owned,[String(candidate.no)]:restoredId},inv.reserved,inv.seen);
