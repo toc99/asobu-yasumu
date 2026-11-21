@@ -1645,9 +1645,9 @@ service cloud.firestore {
         allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
           ? validKidBonusReward(h,rewardId) : (request.resource.data.get('kind','') == 'evolution'
             ? validKidEvolutionReward(h,rewardId) : validKidPokemonReward(h,rewardId))))
-          || (isParent(h) && (validParentActivityReward(h,rewardId)
-            || (request.resource.data.get('kind','') == 'evolution_restore'
-              && validParentEvolutionRecoveryReward(h,rewardId))));
+          || (isParent(h) && ((request.resource.data.get('kind','') == 'evolution_restore'
+              && validParentEvolutionRecoveryReward(h,rewardId))
+            || validParentActivityReward(h,rewardId)));
         allow update: if isParent(h) && (
           validParentGameRewardRevocation()
           || validParentPokemonReleaseReward(h,rewardId));
