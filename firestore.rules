@@ -1543,7 +1543,8 @@ service cloud.firestore {
         allow update: if (isParent(h) || (isKid(h) && (
           // Route multi-step session transitions first to avoid Firestore's 1,000-expression
           // evaluation limit when validating a profile, its session and an audit entry.
-          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
+          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSessionId'])
+                && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
                 && validKidSpecialEnd(h,playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
                 && validKidCycleSwitch(h,playerId))
