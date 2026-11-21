@@ -83,8 +83,9 @@ service cloud.firestore {
         && prev.get('pauseCount',0) is int && prev.get('pauseCount',0) >= 0
         && next.diff(prev).affectedKeys().hasOnly([
           'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
-          'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+          'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','cycleVideoUsedMs','updatedAt'
         ])
+        && next.get('cycleVideoUsedMs',0) == 0
         && next.updatedAt == request.time
         && next.videoStartedAt == null && next.videoDurationMinutes == 0 && next.endedAt == null
         && next.pauseStartedAt == null && next.pauseTotalMs == 0 && next.pauseCount == 0
@@ -181,6 +182,7 @@ service cloud.firestore {
       let oldStarted = prev.get('videoStartedAt', null);
       let configured = get(/databases/$(database)/documents/households/$(h)/settings/main).data.get('videoLimitMinutes', 30);
       return prev.get('pauseCount',0) == 0 && prev.get('pauseStartedAt',null) == null
+        && prev.get('cycleUsedMs',0) == 0 && prev.get('cycleVideoUsedMs',0) == 0
         // Video sessions always clear the old session's pause state (including legacy stale values).
         && next.get('pauseStartedAt',null) == null
         && next.get('pauseCount',0) == 0
@@ -199,8 +201,9 @@ service cloud.firestore {
         ||
         (next.diff(prev).affectedKeys().hasOnly([
             'videoStartedAt','videoDurationMinutes','endedAt','restStart','restUntil',
-            'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
+            'lastDuration','lastSessionId','pauseStartedAt','pauseTotalMs','pauseCount','cycleVideoUsedMs','updatedAt'
           ])
+          && next.get('cycleVideoUsedMs',0) == 0
           && oldStarted is timestamp && prev.activeStart == 0
           && next.videoStartedAt == null && next.videoDurationMinutes == 0
           && next.endedAt == null
@@ -621,13 +624,18 @@ service cloud.firestore {
       return isKid(h) && sid is string && sid.size()>0 && sid.size()<=180
         && sid!=prev.get('lastSwitchSessionId','')
         && prev.get('cycleUsedMs',0) is int && prev.get('cycleUsedMs',0)>=0
+        && prev.get('cycleVideoUsedMs',0) is int && prev.get('cycleVideoUsedMs',0)>=0
+        && prev.get('cycleVideoUsedMs',0)<=604800000
         && segment!=null && segment.data.childId==id && segment.data.get('transition',false)==true
         && segment.data.duration is int && segment.data.duration>=1000
         && next.get('cycleUsedMs',0)==prev.get('cycleUsedMs',0)+segment.data.duration
+        && next.get('cycleVideoUsedMs',0)==prev.get('cycleVideoUsedMs',0)
+          +(segment.data.activityType=='video'?segment.data.duration:0)
+        && next.get('cycleVideoUsedMs',0)<=604800000
         && next.cycleUsedMs<=604800000
         && next.diff(prev).affectedKeys().hasOnly([
           'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
-          'pauseStartedAt','pauseTotalMs','pauseCount','cycleUsedMs','lastSwitchSessionId','updatedAt'
+          'pauseStartedAt','pauseTotalMs','pauseCount','cycleUsedMs','cycleVideoUsedMs','lastSwitchSessionId','updatedAt'
         ])
         && prev.get('pauseStartedAt',null)==null
         && next.get('pauseStartedAt',null)==null
@@ -640,6 +648,7 @@ service cloud.firestore {
             && next.startedAt==null && next.endedAt==null
             && next.videoStartedAt==request.time
             && configured is int && configured>=1 && configured<=240
+            && prev.get('cycleVideoUsedMs',0)<configured*60000
             && next.videoDurationMinutes==configured
             && segment.data.activityType=='game' && segment.data.start==prev.activeStart
             && segment.data.deviceId==prev.deviceId)
@@ -686,6 +695,8 @@ service cloud.firestore {
         && d.exceptionPlay==hasActiveRestException(prev.data)
         && after.data.lastSwitchSessionId==sid
         && after.data.get('cycleUsedMs',0)==prev.data.get('cycleUsedMs',0)+d.duration
+        && after.data.get('cycleVideoUsedMs',0)==prev.data.get('cycleVideoUsedMs',0)
+          +(d.activityType=='video'?d.duration:0)
         && after.data.updatedAt==request.time
         && (
           (d.activityType=='game'
@@ -715,11 +726,11 @@ service cloud.firestore {
         && segment.data.pauseCount==prev.get('pauseCount',0)
         && next.diff(prev).affectedKeys().hasOnly([
           'activeStart','deviceId','startedAt','endedAt','videoStartedAt','videoDurationMinutes',
-          'restStart','restUntil','lastDuration','lastSessionId','cycleUsedMs','restException',
+          'restStart','restUntil','lastDuration','lastSessionId','cycleUsedMs','cycleVideoUsedMs','restException',
           'pauseStartedAt','pauseTotalMs','pauseCount','updatedAt'
         ])
         && next.updatedAt==request.time
-        && next.get('cycleUsedMs',0)==0
+        && next.get('cycleUsedMs',0)==0 && next.get('cycleVideoUsedMs',0)==0
         && next.get('pauseStartedAt',null)==null
         && next.get('pauseTotalMs',0)==0 && next.get('pauseCount',0)==0
         && next.restStart==segment.data.end && next.restStart>=now-60000 && next.restStart<=now+60000
@@ -776,7 +787,7 @@ service cloud.firestore {
         && prev!=null && after!=null && prev.data.get('pauseCount',0)==d.pauseCount
         && after.data.lastSessionId==sid && after.data.updatedAt==request.time
         && after.data.activeStart==0 && after.data.get('videoStartedAt',null)==null
-        && after.data.get('cycleUsedMs',0)==0
+        && after.data.get('cycleUsedMs',0)==0 && after.data.get('cycleVideoUsedMs',0)==0
         && after.data.lastDuration==prev.data.get('cycleUsedMs',0)+d.duration
         && after.data.restStart==d.end
         && after.data.restUntil==(prev.data.restUntil>expected?prev.data.restUntil:expected)
@@ -820,7 +831,7 @@ service cloud.firestore {
             (d.action in [
                'manual_set','manual_clear','forgotten_end','cheat_confirm',
                'cheat_honest','cheat_restore','start_backdated','start_corrected',
-               'pokemon_release','rest_exception_grant','rest_exception_cancel'
+               'pokemon_release','rest_exception_grant','rest_exception_cancel','rest_override'
              ] && auditActionTouchesProfile(h,d))
             || (d.action == 'history_edit' && d.childId in ['older','younger']
               && d.sessionId.size() > 0
@@ -1530,15 +1541,18 @@ service cloud.firestore {
         allow read: if isMember(h);
         allow create: if isParent(h) && playerId in ['older','younger'];
         allow update: if (isParent(h) || (isKid(h) && (
-          validKidFavoriteTeamUpdate()
-          || validKidPauseStart()
-          || validKidPauseResume()
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
-                && validKidExceptionStart(h,playerId))
+          // Route multi-step session transitions first to avoid Firestore's 1,000-expression
+          // evaluation limit when validating a profile, its session and an audit entry.
+          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSessionId'])
+                && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
+                && validKidSpecialEnd(h,playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
                 && validKidCycleSwitch(h,playerId))
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
-                && validKidSpecialEnd(h,playerId))
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
+                && validKidExceptionStart(h,playerId))
+          || validKidFavoriteTeamUpdate()
+          || validKidPauseStart()
+          || validKidPauseResume()
           || validKidPausedGameEnd(h,playerId)
           || validKidPausedVideoEnd(h,playerId)
           || validKidPlayerUpdate(h, playerId)
