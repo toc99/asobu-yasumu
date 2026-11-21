@@ -1,5 +1,5 @@
-const CACHE='asobu-yasumu-v3-17-0-20261115-tickets';
-const FILES=['./','./index.html','./parent.html','./style.css?v=3.17.0','./app.js?v=3.17.0','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.17.0','./feedback.js?v=3.17.0','./pause-timing.js?v=3.17.0','./cycle-policy.js?v=3.17.0','./retro-policy.js?v=3.17.0','./backup-data.js?v=3.17.0','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE='asobu-yasumu-v3-18-0-morning-evolution-forecast';
+const FILES=['./','./index.html','./parent.html','./style.css?v=3.18.0','./app.js?v=3.18.0','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.18.0','./feedback.js?v=3.18.0','./pause-timing.js?v=3.18.0','./cycle-policy.js?v=3.18.0','./early-resume-policy.js?v=3.18.0','./retro-policy.js?v=3.18.0','./backup-data.js?v=3.18.0','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('asobu-yasumu')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method!=='GET'||u.origin!==self.location.origin)return;

@@ -8,3 +8,10 @@ export function restEndWithDebt(previousRawEnd,end,carriedMs,latestMs,restDebtMs
   if(!Number.isFinite(restDebtMs)||restDebtMs<0)throw new RangeError('Invalid rest debt');
   return Math.max(previousRawEnd||0,end+totalCycleUseMs(carriedMs,latestMs)+Math.round(restDebtMs));
 }
+
+// Live game/video estimate including previous-use carry, approved exception debt, and manual delay.
+export function projectNextPlayableTime(now,currentUseMs,carriedUseMs,previousRawRestUntil,manualRestUntil,restDebtMs,advanceEligible){
+  if(typeof advanceEligible!=='function')throw new TypeError('advanceEligible required');
+  const rawEnd=restEndWithDebt(previousRawRestUntil,now,carriedUseMs,currentUseMs,restDebtMs);
+  return Math.max(Number(manualRestUntil)||0,advanceEligible(now,Math.max(0,rawEnd-now)));
+}
