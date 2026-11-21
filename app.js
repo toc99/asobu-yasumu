@@ -5,6 +5,7 @@ import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.18.0';
 import {effectivePausedMillis} from './pause-timing.js?v=3.18.0';
 import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.18.0';
 import {canResumeInMorning} from './early-resume-policy.js?v=3.18.0';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.18.0';
 import {setupFeedback} from './feedback.js?v=3.18.0';
 import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.18.0';
 import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.18.0';
@@ -1137,10 +1138,43 @@ function renderReleaseAdmin(){
     statusNode.textContent=errors.length?errors.join(' ／ '):ids.every(inventoryReady)?'重複防止管理は有効です。':'重複防止データを確認中です。保護者画面で初回移行します。';}
   root.innerHTML=displayIds().map(id=>{
     const count=releaseCandidatesFor(id).length;
+    const recoveries=legacyEvolutionRecoveryCandidates(model.pokemonInventories[id],POKEDEX_TOTAL);
+    const recoveryDisabled=busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!canOperate();
     const disabled=count===0||busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
     return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹</small></div>'+
-      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>3匹逃がす</button></div>';
+      '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>3匹逃がす</button>'+
   }).join('');
+}
+async function recoverLegacyEvolution(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate()||!inventoryReady(id)||!model.rewardsServerConfirmed)return;
+  const list=legacyEvolutionRecoveryCandidates(model.pokemonInventories[id],POKEDEX_TOTAL);
+  if(!list.length)return toast('復元対象の進化元はありません。');
+  const names=list.map(c=>pokemonName(c.no)).join('、');
+  if(!confirm(playerLabel(id)+'の以前の進化で未所持になった '+list.length+'匹（'+names+'）を復元しますか？\n逃がしたポケモンは復元しません。'))return;
+  await runLocked(async()=>{
+    let restored=0;
+    for(const candidate of list){
+      const rewardRef=dbApi.doc(dbApi.collection(db,'households',householdId,'rewards'));
+      const restoredId='evo_restore_'+rewardRef.id;
+      const restoredRef=dbApi.doc(db,'households',householdId,'rewards',restoredId);
+      await dbApi.runTransaction(db,async tx=>{
+        const invRef=pokemonInventoryRef(id);
+        const sourceRef=dbApi.doc(db,'households',householdId,'rewards',candidate.sourceRewardId);
+        const [snap,sourceSnap]=await Promise.all([tx.get(invRef),tx.get(sourceRef)]);
+        const inv=inventoryState(snap);
+        if(!sourceSnap.exists()||sourceSnap.data().childId!==id||sourceSnap.data().revoked===true)
+          throw Error('進化元の獲得記録が無効です。');
+        const eligible=legacyEvolutionRecoveryCandidates(inv,POKEDEX_TOTAL)
+          .some(c=>c.no===candidate.no&&c.sourceRewardId===candidate.sourceRewardId);
+        if(!eligible)throw Error('復元状況が変更されています。最新画面で確認してください。');
+        nextInventory(tx,invRef,inv,{...inv.owned,[String(candidate.no)]:restoredId},inv.reserved,inv.seen);
+        tx.set(restoredRef,{childId:id,kind:'evolution_restore',sourceRewardId:candidate.sourceRewardId,
+          catalogVersion:3,pokemonNo:candidate.no,claimedAt:dbApi.serverTimestamp(),claimedBy:uid});
+      });
+      restored++;
+    }
+    toast(playerLabel(id)+'の旧進化元を '+restored+'匹復元しました。');
+  });
 }
 async function releaseThreePokemon(id){
   if(!isParentPage||!ids.includes(id)||!canOperate()||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed)return;
@@ -2904,6 +2938,7 @@ function initUiEvents(){
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
    if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
+   if(btn.dataset.evolutionRecover)recoverLegacyEvolution(btn.dataset.evolutionRecover);
     if(btn.dataset.retroReview){const [rid,decision]=btn.dataset.retroReview.split(':');reviewRetroReport(rid,decision);}
     if(btn.dataset.retroPenalty)applyRetroPenalty(btn.dataset.retroPenalty);
     if(btn.dataset.retroPenaltyExcuse)excuseRetroPenalty(btn.dataset.retroPenaltyExcuse);

@@ -50,4 +50,35 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
     const h='v318-evo-reject';await seed(h);
     await assertFails(evolve(h,false));
   });
+  test('保護者だけが、過去の進化元を保持したまま復元できる',async()=>{
+    const h='v318-evo-legacy-restore';await seed(h);
+    await environment.withSecurityRulesDisabled(async ctx=>{
+      const db=ctx.firestore();
+      await setDoc(doc(db,'households',h,'pokemonInventory','older'),{
+        owned:{'2':'reward_original'},reserved:{},seen:{'1':true,'2':true},
+        version:1,updatedAt:Timestamp.fromMillis(Date.now()),
+        buddyId:'reward_original',experience:{reward_original:100},
+        evolutionLog:{reward_original:[{from:1,to:2,at:Date.now()}]},bankedXp:0
+      });
+      await setDoc(doc(db,'households',h,'rewards','reward_original'),{
+        childId:'older',kind:'rest_completed',revoked:false
+      });
+    });
+    async function restore(db){
+      const invRef=doc(db,'households',h,'pokemonInventory','older'),
+        rewardRef=doc(db,'households',h,'rewards','evo_restore_ABCDEFGHIJKLMNOPQRST');
+      return runTransaction(db,async tx=>{
+        const snap=await tx.get(invRef),p=snap.data();
+        tx.update(invRef,{owned:{...p.owned,'1':'evo_restore_ABCDEFGHIJKLMNOPQRST'},
+          version:p.version+1,updatedAt:serverTimestamp()});
+        tx.set(rewardRef,{childId:'older',kind:'evolution_restore',sourceRewardId:'reward_original',
+          catalogVersion:3,pokemonNo:1,claimedAt:serverTimestamp(),claimedBy:'parent-user'});
+      });
+    }
+    await assertFails(restore(kid.firestore()));
+    await assertSucceeds(restore(environment.authenticatedContext('parent-user').firestore()));
+    const docSnap=await getDoc(doc(kid.firestore(),'households',h,'pokemonInventory','older'));
+    assert.equal(docSnap.data().owned['1'],'evo_restore_ABCDEFGHIJKLMNOPQRST');
+    assert.equal(docSnap.data().owned['2'],'reward_original');
+  });
 }
