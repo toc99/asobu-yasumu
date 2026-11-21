@@ -22,9 +22,9 @@ test('dynamic rest-exception buttons and dashboard content may wrap',()=>{
   assert.match(app,/data-rest-exception-grant/);
 });
 test('app, manifest, release note and service worker use v3.18.0',()=>{
-  assert.match(notes,/APP_VERSION = 'v3\.17\.0'/);
-  assert.match(parent,/style\.css\?v=3\.17\.0/);
-  assert.match(kid,/style\.css\?v=3\.17\.0/);
-  assert.match(app,/release-notes\.js\?v=3\.17\.0/);
+  assert.match(notes,/APP_VERSION = 'v3\.18\.0'/);
+  assert.match(parent,/style\.css\?v=3\.18\.0/);
+  assert.match(kid,/style\.css\?v=3\.18\.0/);
+  assert.match(app,/release-notes\.js\?v=3\.18\.0/);
   assert.match(sw,/asobu-yasumu-v3-18-0/);
 });

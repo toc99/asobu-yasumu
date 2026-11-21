@@ -58,12 +58,12 @@ test('backup tools clearly distinguish private full export and minimal activity 
 });
 
 test('release and service worker use the same v3.18.0',()=>{
-  assert.match(release,/APP_VERSION = 'v3\.17\.0'/);
-  assert.match(kid,/v3\.17\.0/);
-  assert.match(parent,/v3\.17\.0/);
+  assert.match(release,/APP_VERSION = 'v3\.18\.0'/);
+  assert.match(kid,/v3\.18\.0/);
+  assert.match(parent,/v3\.18\.0/);
   assert.match(sw,/asobu-yasumu-v3-18-0/);
-  assert.match(sw,/style\.css\?v=3\.17\.0/);
-  assert.match(sw,/app\.js\?v=3\.17\.0/);
+  assert.match(sw,/style\.css\?v=3\.18\.0/);
+  assert.match(sw,/app\.js\?v=3\.18\.0/);
 });
 
 test('records tab prioritizes play history over release notes',()=>{

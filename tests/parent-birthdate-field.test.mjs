@@ -22,7 +22,7 @@ test('date field label can shrink within a grid and remains a real date input',(
   assert.match(css,/input\[type="date"\]::-webkit-date-and-time-value\s*\{\s*min-width:0;/);
 });
 test('release version and stylesheet cache match v3.18.0',()=>{
-  assert.match(notes,/APP_VERSION = 'v3\.17\.0'/);
-  assert.match(parent,/style\.css\?v=3\.17\.0/);
+  assert.match(notes,/APP_VERSION = 'v3\.18\.0'/);
+  assert.match(parent,/style\.css\?v=3\.18\.0/);
   assert.match(read('sw.js'),/asobu-yasumu-v3-18-0/);
 });
