@@ -1903,7 +1903,7 @@ function renderVideoAction(id,p,now=Date.now()){
   const switchAction=!isParentPage&&!paused?`<button type="button" class="btn outline" data-switch-mode="${id}:game" ${busy||!canOperate()?'disabled':''}>🎮 ゲームにきりかえる</button>`:'';
   const stopAction=!isParentPage?`<button type="button" class="btn outline video-stop" data-video-stop="${id}" ${busy||!canOperate()?'disabled':''}>${junior?'⏹️ どうがを やめたよ':'⏹️ 動画をおわる'}</button>`:'';
   const pauseAction=!isParentPage?`<button type="button" class="btn pause-action" data-play-pause="${id}" ${busy||!canOperate()?'disabled':''}>${paused?'▶️ 動画を再開':'⏸️ 動画を一時停止'}</button>`:'';
-  return `<div class="video-box ${paused?'video-paused':overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>${minutes}分の上限・残り${Math.ceil(remaining/MIN)}分</small></div>`+
+  return `<div class="video-box ${paused?'video-paused':overdue?'video-overdue':''}"><div class="video-head">${junior?'📺 どうがを みているよ':'📺 動画を見ているよ'} <small>このサイクルの動画上限${minutes}分</small></div>`+
     `<div class="video-countdown">${safe(label)}</div>`+
     (paused?'<p class="video-note">動画を止めてね。iPad標準タイマーは自動停止しないため、使っている場合は手動で停止し、再開後に設定し直してください。</p>':overdue?'<p class="video-note">お知らせ時間になりました。動画を終えるか保護者に相談してね。</p>':'')+
     (isParentPage?'':`<p class="video-note">YouTubeを開いている間に知らせるには、下のボタンからiPad標準タイマーを起動してね。</p>`)+
