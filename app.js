@@ -2300,6 +2300,7 @@ function updatePlayerTimes(now=Date.now()){
       }else{
         line.textContent=st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
       }
+    }
     const prog=card.querySelector('.progress i');
     if(prog){
       let progress=100;
