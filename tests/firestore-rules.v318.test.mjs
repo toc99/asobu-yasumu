@@ -17,6 +17,7 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
     await environment.withSecurityRulesDisabled(async ctx=>{
       const db=ctx.firestore();
       await setDoc(doc(db,'households',h,'members','kid-user'),{role:'kid'});
+      await setDoc(doc(db,'households',h,'members','parent-user'),{role:'parent'});
       await setDoc(doc(db,'households',h,'pokemonInventory','older'),{
         owned:{'1':'reward_original'},reserved:{},seen:{'1':true},
         version:1,updatedAt:Timestamp.fromMillis(Date.now()),
