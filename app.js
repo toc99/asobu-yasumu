@@ -1149,6 +1149,7 @@ function renderReleaseAdmin(){
     const disabled=count===0||busy||!inventoryReady(id)||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!canOperate();
     return '<div class="pokemon-release-person"><div><strong>'+safe(playerLabel(id))+'</strong><small>いま持っている：'+count+'匹</small></div>'+
       '<button type="button" class="btn outline" data-pokemon-release="'+id+'" '+(disabled?'disabled':'')+'>3匹逃がす</button>'+
+      (recoveries.length?'<button type="button" class="btn outline" data-evolution-recover="'+id+'" '+(recoveryDisabled?'disabled':'')+'>旧進化元 '+recoveries.length+'匹を復元</button>':'')+'</div>';
   }).join('');
 }
 async function recoverLegacyEvolution(id){
