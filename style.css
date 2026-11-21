@@ -772,3 +772,25 @@ body[data-role="parent"] #settings-form input[type="date"]::-webkit-date-and-tim
     padding-inline:6px;
   }
 }
+
+
+/* v3.17.0 Honest retrospective correction and parent-reviewed notices. */
+.retro-report-why{min-width:0;max-width:100%;border:1px solid #d4e5ef;border-radius:15px;padding:12px 13px;display:grid;gap:10px;background:#f7fbff}
+.retro-report-why legend{padding:0 6px;font-weight:900;color:#315a76}
+.retro-report-why label,.retro-parent-record{display:flex!important;align-items:center;gap:10px;line-height:1.6;font-weight:750}
+.retro-report-why input[type=radio],.retro-parent-record input[type=checkbox]{flex:0 0 22px;min-width:22px;width:22px!important;height:22px;min-height:22px;padding:0;accent-color:#297b72}
+.retro-report-why .tiny{margin:0;padding:10px 12px;border-radius:10px;background:#e9f7ee;color:#246446;font-weight:750}
+.retro-report-admin .retro-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.retro-count{min-width:0;padding:13px;border:1px solid #d5e6ee;border-radius:13px;background:#f3f9fc;display:grid;gap:6px}
+.retro-count strong{color:#315a77}
+.retro-count span{font-size:14px;font-weight:800}
+.retro-report-list{display:grid;gap:12px}
+.retro-record{border:1px solid #dbe5ed;border-radius:15px;padding:13px;background:#fff;min-width:0}
+.retro-record small{display:block;margin:5px 0;color:#5e768d}
+.retro-record p{margin:8px 0;color:#35536b;overflow-wrap:anywhere}
+.retro-review-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.retro-review-actions .btn{min-height:42px;font-size:12px;padding:9px}
+.retro-threshold{border:2px solid #edc98b;background:#fff8e9;padding:15px;border-radius:16px;display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.retro-threshold strong,.retro-threshold p{flex-basis:100%;margin:0}
+.retro-threshold p{font-size:13px;line-height:1.6}
+@media(max-width:580px){.retro-report-admin .retro-summary{grid-template-columns:1fr}.retro-review-actions .btn,.retro-threshold button{flex:1 1 100%}}

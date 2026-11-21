@@ -1,11 +1,12 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.16.2';
-import {effectivePausedMillis} from './pause-timing.js?v=3.16.2';
-import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.16.2';
-import {setupFeedback} from './feedback.js?v=3.16.2';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.16.2';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.17.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.17.0';
+import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.17.0';
+import {setupFeedback} from './feedback.js?v=3.17.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.17.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.17.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -27,7 +28,7 @@ const dateInput = t => {const d=new Date(t);return `${dateKey(t)}T${pad(d.getHou
 const overlap = (s,e,a,b) => Math.max(0, Math.min(e,b)-Math.max(s,a));
 const defaultSettings = () => ({devices:{sw1:'Switch',sw2:'Switch2'},reminderMinutes:60,videoLimitMinutes:30,nightPause:{enabled:false,start:'22:00',end:'07:00',startMinutes:1320,endMinutes:420,enabledAt:0}});
 const playerBase = (id) => ({name:id==='older'?'子ども1':'子ども2',birthDate:'',gender:'neutral',activeStart:0,deviceId:null,startedAt:null,endedAt:null,restStart:0,restUntil:0,manualRestUntil:0,manualRestMinutes:0,manualRestSetAt:null,manualRestSetBy:'',manualRestSetRole:'',lastDuration:0,lastSessionId:'',nightResumeAt:null,nightResumeWindowEnd:0,videoStartedAt:null,videoDurationMinutes:0,updatedAt:null});
-const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false,pokemonInventories:{older:null,younger:null},inventoryLoaded:{older:false,younger:false},inventoryError:{older:'',younger:''}};
+const model = {profiles:{},settings:defaultSettings(),sessions:[],presence:null,fromCache:true,ready:false,receivedAt:0,historyExtra:null,profilesServerConfirmed:false,settingsServerConfirmed:false,auditLogs:[],retroReports:[],retroReportsLoaded:false,retroReportsServerConfirmed:false,reportSessions:[],reportLoaded:false,reportFromCache:true,reportTruncated:false,rewards:[],rewardsLoaded:false,rewardsServerConfirmed:false,activityRequests:[],activityLoaded:false,activityServerConfirmed:false,bonusGrants:[],bonusLoaded:false,bonusServerConfirmed:false,pokemonReleaseEvents:[],pokemonReleaseLoaded:false,pokemonReleaseServerConfirmed:false,pokemonInventories:{older:null,younger:null},inventoryLoaded:{older:false,younger:false},inventoryError:{older:'',younger:''}};
 let firebase, authApi, dbApi, auth, db, uid, role, paths, cleanups=[], busy=false, pendingStart=null, pendingEnd=null, editingId=null, lastSettingsHash='', historiesLastLoaded=0;
 let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, familyInitialized=false, pendingManual=null;
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
@@ -965,6 +966,132 @@ function rewardActionFor(id,now=Date.now()){
   }
   return `<div class="pokemon-reward-action"><span>${caption}</span><small>${safe(stateLabel)}</small></div>`;
 }
+// v3.17.0: Self-reported forgotten starts are never penalized.
+// Only a parent's explicit confirmation counts once per recorded play, for 30 days.
+const retroCollection=()=>dbApi.collection(db,'households',householdId,'retroReports');
+const retroRef=id=>dbApi.doc(db,'households',householdId,'retroReports',id);
+function renderRetroAdmin(){
+  const kid=$('retro-kid-summary');
+  if(kid){
+    if(!model.retroReportsLoaded)kid.textContent='きろくを かくにんちゅう…';
+    else {
+      const now=Date.now(),id=focusChild;
+      const own=model.retroReports.filter(x=>x.childId===id&&x.source==='self'&&
+        x.reviewStatus!=='counted'&&stampMillis(x.reportedAt)>=now-30*DAY).length;
+      const noticed=unresolvedNotices(model.retroReports,id,now).length;
+      kid.textContent='じぶんから つたえた '+own+'かい ／ おうちのひとと かくにんした '+noticed+'かい（30にちかん）';
+    }
+  }
+  const root=$('retro-report-list'),summary=$('retro-report-summary');
+  if(!isParentPage||!root||!summary)return;
+  if(!model.retroReportsLoaded){summary.textContent='開始忘れの申告履歴を確認中…';root.innerHTML='<p class="empty">クラウドを確認中…</p>';return;}
+  const now=Date.now(),fresh=model.retroReports.filter(x=>stampMillis(x.reportedAt)>=now-30*DAY);
+  summary.innerHTML=displayIds().map(id=>{
+    const self=fresh.filter(x=>x.childId===id&&x.source==='self'&&x.reviewStatus!=='counted').length;
+    const counted=unresolvedNotices(model.retroReports,id,now).length;
+    return '<div class="retro-count"><strong>'+safe(playerLabel(id))+'</strong><span>自主申告 '+self+'件 ／ 指摘 '+counted+' / '+RETRO_PENALTY_THRESHOLD+'回</span></div>';
+  }).join('');
+  const pending=model.retroReports.filter(x=>x.reviewStatus==='pending');
+  const reviewed=model.retroReports.filter(x=>x.reviewStatus!=='pending').slice(0,25);
+  root.innerHTML=[...pending,...reviewed].slice(0,70).map(x=>{
+    const type=x.source==='self'?'自分からの申告':'保護者に言われて申告';
+    const status={pending:'未確認',acknowledged:'自主申告を確認',counted:'指摘あり',excused:'事情を確認・免除'}[x.reviewStatus]||'確認中';
+    const locked=!!x.penaltyEventId||busy||!canOperate()||!model.retroReportsServerConfirmed;
+    const controls=x.penaltyEventId?'<small>指摘3回による対応済み</small>':
+      '<div class="retro-review-actions">'+
+      (x.reviewStatus!=='acknowledged'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':acknowledged" '+(locked?'disabled':'')+'>自主申告として確認</button>':'')+
+      (x.reviewStatus!=='counted'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':counted" '+(locked?'disabled':'')+'>保護者の指摘として1回</button>':'')+
+      (x.reviewStatus!=='excused'?'<button class="btn outline" data-retro-review="'+safe(x.reportId)+':excused" '+(locked?'disabled':'')+'>今回は免除</button>':'')+'</div>';
+    return '<article class="retro-record"><div><strong>'+safe(playerLabel(x.childId))+'</strong> · '+safe(type)+'</div>'+
+      '<small>'+safe(dateTime(stampMillis(x.reportedAt)))+' ／ '+safe(status)+'</small>'+
+      '<p>最初に申告した開始時刻：'+safe(dateTime(x.actualStartMs))+'</p>'+controls+'</article>';
+  }).join('')||'<p class="empty">まだ開始忘れの申告はありません。</p>';
+  const thresholds=ids.filter(id=>unresolvedNotices(model.retroReports,id,now).length>=RETRO_PENALTY_THRESHOLD);
+  if(thresholds.length){
+    root.insertAdjacentHTML('afterbegin',thresholds.map(id=>{
+      const owned=releaseCandidatesFor(id).length;
+      const disabled=busy||!canOperate()||!model.retroReportsServerConfirmed||
+        !model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!inventoryReady(id);
+      return '<section class="retro-threshold" role="status"><strong>'+safe(playerLabel(id))+'：指摘が3回になりました</strong>'+
+        '<p>30日以内の指摘を3件確認しました。事情を確認してから判断してください。自動でポケモンは逃げません。</p>'+
+        (owned?'<button type="button" class="btn finish" data-retro-penalty="'+id+'" '+(disabled?'disabled':'')+'>ランダムで1匹逃がす</button>':'<p>現在の所持ポケモンは0匹です。</p>')+
+        '<button type="button" class="btn outline" data-retro-penalty-excuse="'+id+'" '+(busy||!canOperate()?'disabled':'')+'>今回は免除する</button></section>';
+    }).join(''));
+  }
+}
+async function reviewRetroReport(reportId,reviewStatus){
+  if(!isParentPage||busy||!['acknowledged','counted','excused'].includes(reviewStatus))return;
+  const item=model.retroReports.find(x=>x.reportId===reportId);
+  if(!item||item.penaltyEventId)return;
+  const action={acknowledged:'自主申告として確認',counted:'保護者の指摘として1回加算',excused:'今回は免除'}[reviewStatus];
+  if(!confirm(playerLabel(item.childId)+'の開始忘れを「'+action+'」として記録しますか？'))return;
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const ref=retroRef(reportId),snap=await tx.get(ref);
+      if(!snap.exists()||snap.data().penaltyEventId)throw Error('すでに別の対応が行われています。');
+      if(snap.data().reviewStatus===reviewStatus)throw Error('すでに確認済みです。');
+      tx.update(ref,{reviewStatus,reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
+    });
+    toast(action+'を記録しました。');
+  });
+}
+async function excuseRetroPenalty(id){
+  if(!isParentPage||!ids.includes(id))return;
+  const list=availablePenalty(model.retroReports,id);
+  if(list.length!==RETRO_PENALTY_THRESHOLD)return toast('最新の指摘回数を確認してください。');
+  const chosen=list[list.length-1];
+  await reviewRetroReport(chosen.reportId,'excused');
+}
+async function applyRetroPenalty(id){
+  if(!isParentPage||!ids.includes(id)||!canOperate())return;
+  if(!model.retroReportsServerConfirmed||!model.rewardsServerConfirmed||!model.pokemonReleaseServerConfirmed||!inventoryReady(id))
+    return toast('クラウドの最新情報を確認中です。');
+  const reports=availablePenalty(model.retroReports,id);
+  if(reports.length!==RETRO_PENALTY_THRESHOLD)return toast('30日以内の未処理の指摘が3件必要です。');
+  const choices=releaseCandidatesFor(id);
+  if(!choices.length)return toast('現在の所持ポケモンがありません。今回は免除を選択してください。');
+  if(!confirm(playerLabel(id)+'について30日以内の指摘3件を確認しましたか？\nランダムで所持ポケモンを1匹逃がします。元に戻せません。実行しますか？'))return;
+  const choice=chooseThreeRandom(choices)[0];
+  const eventRef=dbApi.doc(dbApi.collection(db,'households',householdId,'pokemonReleases'));
+  const rewardRef=dbApi.doc(db,'households',householdId,'rewards',choice.rewardId);
+  await runLocked(async()=>{
+    await dbApi.runTransaction(db,async tx=>{
+      const profileRef=refProfile(id),inventoryRef=pokemonInventoryRef(id);
+      const notices=reports.map(x=>retroRef(x.reportId));
+      const [profileSnap,invSnap,rewardSnap,...reportSnaps]=await Promise.all([
+        tx.get(profileRef),tx.get(inventoryRef),tx.get(rewardRef),...notices.map(ref=>tx.get(ref))
+      ]);
+      if(!profileSnap.exists()||!rewardSnap.exists()||rewardSnap.data().childId!==id||rewardSnap.data().revoked===true)
+        throw Error('最新のポケモン所持記録が一致しません。');
+      const inventory=inventoryState(invSnap),profile=profileSnap.data(),now=Date.now();
+      if(inventory.owned[String(choice.no)]!==choice.rewardId)throw Error('ポケモンの所持状態が変わりました。');
+      if(reportSnaps.some(snap=>!snap.exists()||snap.data().childId!==id||
+        snap.data().reviewStatus!=='counted'||snap.data().penaltyEventId||
+        stampMillis(snap.data().reviewedAt)<now-30*DAY))
+        throw Error('指摘3件の状態が変わりました。もう一度確認してください。');
+      const newOwned={...inventory.owned};delete newOwned[String(choice.no)];
+      nextInventory(tx,inventoryRef,inventory,newOwned,inventory.reserved,inventory.seen,
+        inventory.buddyId===choice.rewardId?{buddyId:''}:{});
+      const remaining=new Set(Object.keys(newOwned).map(Number));
+      const oldTeam=teamFromProfile(profile),newTeam=oldTeam.map(no=>no&&remaining.has(no)?no:0);
+      tx.update(rewardRef,{revoked:true,revokedReason:'released',revokedAt:dbApi.serverTimestamp(),
+        revokedBy:uid,releaseEventId:eventRef.id});
+      const details=[{rewardId:choice.rewardId,no:choice.no,name:pokemonName(choice.no)}];
+      tx.set(eventRef,{childId:id,createdBy:uid,createdAt:dbApi.serverTimestamp(),
+        reason:'retro_three_notices',triggerReports:reports.map(x=>x.reportId),
+        rewardIds:[choice.rewardId],pokemon:details,count:1});
+      for(const ref of notices)tx.update(ref,{penaltyEventId:eventRef.id});
+      const changes={pokemonLastReleaseEventId:eventRef.id,updatedAt:dbApi.serverTimestamp()};
+      if(newTeam.some((v,i)=>v!==oldTeam[i])){changes.favoriteTeam=newTeam;changes.teamUpdatedAt=dbApi.serverTimestamp();}
+      tx.update(profileRef,changes);
+      appendAudit(tx,'pokemon_release',id,'開始忘れ指摘が30日以内に3回',
+        pokemonName(choice.no)+'がランダムで1匹逃げた',eventRef.id);
+    });
+    toast(playerLabel(id)+'の開始忘れ指摘3回により、'+pokemonName(choice.no)+'が逃げました。');
+    renderRetroAdmin();renderReleaseAdmin();
+  });
+}
+
 /* v3.13: release three captured Pokemon without deleting historic claims. */
 const releaseSeenFallback=new Set();
 let pokemonReleasePending=null;
@@ -1080,7 +1207,7 @@ function showReleaseNotice(){
   pokemonReleasePending=next.eventId;
   $('pokemon-release-title').textContent=playerLabel(next.childId)+'へ おしらせ';
   const pokemon=Array.isArray(next.pokemon)?next.pokemon:[];
-  $('pokemon-release-message').textContent='ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
+  $('pokemon-release-message').textContent=next.reason==='retro_three_notices'?'開始忘れを3回指摘されたので、ポケモンが1ぴき たびに でたよ。':'ポケモンが '+pokemon.length+'ひき、たびに でたよ。';
   $('pokemon-release-names').textContent=pokemon.map(p=>p.name||pokemonName(p.no)).join('・');
   dialog.showModal();
 }
@@ -1741,7 +1868,7 @@ function checkVideoNotices(now=Date.now()){
     showRestNotice(`${playerLabel(id)}：動画の時間だよ！`,`${videoLimitOf(p)}分になりました。動画をいったん終わろう。`,`video-${id}-${due}`);
   }
 }
-// v3.16.2: 保護者承認制の例外利用。以前の休憩残量を消さず次回に繰り越す。
+// v3.17.0: 保護者承認制の例外利用。以前の休憩残量を消さず次回に繰り越す。
 function exceptionOffer(p,now=Date.now()){
   const e=p?.restException;
   return e?.state==='offered' && Number(e.expiresAt)>now && Number(e.debtMs)>0 && [15,30,60].includes(Number(e.maxMinutes));
@@ -2065,7 +2192,7 @@ function setFocusChild(id,syncApprovals=true){
   });
   // Parent approvals default to all; switching the global child selector sets a focused filter.
   if(isParentPage){if(syncApprovals)approvalFilter=id;renderApprovals();}
-  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();renderKidNextAction();
+  renderActivities();renderBonuses();renderBuddy();renderFavoriteTeam();renderEffortCalendar();renderPokedex();renderKidSpotlight();renderKidNextAction();renderRetroAdmin();
 }
 function renderKidSpotlight(){
   const box=$('kid-spotlight-message');if(!box||!model.ready)return;
@@ -2187,7 +2314,7 @@ function render(now=Date.now()){
   }else if(kidView==='more'&&Math.floor(now/1000)%10===0){renderWeek();renderHistory();}
   checkRestNotices(now);checkVideoNotices(now);showReleaseNotice();
 }
-function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderBuddy();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
+function setReady(){model.ready=ids.every(id=>model.profiles[id]);$('init-panel')?.classList.toggle('hidden',model.ready);render();renderReport();renderPokedex();renderBuddy();renderFavoriteTeam();renderActivities();renderApprovals();renderBonuses();renderHonestyAdmin();renderKidSpotlight();renderParentDashboard();renderReleaseAdmin();renderRetroAdmin();showReleaseNotice();if(model.ready){renderWeek();renderHistory();setFocusChild(isParentPage?parentFocusChild:focusChild,false);}}
 function showApp(){ $('login-screen').classList.add('hidden');$('app-screen').classList.remove('hidden');if(isParentPage)setParentView(parentView,false);else setKidView(kidView,false);}
 function showLogin(){ $('login-screen').classList.remove('hidden');$('app-screen').classList.add('hidden');}
 function listenerError(e){
@@ -2196,7 +2323,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();feedbackUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();feedbackUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.retroReports=[];model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -2264,7 +2391,7 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.collection(db,'households',householdId,'rewards'),{includeMetadataChanges:true},snap=>{
    model.rewards=snap.docs.map(d=>({...d.data(),rewardId:d.id}));
    model.rewardsLoaded=true;model.rewardsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
-   renderPokedex();renderBuddy();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();initializePokemonInventories();
+   renderPokedex();renderBuddy();renderFavoriteTeam();renderPlayers();renderEffortCalendar();renderBonuses();renderKidSpotlight();renderReleaseAdmin();renderRetroAdmin();initializePokemonInventories();
  },listenerError));
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'pokemonReleases'),dbApi.orderBy('createdAt','desc'),dbApi.limit(100)),{includeMetadataChanges:true},snap=>{
    model.pokemonReleaseEvents=snap.docs.map(d=>({...d.data(),eventId:d.id}));
@@ -2289,6 +2416,11 @@ function listen(){
  cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'sessions'),dbApi.orderBy('end','desc'),dbApi.limit(500)),snap=>{
    model.sessions=snap.docs.map(d=>({...d.data(),sid:d.id}));model.historyExtra=null;renderWeek();renderHistory();render();
  },listenerError));
+ cleanups.push(dbApi.onSnapshot(dbApi.query(dbApi.collection(db,'households',householdId,'retroReports'),dbApi.orderBy('reportedAt','desc'),dbApi.limit(150)),{includeMetadataChanges:true},snap=>{
+   model.retroReports=snap.docs.map(d=>({...d.data(),reportId:d.id}));
+   model.retroReportsLoaded=true;model.retroReportsServerConfirmed=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&navigator.onLine;
+   renderRetroAdmin();
+ },err=>{console.error('retro reports listener',err);model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();}));
  subscribeReport();
  cleanups.push(()=>{if(reportUnsubscribe){reportUnsubscribe();reportUnsubscribe=null;}reportPeriodKey='';});
  if(isParentPage){
@@ -2325,6 +2457,9 @@ function openRetroStart(id){
   inp.value=preciseDateInput(Math.max(min,Math.min(max,suggested)));
   for(const opt of sel.options)opt.textContent=model.settings.devices?.[opt.value]||({sw1:'Switch',sw2:'Switch 2'}[opt.value]);
   sel.value=p.activeStart>0?(p.deviceId||'sw1'):'sw1';sel.disabled=p.activeStart>0;
+  const selfChoice=document.querySelector('[name="retro-report-origin"][value="self"]');
+  if(selfChoice)selfChoice.checked=true;
+  if($('retro-parent-incident'))$('retro-parent-incident').checked=false;
   updateRetroPreview();$('retro-start-dialog').showModal();
 }
 function updateRetroPreview(){
@@ -2338,25 +2473,46 @@ function updateRetroPreview(){
 async function saveRetroStart(event){
   event.preventDefault();
   const id=retroStartChild,start=new Date($('retro-start-at').value).getTime(),deviceId=$('retro-start-device').value;
-  if(!ids.includes(id)||!Number.isFinite(start)||!['sw1','sw2'].includes(deviceId))return toast('入力内容を確認してください。');
-  if(!confirm(playerLabel(id)+'の開始時刻を '+dateTime(start)+' に設定しますか？'))return;
+  const origin=isParentPage?'prompted':document.querySelector('[name="retro-report-origin"]:checked')?.value;
+  const parentRecord=isParentPage&&$('retro-parent-incident')?.checked===true;
+  if(!ids.includes(id)||!Number.isFinite(start)||!['sw1','sw2'].includes(deviceId)||
+    (!isParentPage&&!['self','prompted'].includes(origin)))return toast('入力内容を確認してください。');
+  const context=!isParentPage&&origin==='self'?'\n自分で正直に伝えたことにペナルティはありません。':
+    parentRecord?'\n本人に指摘した履歴を残します。回数への加算は保護者画面で別途確認します。':'';
+  if(!confirm(playerLabel(id)+'の開始時刻を '+dateTime(start)+' に設定しますか？'+context))return;
+  const newReportRef=dbApi.doc(retroCollection());
   await runLocked(async()=>{
     const mode=await dbApi.runTransaction(db,async tx=>{
-      const ref=refProfile(id),snap=await tx.get(ref);if(!snap.exists())throw Error('プロフィールがありません。');
+      const ref=refProfile(id),snap=await tx.get(ref);
+      if(!snap.exists())throw Error('プロフィールがありません。');
       const p=snap.data(),now=Date.now();
       if(videoStartedMillis(p)>0)throw Error('動画視聴中のため変更できません。');
       const min=retroEarliest(p,now),max=p.activeStart>0?p.activeStart-1000:now-1000;
       if(start<min||start>max)throw Error('開始時刻が設定可能な範囲外です。');
+      const reportNeeded=(!isParentPage||parentRecord)&&!sameRetroSession(p);
+      const reportId=reportNeeded?newReportRef.id:(sameRetroSession(p)?p.retroReportId:'');
+      const startStamp=p.activeStart>0?p.startedAt:dbApi.serverTimestamp();
+      const reportFields=reportNeeded?{retroReportId:reportId,retroReportStartedAt:startStamp}:{};
+      if(reportNeeded){
+        tx.set(newReportRef,{childId:id,source:origin,reportedBy:uid,reportedAt:dbApi.serverTimestamp(),
+          sessionStartedAt:startStamp,actualStartMs:start,reviewStatus:'pending',
+          reviewedAt:null,reviewedBy:'',penaltyEventId:''});
+      }
       if(p.activeStart>0){
-        tx.update(ref,{activeStart:start,updatedAt:dbApi.serverTimestamp()});
-        appendAudit(tx,'start_corrected',id,dateTime(p.activeStart),dateTime(start));return 'corrected';
+        tx.update(ref,{activeStart:start,...reportFields,updatedAt:dbApi.serverTimestamp()});
+        appendAudit(tx,'start_corrected',id,dateTime(p.activeStart),dateTime(start),reportId);
+        return 'corrected';
       }
       if(restEnd(p)>now)throw Error('まだ休憩中なので開始できません。');
-      tx.update(ref,{activeStart:start,deviceId,startedAt:dbApi.serverTimestamp(),endedAt:null,updatedAt:dbApi.serverTimestamp()});
-      appendAudit(tx,'start_backdated',id,'開始押し忘れ',dateTime(start)+'にゲーム開始');return 'started';
+      tx.update(ref,{activeStart:start,deviceId,startedAt:dbApi.serverTimestamp(),
+        endedAt:null,...reportFields,updatedAt:dbApi.serverTimestamp()});
+      appendAudit(tx,'start_backdated',id,'開始押し忘れ',dateTime(start)+'にゲーム開始',reportId);
+      return 'started';
     });
     $('retro-start-dialog').close();retroStartChild=null;
-    toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
+    if(isParentPage){if($('retro-parent-incident'))$('retro-parent-incident').checked=false;}
+    if(!isParentPage&&origin==='self')toast('しょうじきに おしえてくれて ありがとう！ おやすみじかんも きちんと きろくするよ。');
+    else toast(mode==='corrected'?'開始時刻を修正しました。':'開始時刻を遡って記録しました。終了はいつもどおり操作してください。');
   });
 }
 
@@ -2661,7 +2817,7 @@ async function exportActivityAnalysis(){
 }
 async function exportData(format){try{const result=await dbApi.getDocs(sessionsRef()),sessions=result.docs.map(d=>({...d.data(),sid:d.id,createdAt:undefined,updatedAt:undefined}));
  if(format==='json'){const auditSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'auditLogs'));const auditLogs=auditSnap.docs.map(d=>({...d.data(),createdAtIso:stampMillis(d.data().createdAt)?new Date(stampMillis(d.data().createdAt)).toISOString():null,logId:d.id}));const rewardsSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'rewards'));const rewards=rewardsSnap.docs.map(d=>({...d.data(),rewardId:d.id,claimedAtIso:stampMillis(d.data().claimedAt)?new Date(stampMillis(d.data().claimedAt)).toISOString():null}));const requestSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activityRequests'));const activityRequests=requestSnap.docs.map(d=>({...d.data(),requestId:d.id}));const slotSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'activitySlots'));const activitySlots=slotSnap.docs.map(d=>({...d.data(),slotId:d.id}));const bonusSnap=await dbApi.getDocs(bonusCollection());const bonusGrants=bonusSnap.docs.map(d=>({...d.data(),grantId:d.id}));// Security Rules allow get only for the two known child IDs, not an unrestricted list query.
- const pokemonInventory=await loadAuthorizedPokemonInventories(dbApi,db,householdId,ids);const releaseSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonReleases'));const pokemonReleases=releaseSnap.docs.map(d=>({...d.data(),releaseEventId:d.id}));const feedbackSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'feedbackReports'));const feedbackReports=feedbackSnap.docs.map(d=>({...d.data(),reportId:d.id}));const data={version:6,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants,pokemonInventory,pokemonReleases,feedbackReports};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
+ const pokemonInventory=await loadAuthorizedPokemonInventories(dbApi,db,householdId,ids);const releaseSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'pokemonReleases'));const pokemonReleases=releaseSnap.docs.map(d=>({...d.data(),releaseEventId:d.id}));const feedbackSnap=await dbApi.getDocs(dbApi.collection(db,'households',householdId,'feedbackReports'));const feedbackReports=feedbackSnap.docs.map(d=>({...d.data(),reportId:d.id}));const retroSnap=await dbApi.getDocs(retroCollection());const retroReports=retroSnap.docs.map(d=>({...d.data(),reportId:d.id}));const data={version:7,appVersion:version,exportedAt:new Date().toISOString(),householdId,profiles:model.profiles,settings:model.settings,sessions,auditLogs,rewards,activityRequests,activitySlots,bonusGrants,pokemonInventory,pokemonReleases,feedbackReports,retroReports};download(`asobu-yasumu-v3-${dateKey(Date.now())}.json`,new Blob([JSON.stringify(data,(k,v)=>['createdAt','updatedAt'].includes(k)?undefined:v,2)],{type:'application/json'}));}
  else {const csv=v=>{let s=String(v??'');if(/^[=+@\-]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;};const rows=[['子ども','区分','開始日時','終了日時','利用時間(秒)','修正済み'],...sessions.map(s=>[playerLabel(s.childId),s.activityType==='video'?'動画':'ゲーム',new Date(s.start).toLocaleString('ja-JP'),new Date(s.end).toLocaleString('ja-JP'),Math.round(s.duration/1000),s.edited?'はい':'いいえ'])];download(`asobu-yasumu-v3-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(csv).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));}
  toast('バックアップを保存しました');
  }catch(e){console.error('JSON/CSVバックアップの出力に失敗',e);toast('バックアップに失敗：'+errorText(e));}}
@@ -2722,6 +2878,9 @@ function initUiEvents(){
    if(btn.dataset.correct)openCorrection(btn.dataset.correct);
     if(btn.dataset.retroStart)openRetroStart(btn.dataset.retroStart);
    if(btn.dataset.pokemonRelease)releaseThreePokemon(btn.dataset.pokemonRelease);
+    if(btn.dataset.retroReview){const [rid,decision]=btn.dataset.retroReview.split(':');reviewRetroReport(rid,decision);}
+    if(btn.dataset.retroPenalty)applyRetroPenalty(btn.dataset.retroPenalty);
+    if(btn.dataset.retroPenaltyExcuse)excuseRetroPenalty(btn.dataset.retroPenaltyExcuse);
     if(btn.dataset.restExceptionGrant)grantRestException(btn.dataset.restExceptionGrant);
     if(btn.dataset.restExceptionCancel)cancelRestException(btn.dataset.restExceptionCancel);
     if(btn.dataset.buddyEvolve){const [child,no]=btn.dataset.buddyEvolve.split(':');evolveBuddy(child,Number(no));}

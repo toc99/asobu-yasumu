@@ -412,35 +412,72 @@ service cloud.firestore {
         && p.data.updatedAt == request.time;
     }
 
-    // v3.13: 子ども用iPadの開始忘れ(最大3時間)・開始時刻訂正。
+    // v3.17: First retro correction creates exactly one declaration tied to this play.
+    // Additional corrections to the same play reuse the recorded declaration.
+    function retroReportPath(h,id) {
+      return /databases/$(database)/documents/households/$(h)/retroReports/$(id);
+    }
+    function retroHasCurrentDeclaration(d) {
+      return d.get('retroReportId','') is string
+        && d.get('retroReportId','').size()>0
+        && d.get('retroReportStartedAt',null) is timestamp
+        && d.get('startedAt',null) is timestamp
+        && d.retroReportStartedAt==d.startedAt;
+    }
+    function validRetroDeclarationLink(h,playerId,after) {
+      let id=after.get('retroReportId','');
+      return id is string && id.size()>0 && id.size()<=180
+        && existsAfter(retroReportPath(h,id))
+        && getAfter(retroReportPath(h,id)).data.childId==playerId
+        && getAfter(retroReportPath(h,id)).data.reportedAt==request.time
+        && getAfter(retroReportPath(h,id)).data.sessionStartedAt==after.startedAt
+        && getAfter(retroReportPath(h,id)).data.actualStartMs==after.activeStart;
+    }
     function validKidRetroStart(h,playerId) {
-      let prev = resource.data;
-      let next = request.resource.data;
-      let now = request.time.toMillis();
-      return prev.activeStart == 0 && prev.get('videoStartedAt',null) == null
-        && prev.restUntil <= now && prev.get('manualRestUntil',0) <= now
-        && next.diff(prev).affectedKeys().hasOnly(['activeStart','deviceId','startedAt','endedAt','updatedAt'])
+      let prev=resource.data;
+      let next=request.resource.data;
+      let now=request.time.toMillis();
+      return prev.activeStart==0 && prev.get('videoStartedAt',null)==null
+        && prev.restUntil<=now && prev.get('manualRestUntil',0)<=now
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','deviceId','startedAt','endedAt','updatedAt',
+          'retroReportId','retroReportStartedAt'
+        ])
+        && next.diff(prev).affectedKeys().hasAll(['retroReportId','retroReportStartedAt'])
         && next.activeStart is int
-        && next.activeStart >= now - 10800000 && next.activeStart < now
-        && next.activeStart >= prev.restUntil
-        && next.activeStart >= prev.get('manualRestUntil',0)
+        && next.activeStart>=now-10800000 && next.activeStart<now
+        && next.activeStart>=prev.restUntil
+        && next.activeStart>=prev.get('manualRestUntil',0)
         && next.deviceId in ['sw1','sw2']
-        && next.startedAt == request.time
-        && next.get('endedAt',null) == null && next.updatedAt == request.time;
+        && next.startedAt==request.time
+        && next.retroReportStartedAt==request.time
+        && next.get('endedAt',null)==null && next.updatedAt==request.time
+        && validRetroDeclarationLink(h,playerId,next);
     }
     function validKidRetroCorrection(h,playerId) {
-      let prev = resource.data;
-      let next = request.resource.data;
-      let now = request.time.toMillis();
-      return prev.activeStart is int && prev.activeStart > 0
-        && prev.get('videoStartedAt',null) == null
-        && next.diff(prev).affectedKeys().hasOnly(['activeStart','updatedAt'])
+      let prev=resource.data;
+      let next=request.resource.data;
+      let now=request.time.toMillis();
+      return prev.activeStart is int && prev.activeStart>0
+        && prev.get('videoStartedAt',null)==null
+        && next.diff(prev).affectedKeys().hasOnly([
+          'activeStart','updatedAt','retroReportId','retroReportStartedAt'
+        ])
         && next.activeStart is int
-        && next.activeStart >= now - 10800000
-        && next.activeStart < prev.activeStart
-        && next.activeStart >= prev.restUntil
-        && next.activeStart >= prev.get('manualRestUntil',0)
-        && next.updatedAt == request.time;
+        && next.activeStart>=now-10800000
+        && next.activeStart<prev.activeStart
+        && next.activeStart>=prev.restUntil
+        && next.activeStart>=prev.get('manualRestUntil',0)
+        && next.updatedAt==request.time
+        && (
+          (retroHasCurrentDeclaration(prev)
+            && next.diff(prev).affectedKeys().hasOnly(['activeStart','updatedAt']))
+          ||
+          (!retroHasCurrentDeclaration(prev)
+            && next.diff(prev).affectedKeys().hasAll(['retroReportId','retroReportStartedAt'])
+            && next.retroReportStartedAt==prev.startedAt
+            && validRetroDeclarationLink(h,playerId,next))
+        );
     }
 
     function validKidManualRestUpdate(h, playerId) {
@@ -1194,15 +1231,37 @@ service cloud.firestore {
         && after.data.revokedBy == request.auth.uid
         && after.data.revokedAt == request.time;
     }
+    function retroPenaltyReportLinked(h,eventId,childId,id) {
+      let record=getAfter(retroReportPath(h,id));
+      return id is string && id.size()>0 && id.size()<=180
+        && record!=null && record.data.childId==childId
+        && record.data.reviewStatus=='counted'
+        && record.data.penaltyEventId==eventId
+        && record.data.reviewedAt is timestamp
+        && record.data.reviewedAt>=request.time-duration.value(30,'d')
+        && record.data.reviewedAt<=request.time;
+    }
     function validParentPokemonReleaseEvent(h,eventId) {
       let d = request.resource.data;
       let profile = getAfter(profilePath(h,d.childId));
       return isParent(h)
         && d.keys().hasAll(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
-        && d.keys().hasOnly(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count'])
+        && d.keys().hasOnly(['childId','createdBy','createdAt','reason','rewardIds','pokemon','count','triggerReports'])
         && d.childId in ['older','younger']
         && d.createdBy == request.auth.uid && d.createdAt == request.time
-        && d.reason == 'rules_violation' && d.count is int && d.count in [1,2,3]
+        && d.reason in ['rules_violation','retro_three_notices']
+        && d.count is int && d.count in [1,2,3]
+        && (d.reason=='rules_violation'
+          ? d.get('triggerReports',[]).size()==0
+          : (d.count==1
+            && d.get('triggerReports',[]) is list
+            && d.triggerReports.size()==3
+            && d.triggerReports[0]!=d.triggerReports[1]
+            && d.triggerReports[0]!=d.triggerReports[2]
+            && d.triggerReports[1]!=d.triggerReports[2]
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[0])
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[1])
+            && retroPenaltyReportLinked(h,eventId,d.childId,d.triggerReports[2])))
         && d.rewardIds is list && d.rewardIds.size() == d.count
         && d.rewardIds[0] is string
         && (d.count < 2 || (d.rewardIds[1] is string && d.rewardIds[0] != d.rewardIds[1]))
@@ -1287,6 +1346,64 @@ service cloud.firestore {
           && next.closedBy == request.auth.uid
           && next.needsParentReply == false && next.lastActivityAt == request.time;
       }
+      // v3.17: Self-reporting cannot trigger a punishment.
+      // Only a parent can confirm a notice, waive it, or settle it in a release.
+      match /retroReports/{reportId} {
+        allow read: if isMember(h);
+        allow create: if (isKid(h)||isParent(h))
+          && request.resource.data.keys().hasAll([
+            'childId','source','reportedBy','reportedAt','sessionStartedAt',
+            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'childId','source','reportedBy','reportedAt','sessionStartedAt',
+            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && request.resource.data.childId in ['older','younger']
+          && request.resource.data.source in ['self','prompted']
+          && request.resource.data.reportedBy==request.auth.uid
+          && request.resource.data.reportedAt==request.time
+          && request.resource.data.sessionStartedAt is timestamp
+          && request.resource.data.actualStartMs is int
+          && request.resource.data.actualStartMs<=request.time.toMillis()
+          && request.resource.data.actualStartMs>=request.time.toMillis()-86400000
+          && request.resource.data.reviewStatus=='pending'
+          && request.resource.data.reviewedAt==null
+          && request.resource.data.reviewedBy==''
+          && request.resource.data.penaltyEventId==''
+          && existsAfter(profilePath(h,request.resource.data.childId))
+          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportId==reportId
+          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportStartedAt==request.resource.data.sessionStartedAt
+          && getAfter(profilePath(h,request.resource.data.childId)).data.activeStart==request.resource.data.actualStartMs
+          && getAfter(profilePath(h,request.resource.data.childId)).data.startedAt==request.resource.data.sessionStartedAt;
+        allow update: if isParent(h)
+          && resource.data.penaltyEventId==''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
+          ])
+          && (
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewStatus','reviewedAt'])
+              && request.resource.data.reviewStatus in ['acknowledged','counted','excused']
+              && request.resource.data.reviewStatus != resource.data.reviewStatus
+              && request.resource.data.reviewedBy==request.auth.uid
+              && request.resource.data.reviewedAt==request.time
+              && request.resource.data.penaltyEventId==''
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penaltyEventId'])
+              && resource.data.reviewStatus=='counted'
+              && request.resource.data.penaltyEventId is string
+              && request.resource.data.penaltyEventId.size()>0
+              && existsAfter(releasePath(h,request.resource.data.penaltyEventId))
+              && getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.reason=='retro_three_notices'
+              && reportId in getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.triggerReports
+            )
+          );
+        allow delete: if false;
+      }
+
       match /feedbackReports/{reportId} {
         // Shared iPad user: separation by childId is in the UI, not per-child Auth UID.
         allow read: if isMember(h);
