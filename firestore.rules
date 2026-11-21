@@ -553,6 +553,8 @@ service cloud.firestore {
       let manualExpected = expectedManualUntil(prev,now,morning);
       return prev.activeStart == 0
         && inConfiguredNight(h,now)
+        && localMillisOfDay(now) >= 18000000
+        && localMillisOfDay(now) < nightSettings(h).endMinutes * 60000
         && prev.get('nightResumeWindowEnd',0) != morning
         && next.diff(prev).affectedKeys().hasOnly(['nightResumeAt','nightResumeWindowEnd','manualRestUntil','updatedAt'])
         && next.nightResumeAt == request.time
@@ -943,6 +945,83 @@ service cloud.firestore {
         && after.data.reserved.get(key,'') == ''
         && (approved ? after.data.owned.get(key,'') == rewardId
                      : after.data.owned.get(key,'') == '');
+    }
+    // v3.18: A new claim for the evolved species, keeping the source owned.
+    function validKidEvolutionReward(h,rid) {
+      let d = request.resource.data;
+      let fromKey = string(d.fromPokemonNo);
+      let toKey = string(d.pokemonNo);
+      let before = get(inventoryPath(h,d.childId)).data;
+      let after = getAfter(inventoryPath(h,d.childId)).data;
+      return d.keys().hasAll(['childId','kind','sourceRewardId','fromPokemonNo',
+          'catalogVersion','pokemonNo','claimedAt','claimedBy'])
+        && d.keys().hasOnly(['childId','kind','sourceRewardId','fromPokemonNo',
+          'catalogVersion','pokemonNo','claimedAt','claimedBy'])
+        && d.childId in ['older','younger']
+        && rid.matches('^evolution_[A-Za-z0-9]{20}$')
+        && d.kind == 'evolution' && d.catalogVersion == 3
+        && d.claimedAt == request.time && d.claimedBy == request.auth.uid
+        && d.sourceRewardId is string && d.sourceRewardId.size() > 0
+        && d.sourceRewardId.size() <= 180
+        && d.fromPokemonNo is int && d.fromPokemonNo >= 1 && d.fromPokemonNo <= 1025
+        && d.pokemonNo is int && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+        && d.fromPokemonNo != d.pokemonNo
+        && validInventoryMove(h,d.childId)
+        && before.get('buddyId','') == d.sourceRewardId
+        && before.owned.get(fromKey,'') == d.sourceRewardId
+        && after.owned.get(fromKey,'') == d.sourceRewardId
+        && before.owned.get(toKey,'') == ''
+        && before.reserved.get(toKey,'') == ''
+        && after.owned.get(toKey,'') == rid
+        && after.owned.diff(before.owned).affectedKeys().hasOnly([toKey])
+        && after.owned.diff(before.owned).affectedKeys().hasAll([toKey])
+        && after.reserved == before.reserved
+        && after.get('buddyId','') == rid
+        && before.get('experience',{}).get(d.sourceRewardId,0) >= 80
+        && after.get('experience',{}).get(rid,-1)
+          == before.get('experience',{}).get(d.sourceRewardId,0)
+        && after.get('experience',{}).diff(before.get('experience',{}))
+          .affectedKeys().hasOnly([rid])
+        && after.get('bankedXp',0) == before.get('bankedXp',0)
+        && after.seen.get(fromKey,false) == true
+        && after.seen.get(toKey,false) == true
+        && after.seen.diff(before.seen).affectedKeys().hasOnly([fromKey,toKey])
+        && after.get('evolutionLog',{}).diff(before.get('evolutionLog',{}))
+          .affectedKeys().hasOnly([d.sourceRewardId]);
+    }
+    // Parent-only recovery of legacy evolution-source species still represented by an active claim.
+    function validParentEvolutionRecoveryReward(h,rid) {
+      let d = request.resource.data;
+      let key = string(d.pokemonNo);
+      let before = get(inventoryPath(h,d.childId)).data;
+      let after = getAfter(inventoryPath(h,d.childId)).data;
+      let source = get(rewardPath(h,d.sourceRewardId)).data;
+      return isParent(h)
+        && d.keys().hasAll(['childId','kind','sourceRewardId','catalogVersion',
+          'pokemonNo','claimedAt','claimedBy'])
+        && d.keys().hasOnly(['childId','kind','sourceRewardId','catalogVersion',
+          'pokemonNo','claimedAt','claimedBy'])
+        && d.childId in ['older','younger']
+        && rid.matches('^evo_restore_[A-Za-z0-9]{20}$')
+        && d.kind == 'evolution_restore' && d.catalogVersion == 3
+        && d.sourceRewardId is string && d.sourceRewardId.size() > 0
+        && d.sourceRewardId.size() <= 180
+        && d.pokemonNo is int && d.pokemonNo >= 1 && d.pokemonNo <= 1025
+        && d.claimedAt == request.time && d.claimedBy == request.auth.uid
+        && source.childId == d.childId && source.get('revoked',false) != true
+        && before.get('evolutionLog',{}).get(d.sourceRewardId,[]) is list
+        && before.get('evolutionLog',{}).get(d.sourceRewardId,[]).size() > 0
+        && validInventoryMove(h,d.childId)
+        && before.owned.get(key,'') == '' && before.reserved.get(key,'') == ''
+        && before.seen.get(key,false) == true
+        && after.owned.get(key,'') == rid
+        && after.owned.diff(before.owned).affectedKeys().hasOnly([key])
+        && after.owned.diff(before.owned).affectedKeys().hasAll([key])
+        && after.reserved == before.reserved && after.seen == before.seen
+        && after.get('buddyId','') == before.get('buddyId','')
+        && after.get('experience',{}) == before.get('experience',{})
+        && after.get('bankedXp',0) == before.get('bankedXp',0)
+        && after.get('evolutionLog',{}) == before.get('evolutionLog',{});
     }
     // 6〜11件目のチャレンジ承認: ポケモン所持を変えず、経験値のみ付与。
     function validInventoryXpCredit(h,id,amount) {
@@ -1564,8 +1643,11 @@ service cloud.firestore {
       match /rewards/{rewardId} {
         allow read: if isMember(h);
         allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
-          ? validKidBonusReward(h,rewardId) : validKidPokemonReward(h,rewardId)))
-          || (isParent(h) && validParentActivityReward(h,rewardId));
+          ? validKidBonusReward(h,rewardId) : (request.resource.data.get('kind','') == 'evolution'
+            ? validKidEvolutionReward(h,rewardId) : validKidPokemonReward(h,rewardId))))
+          || (isParent(h) && ((request.resource.data.get('kind','') == 'evolution_restore'
+              && validParentEvolutionRecoveryReward(h,rewardId))
+            || validParentActivityReward(h,rewardId)));
         allow update: if isParent(h) && (
           validParentGameRewardRevocation()
           || validParentPokemonReleaseReward(h,rewardId));
