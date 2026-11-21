@@ -1,12 +1,13 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.17.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.17.0';
-import {totalCycleUseMs,restEndWithDebt} from './cycle-policy.js?v=3.17.0';
-import {setupFeedback} from './feedback.js?v=3.17.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.17.0';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.17.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.18.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.18.0';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.18.0';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.18.0';
+import {setupFeedback} from './feedback.js?v=3.18.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.18.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.18.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -96,7 +97,7 @@ function eligibleSlice(t,policy,resumeAt=0,resumeWindowEnd=0){
 }
 function canEarlyResume(p,now=Date.now()){
   const policy=pausePolicy();
-  if(isParentPage||!p||p.activeStart>0||videoStartedMillis(p)>0||!canOperate()||!policy||!isNightPaused(now,policy))return false;
+  if(isParentPage||!p||p.activeStart>0||videoStartedMillis(p)>0||!canOperate()||!policy||!isNightPaused(now,policy)||!canResumeInMorning(now,policy.end))return false;
   if(resumedThisNight(p,now,policy))return false;
   return waitingRemaining(p,now)>0;
 }
@@ -738,7 +739,7 @@ function renderBuddy(){
     '<p class="tiny">チャレンジ承認 +10 XP、ゲーム・休憩のごほうび +5 XP。相棒を変更しても経験値は残ります。</p>'+
     (lines?'<div class="buddy-evolutions"><h3>進化先</h3>'+lines+'</div>':
       '<p class="tiny">この種類は通常の進化先がありません。レベルと称号を育てよう。</p>')+
-    '<p class="tiny">進化すると今の1匹が進化後に変わります。進化前は図鑑の「登録済み」に残ります。</p>';
+    '<p class="tiny">進化前と進化後の両方を所持できます。どちらも相棒に選べるよ。</p>';
 }
 async function selectBuddy(id,rid){
   if(isParentPage||!ids.includes(id)||!inventoryReady(id)||!canOperate())return;
@@ -759,19 +760,30 @@ async function evolveBuddy(id,no){
   if(isParentPage||!ids.includes(id)||!Number.isInteger(no)||!inventoryReady(id)||!canOperate())return;
   const start=buddyProgress(model.pokemonInventories[id]);
   if(!start.no||!(EVOLUTION_TARGETS[start.no]||[]).includes(no))return toast('進化先が正しくありません。');
-  if(!confirm(pokemonName(start.no)+'を '+pokemonName(no)+'に進化させますか？\n同じ1匹が変化し、進化前も図鑑に登録済みとして残ります。'))return;
+  if(!confirm(pokemonName(start.no)+'を '+pokemonName(no)+'に進化させますか？\n進化前も進化後も、どちらも所持したままになります。'))return;
   await runLocked(async()=>{
+    const rewardRef=dbApi.doc(dbApi.collection(db,'households',householdId,'rewards'));
+    const evolutionId='evolution_'+rewardRef.id;
+    const evolutionRef=dbApi.doc(db,'households',householdId,'rewards',evolutionId);
     const ev=await dbApi.runTransaction(db,async tx=>{
-      const ref=pokemonInventoryRef(id),inv=inventoryState(await tx.get(ref)),b=buddyProgress(inv);
+      const ref=pokemonInventoryRef(id);
+      const [snapshot,evolutionSnapshot]=await Promise.all([tx.get(ref),tx.get(evolutionRef)]);
+      const inv=inventoryState(snapshot),b=buddyProgress(inv);
+      if(evolutionSnapshot.exists())throw Error('この進化報酬は既に登録されています。');
       if(b.rewardId!==start.rewardId||!(EVOLUTION_TARGETS[b.no]||[]).includes(no))throw Error('相棒の状態が変わりました。');
       if(b.xp<evolutionXpRequired(no))throw Error('経験値が足りません。');
       const max=GENERATIONS[generationFor(Object.keys(inv.seen).length)].end;
       if(no>max)throw Error('進化先の世代はまだ解放されていません。');
       if(inv.owned[String(no)]||inv.reserved[String(no)])throw Error('進化先はすでに所持・予約中です。');
-      const owned={...inv.owned};delete owned[String(b.no)];owned[String(no)]=b.rewardId;
+      const owned={...inv.owned,[String(no)]:evolutionId};
       const history={...(inv.evolutionLog||{})},old=Array.isArray(history[b.rewardId])?history[b.rewardId]:[];
       history[b.rewardId]=[...old,{from:b.no,to:no,at:Date.now()}];
-      nextInventory(tx,ref,inv,owned,inv.reserved,{...inv.seen,[String(b.no)]:true,[String(no)]:true},{evolutionLog:history});
+      tx.set(evolutionRef,{
+        childId:id,kind:'evolution',sourceRewardId:b.rewardId,fromPokemonNo:b.no,
+        catalogVersion:3,pokemonNo:no,claimedAt:dbApi.serverTimestamp(),claimedBy:uid
+      });
+      nextInventory(tx,ref,inv,owned,inv.reserved,{...inv.seen,[String(b.no)]:true,[String(no)]:true},
+        {buddyId:evolutionId,experience:{...(inv.experience||{}),[evolutionId]:b.xp},evolutionLog:history});
       return {from:b.no,to:no};
     });
     const dlg=$('buddy-evolution-dialog');
@@ -1885,6 +1897,17 @@ function closeExceptionChange(p){
 function specialTotalMs(p,duration){return totalCycleUseMs(cycleUsedMs(p),duration);}
 function specialRestUntil(p,end,duration){return restEndWithDebt(Number(p.restUntil)||0,end,cycleUsedMs(p),duration,exceptionDebt(p));}
 function specialSession(p){return exceptionActive(p)||cycleUsedMs(p)>0;}
+function predictedPlayableTime(p,now,mode){
+  const used=mode==='watching'?videoElapsed(p,now):gameDuration(p,now);
+  return projectNextPlayableTime(now,used,cycleUsedMs(p),Number(p.restUntil)||0,
+    Number(p.manualRestUntil)||0,exceptionDebt(p),advanceEligible);
+}
+function stopForecastText(p,now,mode,junior=false){
+  const due=predictedPlayableTime(p,now,mode);
+  const when=dateKey(now)===dateKey(due)?clock(due):dateTime(due);
+  return junior?'いま やめたら、つぎに あそべるのは '+when+' だよ'
+    :'今やめたら次に遊べる時間は '+when;
+}
 async function grantRestException(id){
   if(!isParentPage||!ids.includes(id)||!canOperate())return;
   const profile=model.profiles[id];
@@ -2035,13 +2058,11 @@ function renderPlayers(now=Date.now()){
     const juniorTitle=paused?'⏸️ とめてるよ':st==='playing'?'🎮 あそんでる':st==='watching'?'📺 どうがちゅう':st==='resting'?'💤 おやすみ':'✨ あそべるよ';
     const mainTitle=paused?'一時停止までに あそんだじかん':st==='playing'?'ゲームをはじめてから':st==='watching'?'動画を見はじめてから':st==='resting'?'つぎまで、あと':'ゲームも動画もできるよ！';
     const sub=paused?'計測は一時停止中。ゲームや動画の再開時に「再開」を押してください':st==='playing'?'じぶんで終わる時間をきめよう':st==='watching'?'動画を終えたら、同じ時間休もう':st==='resting'?`${dateTime(until)}から遊べる${manualControlling?'（手動設定）':''}`:'じぶんのタイミングでスタート！';
-    const detail=st==='playing'?`いま終わると ${brief(elapsed)} 休憩 ／ 次は ${dateTime(advanceEligible(now,elapsed))}から`:
-      st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:
+    const detail=(st==='playing'||st==='watching')?stopForecastText(p,now,st):
       st==='resting'?(manualControlling?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
     const juniorMainTitle=st==='playing'?'あそんでいる じかん':st==='watching'?'どうがを みている じかん':st==='resting'?'あと これだけ おやすみ':'いまは あそべるよ！';
     const juniorSub=paused?'ゲーム・どうがも とめよう。おわったら さいかいしてね':st==='playing'?'おわる ときは、ゲームも とめよう':st==='watching'?'どうがを おわったら おやすみ':st==='resting'?'おわったら また あそべるよ':'じぶんで じかんを まもろう！';
-    const juniorDetail=paused?`いちじていしちゅう・これまでの利用 ${brief(st==='playing'?elapsed:videoElapsed(p,now))}`:st==='playing'?`いま やめたら ${brief(elapsed)} おやすみ`:
-      st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:
+    const juniorDetail=(st==='playing'||st==='watching')?stopForecastText(p,now,st,true):
       st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
     const progress=st==='resting'?Math.min(100,Math.max(0,eligibleElapsed(restStart,now,manualControlling && restStart < (pausePolicy()?.enabledAt||0) ? null : pausePolicy(),nightResumeMillis(p),Number(p.nightResumeWindowEnd)||0)/restDuration*100)):100;
     const actionText=st==='resting'&&exceptionOffer(p,now)?'🎟️ とくべつに あそぶ':junior?(st==='playing'?'🛑 ゲームを やめたよ':st==='watching'?'📺 どうがを みているよ':st==='resting'?'💤 いまは おやすみ':'▶️ ゲームを はじめる'):(st==='playing'?'🛑 ゲームをおわる':st==='watching'?'🎬 動画を視聴中':st==='resting'?'💤 おやすみ中':'▶️ ゲームをはじめる');
@@ -2055,9 +2076,10 @@ function renderPlayers(now=Date.now()){
     const recordText=recordTime?`最後の手動操作：${p.manualRestSetRole==='parent'?'保護者':'子ども用画面'}・${dateTime(recordTime)}・${p.manualRestUntil>0?`${p.manualRestMinutes||0}分の設定`:'解除'}`:'手動待ち時間の設定履歴なし';
     const manualAction=`<button class="btn outline manual-open" data-manual="${id}" ${p.activeStart>0||videoStartedMillis(p)>0||busy||!canOperate()?'disabled':''}>⏳ 待ち時間を手動で設定</button>`;
     const earlyPossible=canEarlyResume(p,now);
+    const tooEarlyForMorning=!isParentPage&&pausePolicy()&&isNightPaused(now)&&waitingRemaining(p,now)>0&&!resumedThisNight(p,now)&&!canResumeInMorning(now,pausePolicy().end);
     const nightAction=!isParentPage&&earlyPossible
       ? `<button class="btn early-resume-action" data-night-resume="${id}" ${busy||!canOperate()||!hasNightResumeRuleConfig()?'disabled':''}>☀️ いまから休憩の消化を再開</button><p class="early-resume-hint">夜間の停止だけを解除。残りの休憩時間はそのまま守ろう。</p>${!hasNightResumeRuleConfig()?'<p class="early-resume-hint">保護者画面で夜間停止設定を一度保存してください。</p>':''}`
-      : (!isParentPage&&resumedThisNight(p,now)&&waitingRemaining(p,now)>0?'<p class="early-resume-hint early-active">☀️ 今夜は休憩時間を消化中</p>':'');
+      : (!isParentPage&&resumedThisNight(p,now)&&waitingRemaining(p,now)>0?'<p class="early-resume-hint early-active">☀️ 今朝は休憩時間を消化中</p>':tooEarlyForMorning?'<p class="early-resume-hint">前倒し再開は、翌朝5:00以降に起きてから押してね。夜のうちは操作できないよ。</p>':'');
     const videoAction=renderVideoAction(id,p,now);
     const exceptionUsed=cycleUsedMs(p)+(st==='playing'?gameDuration(p,now):st==='watching'?videoElapsed(p,now):0);
     const exceptionOver=exceptionActive(p)&&exceptionUsed>Number(p.restException.maxMinutes)*MIN;
@@ -2271,10 +2293,13 @@ function updatePlayerTimes(now=Date.now()){
     if(digits)digits.textContent=hms(summaryFor(p,now));
     const line=card.querySelector('.forecast-line');
     if(line){
-      if(paused){line.textContent='⏸️ 一時停止中：計測は止まっています。実機も中断してください。';}
-      else if(junior){line.textContent=st==='playing'?`いま やめたら ${brief(gameDuration(p,now))} おやすみ`:st==='watching'?`いま やめたら ${brief(videoElapsed(p,now))} おやすみ`:st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';}
-      else{line.textContent=st==='playing'?`いま終わると ${brief(gameDuration(p,now))} 休憩 ／ 次は ${dateTime(advanceEligible(now,gameDuration(p,now)))}から`:st==='watching'?`いま終わると ${brief(videoElapsed(p,now))} の休憩が必要`:st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');}
-    }
+      if(st==='playing'||st==='watching'){
+        line.textContent=(paused?'⏸️ 計測は一時停止中 ／ ':'')+stopForecastText(p,now,st,junior);
+      }else if(junior){
+        line.textContent=st==='resting'?`あと ${brief(waitingRemaining(p,now))} おやすみ`:'ゲームを はじめられるよ！';
+      }else{
+        line.textContent=st==='resting'?((p.manualRestUntil||0)>Math.max(normalRestEnd(p),now)?'手動で設定した待ち時間だよ':`${brief(p.lastDuration)} 利用したので、同じだけ休憩中`):(p.lastDuration>0?'前の休憩はおわったよ':'最初のゲームをはじめよう');
+      }
     const prog=card.querySelector('.progress i');
     if(prog){
       let progress=100;
