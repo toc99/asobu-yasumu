@@ -26,5 +26,5 @@ test('app, manifest, release note and service worker use v3.19.1',()=>{
   assert.match(parent,/style\.css\?v=3\.19\.1/);
   assert.match(kid,/style\.css\?v=3\.19\.1/);
   assert.match(app,/release-notes\.js\?v=3\.19\.1/);
-  assert.match(sw,/asobu-yasumu-v3-19-0/);
+  assert.match(sw,/asobu-yasumu-v3-19-1/);
 });
