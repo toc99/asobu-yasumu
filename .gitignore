@@ -1,0 +1,9 @@
+# Local dependencies and test output
+node_modules/
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+*.log
+
+# google-github-actions/auth ephemeral credentials (never commit or upload)
+gha-creds-*.json
