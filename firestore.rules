@@ -555,6 +555,7 @@ service cloud.firestore {
       let morning = nightEndMillis(h,now);
       let manualExpected = expectedManualUntil(prev,now,morning);
       return prev.activeStart == 0
+        && prev.get('videoStartedAt',null) == null
         && inConfiguredNight(h,now)
         && localMillisOfDay(now) >= 18000000
         && localMillisOfDay(now) < nightSettings(h).endMinutes * 60000
@@ -1541,9 +1542,12 @@ service cloud.firestore {
         allow read: if isMember(h);
         allow create: if isParent(h) && playerId in ['older','younger'];
         allow update: if (isParent(h) || (isKid(h) && (
-          // Route multi-step session transitions first to avoid Firestore's 1,000-expression
-          // evaluation limit when validating a profile, its session and an audit entry.
-          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSessionId'])
+          // Check morning rest resume before the general update validators to keep
+          // this narrow operation within Firestore's expression evaluation budget.
+          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['nightResumeAt','nightResumeWindowEnd'])
+              && validKidNightResume(h, playerId))
+          // Route multi-step session transitions before other general validators.
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSessionId'])
                 && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
                 && validKidSpecialEnd(h,playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
@@ -1562,8 +1566,6 @@ service cloud.firestore {
           || validV33UndoStart()
           || validV33UndoEnd(h, playerId)
           || validKidManualRestUpdate(h, playerId)
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['nightResumeAt','nightResumeWindowEnd'])
-              && validKidNightResume(h, playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['videoStartedAt','videoDurationMinutes'])
               && validKidVideoUpdate(h, playerId))
           || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['rewardLastSessionId','rewardLastDayIndex'])
