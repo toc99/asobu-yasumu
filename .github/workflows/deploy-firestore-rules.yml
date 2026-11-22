@@ -1,0 +1,92 @@
+name: Deploy Firestore Rules (keyless)
+
+# Only a trusted main-branch revision can deploy. Manual dispatch is for the first rollout or recovery.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firestore.rules'
+      - '.github/workflows/deploy-firestore-rules.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Avoid two rules releases racing one another.
+concurrency:
+  group: asobu-firestore-rules-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Test application and Firestore Rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned project dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run unit and static tests
+        run: npm test
+      - name: Verify Firestore rules with the emulator
+        run: npm run test:rules
+
+  deploy:
+    name: Publish rules to Firebase (OIDC, no JSON key)
+    needs: verify
+    if: ${{ github.ref == 'refs/heads/main' && vars.FIREBASE_WIF_PROVIDER != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Authenticate with short-lived Google credentials
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: toc99-41eac
+          workload_identity_provider: ${{ vars.FIREBASE_WIF_PROVIDER }}
+          service_account: asobu-firestore-rules@toc99-41eac.iam.gserviceaccount.com
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Install pinned Firebase CLI
+        run: npm install --no-audit --no-fund
+      - name: Deploy Firestore Security Rules only
+        run: npx --no-install firebase deploy --only firestore:rules --project toc99-41eac --non-interactive
+      - name: Record published revision
+        run: |
+          {
+            echo "## Firestore Rules deployed"
+            echo "- Project: \`toc99-41eac\`"
+            echo "- Source: \`firestore.rules\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Authentication: Workload Identity Federation (no saved service account key)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  needs-configuration:
+    name: One-time Google Cloud setup required
+    needs: verify
+    if: ${{ github.ref == 'refs/heads/main' && vars.FIREBASE_WIF_PROVIDER == '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Explain why deployment is skipped
+        run: |
+          echo "::warning::Firestore rules NOT deployed. Configure repository variable FIREBASE_WIF_PROVIDER, then manually run this workflow once. See docs/FIRESTORE-AUTO-DEPLOY.md"
+          {
+            echo "## Not deployed: one-time setup is incomplete"
+            echo "Set the GitHub Actions repository variable \`FIREBASE_WIF_PROVIDER\`."
+            echo "Follow \`docs/FIRESTORE-AUTO-DEPLOY.md\` and rerun this workflow."
+          } >> "${GITHUB_STEP_SUMMARY}"
