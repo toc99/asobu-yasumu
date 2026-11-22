@@ -33,9 +33,22 @@ fi
 
 # No Firestore documents access, project Editor, Owner, or service-account private keys.
 echo "Granting Firebase Rules Admin (not project Owner/Editor)..."
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-  --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
-  --role="roles/firebaserules.admin" --condition=None --quiet >/dev/null
+# A newly created service account can take time to propagate to Cloud Resource Manager.
+# Retry transient IAM replication errors instead of leaving a half-configured project.
+for attempt in 1 2 3 4 5; do
+  if gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+    --role="roles/firebaserules.admin" --condition=None --quiet >/dev/null; then
+    break
+  fi
+  if [[ "${attempt}" == 5 ]]; then
+    echo "Could not grant Firebase Rules Admin after retries." >&2
+    echo "Check that the service account exists and your account has Project IAM Admin." >&2
+    exit 1
+  fi
+  echo "IAM update not ready yet (attempt ${attempt}/5); retrying..." >&2
+  sleep "$((attempt * 10))"
+done
 
 echo "Creating GitHub Workload Identity Pool (if missing)..."
 if ! gcloud iam workload-identity-pools describe "${POOL_ID}" \
