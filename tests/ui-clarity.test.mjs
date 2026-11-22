@@ -61,7 +61,7 @@ test('release and service worker use the same v3.19.1',()=>{
   assert.match(release,/APP_VERSION = 'v3\.19\.1'/);
   assert.match(kid,/v3\.19\.1/);
   assert.match(parent,/v3\.19\.1/);
-  assert.match(sw,/asobu-yasumu-v3-19-0/);
+  assert.match(sw,/asobu-yasumu-v3-19-1/);
   assert.match(sw,/style\.css\?v=3\.19\.1/);
   assert.match(sw,/app\.js\?v=3\.19\.1/);
 });
