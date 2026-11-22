@@ -24,5 +24,5 @@ test('date field label can shrink within a grid and remains a real date input',(
 test('release version and stylesheet cache match v3.19.1',()=>{
   assert.match(notes,/APP_VERSION = 'v3\.19\.1'/);
   assert.match(parent,/style\.css\?v=3\.19\.1/);
-  assert.match(read('sw.js'),/asobu-yasumu-v3-19-0/);
+  assert.match(read('sw.js'),/asobu-yasumu-v3-19-1/);
 });
