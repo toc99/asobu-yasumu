@@ -29,6 +29,7 @@ test('keyless Google OIDC authentication is restricted and fail-closed before se
 
 test('identity can be assumed only by exact main branch deployment workflow', () => {
   assert.match(setup, /roles\/firebaserules\.admin/);
+  assert.match(setup, /roles\/serviceusage\.serviceUsageConsumer/);
   assert.match(setup, /roles\/iam\.workloadIdentityUser/);
   assert.match(setup, /assertion\.repository_id/);
   assert.match(setup, /assertion\.workflow_ref/);
