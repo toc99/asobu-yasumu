@@ -503,11 +503,18 @@ const LEGACY_ACTIVITY_KINDS = Object.freeze({kindness:'誰かを助けた'});
 function activityKindLabel(kind){return ACTIVITY_KINDS[kind]||LEGACY_ACTIVITY_KINDS[kind]||kind;}
 const ACTIVITY_POKEMON_MAX = 5;
 const ACTIVITY_DAILY_MAX = Object.keys(ACTIVITY_KINDS).length;
-const ACTIVITY_EXTRA_XP = 2;
+const ACTIVITY_EXTRA_XP = 5;
+const ACTIVITY_LEGACY_EXTRA_XP = 2;
 const ACTIVITY_SLOTS = Array.from({length:ACTIVITY_DAILY_MAX},(_,i)=>i+1);
 const UPSTAIRS_ACTIVITY_ID='upstairs21';
 function activityIsPokemon(request){return Number(request?.slotNo)>=1&&Number(request?.slotNo)<=ACTIVITY_POKEMON_MAX&&Number(request?.candidateNo)>0;}
 function activityIsXpOnly(request){return Number(request?.slotNo)>ACTIVITY_POKEMON_MAX&&Number(request?.candidateNo)===0;}
+// Old approved XP-only challenges received 2 XP. Preserve history while new approvals earn 5 XP.
+function activityXpAmount(request){
+  return request?.status==='approved'
+    ?(Number(request.awardedXp)===ACTIVITY_EXTRA_XP?ACTIVITY_EXTRA_XP:ACTIVITY_LEGACY_EXTRA_XP)
+    :ACTIVITY_EXTRA_XP;
+}
 const activitySlotId = (id,day,slot) => `${id}_${day}_${slot}`;
 const activitySlotRef = (id,day,slot) => dbApi.doc(db,'households',householdId,'activitySlots',activitySlotId(id,day,slot));
 function dailyRequests(id,day=rewardDayIndex()){
@@ -739,7 +746,7 @@ function renderBuddy(){
     '<div class="buddy-bar"><i style="width:'+currentStep.toFixed(1)+'%"></i></div>'+
     '<small>'+(b.xp>=180?'称号：育成マスター':'次のレベルまで '+(BUDDY_LEVEL_STEP-b.xp%BUDDY_LEVEL_STEP)+' XP')+'</small></div></div>'+
     select+
-    '<p class="tiny">チャレンジ承認 +10 XP、ゲーム・休憩のごほうび +5 XP。相棒を変更しても経験値は残ります。</p>'+
+    '<p class="tiny">チャレンジ承認（1～5件目）+10 XP、6件目以降 +5 XP、ゲーム・休憩のごほうび +5 XP。相棒を変更しても経験値は残ります。</p>'+
     (lines?'<div class="buddy-evolutions"><h3>進化先</h3>'+lines+'</div>':
       '<p class="tiny">この種類は通常の進化先がありません。レベルと称号を育てよう。</p>')+
     '<p class="tiny">進化前と進化後の両方を所持できます。どちらも相棒に選べるよ。</p>';
@@ -1508,7 +1515,7 @@ function renderEffortCalendar(){
         const name=`${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）`;
         pokemon=r.status==='approved'?`<a href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer">${name}を公式ずかんで見る</a>`:`<span>仮ゲット：${name}</span>`;
       }
-      if(activityIsXpOnly(r)&&r.status!=='rejected')pokemon='<span>🌱 相棒 +2 XP（くじなし）</span>';
+      if(activityIsXpOnly(r)&&r.status!=='rejected')pokemon='<span>🌱 相棒 +'+activityXpAmount(r)+' XP（くじなし）</span>';
       return `<div class="effort-detail-row"><span><strong>${safe(activityKindLabel(r.activityKind))}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
     }).join('')}</div>`:'<p class="tiny">この日の活動申請はありません。</p>');
 }
@@ -1538,14 +1545,14 @@ function renderActivities(){
       const suspended=rewardSuspended(model.profiles[id]);
       const xpOnly=(req&&req.status!=='rejected')?activityIsXpOnly(req):pokemonUsed>=ACTIVITY_POKEMON_MAX;
       const status=junior
-        ?(req?.status==='approved'?(activityIsXpOnly(req)?'できた！ あいぼうに +2 XP！':'できた！ ポケモン ゲット！')
+        ?(req?.status==='approved'?(activityIsXpOnly(req)?`できた！ あいぼうに +${activityXpAmount(req)} XP！`:'できた！ ポケモン ゲット！')
           :retry?'もういちど できたら おくれるよ':req?'おうちのひとの かくにんまち'
           :xpOnly?'できたら あいぼうが そだつよ':'まだ おくってないよ')
-        :(req?.status==='approved'?(activityIsXpOnly(req)?'承認済み・相棒 +2 XP':'承認済み・正式ゲット')
+        :(req?.status==='approved'?(activityIsXpOnly(req)?`承認済み・相棒 +${activityXpAmount(req)} XP`:'承認済み・正式ゲット')
           :retry?'見送り・もういちどできたら再申請可能':req?'保護者の確認待ち'
-          :xpOnly?'承認で相棒 +2 XP':'申請するとポケモンを仮ゲット');
+          :xpOnly?`承認で相棒 +${ACTIVITY_EXTRA_XP} XP`:'申請するとポケモンを仮ゲット');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`
-        :req?.status==='pending'&&activityIsXpOnly(req)?'<span class="provisional-label">🌱 承認後に相棒へ +2 XP</span>':'';
+        :req?.status==='pending'&&activityIsXpOnly(req)?`<span class="provisional-label">🌱 承認後に相棒へ +${ACTIVITY_EXTRA_XP} XP</span>`:'';
       const unavailable=alreadyDone||remaining===0||suspended||!inventoryReady(id)||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
         ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
@@ -1556,7 +1563,7 @@ function renderActivities(){
     }).join('');
     const opened=!isParentPage||expanded.has(id)||(!hasExisting&&junior);
     const summary=junior?`<strong>${safe(playerLabel(id))} 🌱 やさしい がめん</strong><span>きょうの チャレンジ：${used} / ${ACTIVITY_DAILY_MAX}　くじ ${pokemonUsed} / 5</span>`:`<strong>${safe(playerLabel(id))}</strong><span>きょうの活動：${used} / ${ACTIVITY_DAILY_MAX}種類　・　ポケモンくじ ${pokemonUsed} / 5</span>`;
-    const note=junior?'まだ おくっていない ことが さきに でるよ。できたことを えらんでね。':'まだ申請していない活動を上に表示しています。各活動1日1回。最初の5件はポケモンくじ＋相棒10 XP、6件目以降は相棒2 XPです。';
+    const note=junior?'まだ おくっていない ことが さきに でるよ。できたことを えらんでね。':'まだ申請していない活動を上に表示しています。各活動1日1回。最初の5件はポケモンくじ＋相棒10 XP、6件目以降は相棒5 XPです。';
     const complete=approved===ACTIVITY_DAILY_MAX?'<div class="activity-complete-badge" role="status">🏆 きょうの全11チャレンジ達成！ がんばりバッジ獲得</div>':'';
     return `<details class="activity-person ${junior?'age-junior':''}" data-child="${id}" ${opened?'open':''}><summary>${summary}</summary><p class="tiny">${note}</p>${complete}<div class="${junior?'activity-junior-grid':'activity-standard-list'}">${actions}</div></details>`;
   }).join('');
@@ -1587,7 +1594,7 @@ function renderApprovals(){
     const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
-    const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:r.status==='pending'&&activityIsXpOnly(r)?'<small>🌱 承認すると相棒へ +2 XP（くじなし）</small>':'';
+    const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:r.status==='pending'&&activityIsXpOnly(r)?`<small>🌱 承認すると相棒へ +${ACTIVITY_EXTRA_XP} XP（くじなし）</small>`:'';
     return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>${activityIsXpOnly(r)?'経験値を承認':'正式にゲット'}</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
   }).join(''):'<p class="empty">この条件に該当する申請はありません。</p>');
 }
@@ -1680,7 +1687,8 @@ async function reviewActivity(requestId,action){
           buddyXpUpdate(inventory,ACTIVITY_EXTRA_XP));
       }
       tx.update(requestRef,{status:action==='approve'?'approved':'rejected',
-        reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid});
+        reviewedAt:dbApi.serverTimestamp(),reviewedBy:uid,
+        ...(isXp&&action==='approve'?{awardedXp:ACTIVITY_EXTRA_XP}:{})});
       if(action==='approve'&&isPokemon){
         tx.set(rewardRef,{childId:d.childId,dayIndex:d.dayIndex,kind:'activity',
           activityKind:d.activityKind,sourceRequestId:requestId,sessionId:'',
@@ -1690,7 +1698,7 @@ async function reviewActivity(requestId,action){
       }
       appendAudit(tx,action==='approve'?'activity_approve':'activity_reject',
         d.childId,'チャレンジ申請',action==='reject'?'見送り':
-          isXp?'相棒 +2 XP':'ポケモン正式獲得',requestId);
+          isXp?`相棒 +${ACTIVITY_EXTRA_XP} XP`:'ポケモン正式獲得',requestId);
       return {isXp,no,approved:action==='approve'};
     });
     if(!result.approved)toast(`${label}を見送りにしました。再挑戦できます。`);
