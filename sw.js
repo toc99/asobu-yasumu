@@ -1,5 +1,5 @@
-const CACHE='asobu-yasumu-v3-19-1-night-resume-rule';
-const FILES=['./','./index.html','./parent.html','./style.css?v=3.19.1','./app.js?v=3.19.1','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.19.1','./feedback.js?v=3.19.1','./pause-timing.js?v=3.19.1','./cycle-policy.js?v=3.19.1','./video-cycle-policy.js?v=3.19.1','./early-resume-policy.js?v=3.19.1','./evolution-recovery.js?v=3.19.1','./retro-policy.js?v=3.19.1','./backup-data.js?v=3.19.1','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
+const CACHE='asobu-yasumu-v3-19-2-activity-xp';
+const FILES=['./','./index.html','./parent.html','./style.css?v=3.19.2','./app.js?v=3.19.2','./firebase-config.js','./pokedex-data.js','./evolution-data.js','./release-notes.js?v=3.19.2','./feedback.js?v=3.19.2','./pause-timing.js?v=3.19.2','./cycle-policy.js?v=3.19.2','./video-cycle-policy.js?v=3.19.2','./early-resume-policy.js?v=3.19.2','./evolution-recovery.js?v=3.19.2','./retro-policy.js?v=3.19.2','./backup-data.js?v=3.19.2','./manifest.webmanifest','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('asobu-yasumu')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});
 self.addEventListener('fetch',e=>{const u=new URL(e.request.url);if(e.request.method!=='GET'||u.origin!==self.location.origin)return;
