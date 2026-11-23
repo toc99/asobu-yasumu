@@ -50,6 +50,25 @@ for attempt in 1 2 3 4 5; do
   sleep "$((attempt * 10))"
 done
 
+# Firebase CLI inspects Google API enablement via Service Usage before it deploys
+# Firestore rules. This role provides services.get/list/use, without permission
+# to enable/disable APIs or administer unrelated Firebase services.
+echo "Granting Service Usage Consumer for Firebase CLI API checks..."
+for attempt in 1 2 3 4 5; do
+  if gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${SERVICE_ACCOUNT_EMAIL}" \
+    --role="roles/serviceusage.serviceUsageConsumer" --condition=None --quiet >/dev/null; then
+    break
+  fi
+  if [[ "${attempt}" == 5 ]]; then
+    echo "Could not grant Service Usage Consumer after retries." >&2
+    echo "Check IAM administration permission for this Google Cloud project." >&2
+    exit 1
+  fi
+  echo "Service Usage IAM update not ready (attempt ${attempt}/5); retrying..." >&2
+  sleep "$((attempt * 10))"
+done
+
 echo "Creating GitHub Workload Identity Pool (if missing)..."
 if ! gcloud iam workload-identity-pools describe "${POOL_ID}" \
     --project="${PROJECT_ID}" --location=global >/dev/null 2>&1; then
