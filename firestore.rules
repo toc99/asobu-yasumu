@@ -1211,12 +1211,20 @@ service cloud.firestore {
       let withSlot = prev.keys().hasAny(['slotNo']);
       let xpOnly = prev.get('slotNo',0) > 5 && prev.get('slotNo',0) <= 11
         && prev.get('candidateNo',-1) == 0;
+      // Support cached pre-3.19.2 clients that still grant 2 XP without awardedXp.
+      let xpGrant = next.keys().hasAny(['awardedXp']) ? 5 : 2;
       return prev.status == 'pending'
-        && next.diff(prev).affectedKeys().hasOnly(['status','reviewedAt','reviewedBy'])
+        && next.diff(prev).affectedKeys().hasOnly(['status','reviewedAt','reviewedBy','awardedXp'])
         && next.status in ['approved','rejected']
         && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
+        // New approvals explicitly record 5 XP. Legacy clients can still grant
+        // 2 XP with no awardedXp field until they refresh; never allow mismatches.
+        && (xpOnly && next.status == 'approved'
+          ? (!prev.keys().hasAny(['awardedXp'])
+             && (next.get('awardedXp',0) == 5 || !next.keys().hasAny(['awardedXp'])))
+          : next.get('awardedXp',0) == prev.get('awardedXp',0))
         && (xpOnly
-          ? (next.status == 'rejected' || validInventoryXpCredit(h,prev.childId,2))
+          ? (next.status == 'rejected' || validInventoryXpCredit(h,prev.childId,xpGrant))
           : validInventoryDecision(h,prev.childId,prev.candidateNo,id,rewardId,next.status == 'approved'))
         && (next.status == 'rejected' || get(profilePath(h,prev.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis())
         && (next.status == 'rejected' || (xpOnly
