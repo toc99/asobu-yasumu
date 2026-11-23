@@ -1212,11 +1212,16 @@ service cloud.firestore {
       let xpOnly = prev.get('slotNo',0) > 5 && prev.get('slotNo',0) <= 11
         && prev.get('candidateNo',-1) == 0;
       return prev.status == 'pending'
-        && next.diff(prev).affectedKeys().hasOnly(['status','reviewedAt','reviewedBy'])
+        && next.diff(prev).affectedKeys().hasOnly(['status','reviewedAt','reviewedBy','awardedXp'])
         && next.status in ['approved','rejected']
         && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
+        // Existing approved requests (no awardedXp) retain their historical 2 XP.
+        // New XP-only approvals must explicitly record the 5 XP grant.
+        && (xpOnly && next.status == 'approved'
+          ? (!prev.keys().hasAny(['awardedXp']) && next.get('awardedXp',0) == 5)
+          : next.get('awardedXp',0) == prev.get('awardedXp',0))
         && (xpOnly
-          ? (next.status == 'rejected' || validInventoryXpCredit(h,prev.childId,2))
+          ? (next.status == 'rejected' || validInventoryXpCredit(h,prev.childId,5))
           : validInventoryDecision(h,prev.childId,prev.candidateNo,id,rewardId,next.status == 'approved'))
         && (next.status == 'rejected' || get(profilePath(h,prev.childId)).data.get('rewardSuspendedUntil',0) <= request.time.toMillis())
         && (next.status == 'rejected' || (xpOnly
