@@ -25,7 +25,7 @@
    ```
 
    既に同名フォルダがある場合は`cd asobu-yasumu && git pull --ff-only`してから実行。
-   スクリプトは専用サービスアカウント`asobu-firestore-rules`を作成し、Rules Adminだけを付与する。
+   スクリプトは専用サービスアカウント`asobu-firestore-rules`を作成し、**Firebase Rules Admin**と、Firebase CLIによるAPI状態確認に必要な**Service Usage Consumer**を付与する。サービスの有効化・無効化権限やEditor/Owner権限は付与しない。
    GoogleのWIF OIDCプロバイダは**このリポジトリID、main、専用workflow、push/手動実行**に限定する。
 
 3. スクリプトの最後に表示される`FIREBASE_WIF_PROVIDER`の値をコピー。
@@ -60,5 +60,6 @@
 - WIF認証失敗: Cloud Shellスクリプトの出力値、Google CloudのIAM権限、
   `repo`/`main`/`workflow_ref`条件、および伝播時間を確認。
 - Firebase Rules権限エラー: 専用サービスアカウントへの`roles/firebaserules.admin`付与を確認。
+- `firestore.googleapis.com`の状態確認で403エラー: Cloud Shellで`git pull --ff-only && bash scripts/setup-firestore-wif.sh`を再実行し、`roles/serviceusage.serviceUsageConsumer`が付与されていることを確認。
 - 既に公開された不正ルールから戻す場合は、正常なコミットの`firestore.rules`をmainへ戻して再公開する。
   重大障害時はFirebase Consoleから直前の正常ルールへロールバックする。
