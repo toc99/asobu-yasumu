@@ -83,8 +83,19 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
     assert.equal(inv.bankedXp,5);
   });
 
-  test('2 XP, 6 XP and missing award record are all denied',async()=>{
-    const variants=[['two',2,true],['six',6,true],['missing-record',5,false]];
+  test('cached pre-3.19.2 clients can still approve 2 XP with no award field',async()=>{
+    const h='v3192-legacy-two',rid=await seed(h);
+    await assertSucceeds(approve(h,rid,2,{awardField:false}));
+    const db=parent.firestore();
+    const inv=(await getDoc(doc(db,'households',h,'pokemonInventory','older'))).data();
+    const req=(await getDoc(doc(db,'households',h,'activityRequests',rid))).data();
+    assert.equal(inv.experience.reward_original,42);
+    assert.equal(req.awardedXp,undefined);
+  });
+
+  test('mismatched XP and recorded award are denied',async()=>{
+    const variants=[['two-with-new-record',2,true],['six-with-new-record',6,true],
+      ['new-five-without-record',5,false]];
     for(const [key,amount,awardField] of variants){
       const h='v3192-reject-'+key,rid=await seed(h);
       await assertFails(approve(h,rid,amount,{awardField}));
