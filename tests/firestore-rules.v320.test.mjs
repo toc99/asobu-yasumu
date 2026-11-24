@@ -53,20 +53,22 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertSucceeds(updateDoc(config(parent),{command:{id:'abc',text:'テスト',at:serverTimestamp()}}));
   await assertSucceeds(updateDoc(config(parent),{volume:40}));
   const ids=Array.from({length:5},(_,i)=>i+'2345678-1234-1234-1234-123456789abc');
-  await assertSucceeds(updateDoc(config(parent),{speakerIds:ids,routes:{bedtime:[ids[1]],manual:[ids[0],ids[2]]}}));
+  await assertSucceeds(updateDoc(config(parent),{speakerIds:ids,routes:{bedtime:ids[1],manual:[ids[0],ids[2]].join(',')}}));
   await assertFails(updateDoc(config(kid),{speakerIds:ids}));
   await assertFails(updateDoc(config(bridge),{speakerIds:ids}));
   await assertFails(updateDoc(config(parent),{speakerIds:[ids[0],ids[0]]}));
   await assertFails(updateDoc(config(parent),{speakerIds:['invalid']}));
-  await assertFails(updateDoc(config(parent),{routes:{unknown:[ids[0]]}}));
-  await assertFails(updateDoc(config(parent),{routes:{bedtime:[true]}}));
+  await assertFails(updateDoc(config(parent),{routes:{unknown:ids[0]}}));
+  await assertFails(updateDoc(config(parent),{routes:{bedtime:true}}));
+  await assertFails(updateDoc(config(parent),{routes:{bedtime:'bad'}}));
+  await assertFails(updateDoc(config(parent),{routes:{bedtime:ids[0]+'|'+ids[1]}}));
   await assertSucceeds(updateDoc(config(parent),{scanRequestedAt:serverTimestamp()}));
   const multiStatus={...status,updatedAt:serverTimestamp(),speakers:ids.map((id,i)=>({id,name:'Speaker '+i,online:i===0})),scannedAt:Date.now()};
   await assertSucceeds(setDoc(d(bridge,'googleHome','status'),multiStatus));
   await assertFails(setDoc(d(bridge,'googleHome','status'),{...multiStatus,speakers:[{id:ids[0],name:'x',online:true,host:'192.168.1.9'}]}));
   await assertFails(setDoc(d(parent,'googleHome','status'),multiStatus));
   await assertFails(getDoc(d(kid,'googleHome','status')));
-  await assertSucceeds(updateDoc(config(parent),{routes:Object.fromEntries([...Object.keys(setup.types),'manual'].map(k=>[k,ids]))}));
+  await assertSucceeds(updateDoc(config(parent),{routes:Object.fromEntries([...Object.keys(setup.types),'manual'].map(k=>[k,ids.join(',')]))}));
 
   await assertSucceeds(updateDoc(config(parent),{enabled:false,bridgeUid:''}));
   await assertFails(getDoc(d(bridge,'profiles','older')));
