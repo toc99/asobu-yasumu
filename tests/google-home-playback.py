@@ -1,4 +1,7 @@
 import importlib.util
+import http.client
+import http.server
+import threading
 import pathlib
 import unittest
 from types import SimpleNamespace as NS
@@ -58,6 +61,41 @@ class ReceiverStartTests(unittest.TestCase):
         self.assertEqual(module.media_outcome(status, "/new.wav"), "playing")
         status.player_state = "BUFFERING"
         self.assertEqual(module.media_outcome(status, "/new.wav"), "")
+
+class AudioHttpTests(unittest.TestCase):
+    def setUp(self):
+        self.payload = bytes(range(100))
+        self.diag = dict(httpGets=0, httpHeads=0, httpRanges=0, httpBytesSent=0, httpErrors=0)
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), module.audio_handler("/sample.wav", self.payload, self.diag))
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def request(self, method="GET", path="/sample.wav", headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        try:
+            conn.request(method, path, headers=headers or {})
+            response = conn.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            conn.close()
+
+    def test_full_and_range_requests(self):
+        status, headers, data = self.request()
+        self.assertEqual((status, data), (200, self.payload))
+        self.assertEqual(headers["Accept-Ranges"], "bytes")
+        status, headers, data = self.request(headers={"Range": "bytes=10-19"})
+        self.assertEqual((status, data), (206, self.payload[10:20]))
+        self.assertEqual(headers["Content-Range"], "bytes 10-19/100")
+        self.assertEqual(self.request(headers={"Range": "bytes=-10"})[2], self.payload[-10:])
+        self.assertEqual(self.request(headers={"Range": "bytes=90-"})[2], self.payload[90:])
+        self.assertEqual(self.request(headers={"Range": "bytes=100-"})[0], 416)
+        self.assertEqual(self.request("HEAD")[2], b"")
+        self.assertEqual(self.request(path="/wrong.wav")[0], 404)
 
 if __name__ == "__main__":
     unittest.main()

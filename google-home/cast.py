@@ -4,6 +4,7 @@ import http.server
 import json
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -105,6 +106,88 @@ def media_outcome(status, token):
         return "playing"
     return ""
 
+def byte_range(header, length):
+    """Return an inclusive single-byte range, or None for an invalid range."""
+    if not header:
+        return 0, length - 1
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip())
+    if not match or length <= 0:
+        return None
+    first, last = match.groups()
+    if not first:
+        if not last or int(last) <= 0:
+            return None
+        return max(0, length - int(last)), length - 1
+    start = int(first)
+    end = min(int(last), length - 1) if last else length - 1
+    return (start, end) if start < length and end >= start else None
+
+def audio_handler(token, payload, diagnostics):
+    lock = threading.Lock()
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        def log_message(self, *args):
+            pass
+        def do_HEAD(self):
+            self.serve(False)
+        def do_GET(self):
+            self.serve(True)
+        def do_OPTIONS(self):
+            if self.path != token:
+                self.send_error(404)
+                return
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Range")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+        def serve(self, body):
+            self.close_connection = True
+            if self.path != token:
+                self.send_error(404)
+                return
+            header = self.headers.get("Range")
+            with lock:
+                diagnostics["httpGets" if body else "httpHeads"] += 1
+                if header:
+                    diagnostics["httpRanges"] += 1
+            selected = byte_range(header, len(payload))
+            if selected is None:
+                with lock:
+                    diagnostics["httpErrors"] += 1
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(payload)}")
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                return
+            start, end = selected
+            data = payload[start:end + 1]
+            try:
+                self.send_response(206 if header else 200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length")
+                if header:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(payload)}")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                if body:
+                    self.wfile.write(data)
+                    self.wfile.flush()
+                    with lock:
+                        diagnostics["httpBytesSent"] += len(data)
+            except OSError:
+                with lock:
+                    diagnostics["httpErrors"] += 1
+    return Handler
+
 def run(request, diagnostics=None):
     diagnostics = diagnostics if diagnostics is not None else {}
     cast, browser = discover(request)
@@ -131,27 +214,9 @@ def run(request, diagnostics=None):
                 raise NoticeError("tts_duration")
             token = "/" + uuid.uuid4().hex + ".wav"
             payload = wav.read_bytes()
-            diagnostics.update(httpGets=0, httpHeads=0, audioBytes=len(payload), audioSeconds=round(duration, 1))
-            class Handler(http.server.BaseHTTPRequestHandler):
-                def log_message(self, *args):
-                    pass
-                def do_HEAD(self):
-                    self.serve(False)
-                def do_GET(self):
-                    self.serve(True)
-                def serve(self, body):
-                    if self.path != token:
-                        self.send_error(404)
-                        return
-                    key = "httpGets" if body else "httpHeads"
-                    diagnostics[key] += 1
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/wav")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    if body:
-                        self.wfile.write(payload)
+            diagnostics.update(httpGets=0, httpHeads=0, httpRanges=0, httpBytesSent=0,
+                               httpErrors=0, audioBytes=len(payload), audioSeconds=round(duration, 1))
+            Handler = audio_handler(token, payload, diagnostics)
             ip = request.get("lanIp")
             if not ip:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -173,6 +238,11 @@ def run(request, diagnostics=None):
                 failed = threading.Event()
                 class Listener:
                     def new_media_status(self, status):
+                        matching = token in (status.content_id or "")
+                        event = {"state": status.player_state or "UNKNOWN", "idleReason": status.idle_reason or "", "matching": matching}
+                        events = diagnostics.setdefault("mediaEvents", [])
+                        if len(events) < 20 and (not events or events[-1] != event):
+                            events.append(event)
                         outcome = media_outcome(status, token)
                         if outcome == "playing":
                             started.set()
@@ -192,7 +262,8 @@ def run(request, diagnostics=None):
                 try:
                     # A WAV notification is finite media, not a live stream.
                     mc.play_media("http://" + ip + ":8765" + token, "audio/wav",
-                                  stream_type="BUFFERED", callback_function=acknowledged)
+                                  stream_type="BUFFERED", media_info={"duration": duration},
+                                  callback_function=acknowledged)
                     deadline = time.monotonic() + 28
                     next_poll = 0
                     while time.monotonic() < deadline:
@@ -227,6 +298,7 @@ def run(request, diagnostics=None):
                 finally:
                     # disconnect() below releases media listeners.
                     diagnostics["finalState"] = mc.status.player_state or "UNKNOWN"
+                    diagnostics["idleReason"] = mc.status.idle_reason or ""
             finally:
                 server.shutdown()
                 server.server_close()

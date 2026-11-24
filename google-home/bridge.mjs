@@ -100,10 +100,14 @@ function cast(op,text='',manual=false){
     // Only numeric / enumerated diagnostic fields, never URLs, message text or credentials.
     if(op==='speak'&&result.diagnostics){
      const d=result.diagnostics,trace={};
-     for(const k of ['httpGets','httpHeads','audioBytes','audioSeconds','loadFailed'])if(Number.isFinite(d[k]))trace[k]=d[k];
+     for(const k of ['httpGets','httpHeads','httpRanges','httpBytesSent','httpErrors','audioBytes','audioSeconds','loadFailed'])if(Number.isFinite(d[k]))trace[k]=d[k];
      for(const k of ['receiverReady','loadAcknowledged','playbackStarted'])if(typeof d[k]==='boolean')trace[k]=d[k];
      if(['default','idle','other'].includes(d.initialApp))trace.initialApp=d.initialApp;
      if(['IDLE','PLAYING','BUFFERING','PAUSED','UNKNOWN','LOADING'].includes(d.finalState))trace.finalState=d.finalState;
+     const idleReasons=['FINISHED','CANCELLED','INTERRUPTED','ERROR',''];
+     const states=['IDLE','PLAYING','BUFFERING','PAUSED','UNKNOWN','LOADING'];
+     if(idleReasons.includes(d.idleReason))trace.idleReason=d.idleReason;
+     if(Array.isArray(d.mediaEvents))trace.mediaEvents=d.mediaEvents.slice(0,20).map(e=>({state:states.includes(e.state)?e.state:'UNKNOWN',idleReason:idleReasons.includes(e.idleReason)?e.idleReason:'UNKNOWN',matching:e.matching===true}));
      log('Cast playback diagnostics: '+JSON.stringify(trace));
     }
     if(code!==0)resolve({result:'error',reason:safeReason(result.reason)});else resolve(result);}
@@ -163,5 +167,5 @@ async function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge receiver-start fix 2026-11-24; waiting for authorized configuration.');
+log('Google Home bridge HTTP-media fix 2026-11-24; waiting for authorized configuration.');
 void health();void pump();
