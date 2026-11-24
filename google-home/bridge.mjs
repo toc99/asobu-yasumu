@@ -3,16 +3,17 @@ import {initializeApp} from 'firebase/app';
 import {getAuth,signInWithEmailAndPassword} from 'firebase/auth';
 import {getFirestore,doc,collection,onSnapshot,query,orderBy,limit,getDocFromServer,setDoc,serverTimestamp} from 'firebase/firestore';
 import {firebaseConfig,householdId} from '../firebase-config.js';
-import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvent,inventoryEvents,label,stamp,DAY} from '../google-home-policy.js';
+import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvents,eligibleNotice,inventoryEvents,stamp,DAY} from '../google-home-policy.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
 import {spawn} from 'node:child_process';
-import {mkdirSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const stateDir=process.env.GH_STATE_DIR||path.join(here,'.local');
 mkdirSync(stateDir,{recursive:true});
 const statePath=path.join(stateDir,'delivery.json');
+const logPath=path.join(stateDir,'bridge.log');
 let saved={seen:{},history:[]};
 try{saved=JSON.parse(readFileSync(statePath,'utf8'));}catch{}
 if(!saved.seen||typeof saved.seen!=='object')saved.seen={};
@@ -25,14 +26,21 @@ function persist(){
 const email=process.env.GH_EMAIL,password=process.env.GH_PASSWORD;
 if(!email||!password)throw Error('GH_EMAIL and GH_PASSWORD are required in the local .env file.');
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
-const login=await signInWithEmailAndPassword(auth,email,password);
+let login;
+try{login=await signInWithEmailAndPassword(auth,email,password);}catch(e){log('Firebase authentication failed: '+(e.code||'auth error'));process.exit(2);}
 const uid=login.user.uid;
 const ref=(name,id)=>doc(db,'households',householdId,name,id);
 const col=name=>collection(db,'households',householdId,name);
 const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status');
 const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unavailable',device='',playing=false,probing=false,lastProbe=0,stopped=false;
 const pending=new Map(),freshDocs=new Set();
-function log(msg){console.log(new Date().toISOString(),msg);}
+function log(msg){
+ const line=new Date().toISOString()+' '+msg;console.log(line);
+ try{
+  if(existsSync(logPath)&&statSync(logPath).size>1024*1024){rmSync(logPath+'.1',{force:true});renameSync(logPath,logPath+'.1');}
+  appendFileSync(logPath,line+'\n',{encoding:'utf8',mode:0o600});
+ }catch{console.error('Local log write failed.');}
+}
 const current=()=>cfg&&cfg.bridgeUid===uid&&cfg.enabled===true&&Date.now()-onlineAt<90000&&freshDocs.size===4;
 function listen(target,key,cb){
  return onSnapshot(target,{includeMetadataChanges:true},snap=>{
@@ -42,8 +50,7 @@ function listen(target,key,cb){
 }
 const unsub=[];
 function push(e){
- if(!e||!e.at||Date.now()-e.at>60000||!current()||saved.seen[e.key]||pending.has(e.key))return;
- if(e.type!=='manual'&&(!cfg.types?.[e.type]||quiet(cfg,Date.now())))return;
+ if(!current()||!eligibleNotice(e,cfg)||saved.seen[e.key]||pending.has(e.key))return;
  pending.set(e.key,e);
 }
 function readConfig(snap){
@@ -72,18 +79,13 @@ let rewardBaseline=false,approvalBaseline=false;
 unsub.push(listen(query(col('rewards'),orderBy('claimedAt','desc'),limit(40)),null,s=>{
  if(!rewardBaseline){rewardBaseline=true;return;}
  for(const ch of s.docChanges().filter(x=>x.type==='added')){
-  const r=ch.doc.data();push(rewardEvent(ch.doc.id,r,profiles));
-  if(r.kind==='rest_completed'&&!r.revoked)push({type:'xp',key:'game-xp:'+ch.doc.id,at:stamp(r.claimedAt),text:label(r.childId,profiles[r.childId])+'、ゲームと休憩のごほうびで相棒の経験値を5ポイント獲得したよ。'});
+  for(const e of rewardEvents(ch.doc.id,ch.doc.data(),profiles))push(e);
  }
 }));
 unsub.push(listen(query(col('activityRequests'),orderBy('reviewedAt','desc'),limit(40)),null,s=>{
  if(!approvalBaseline){approvalBaseline=true;return;}
  for(const ch of s.docChanges())for(const e of approvalEvents(ch.doc.id,ch.doc.data(),profiles))push(e);
- const groups=new Map();for(const d of s.docs){const r=d.data();if(r.status!=='approved')continue;
-  const k=r.childId+':'+r.dayIndex,a=groups.get(k)||[];a.push(r);groups.set(k,a);}
- for(const [k,rows] of groups)if(new Set(rows.map(r=>r.activityKind)).size===11){
-  const id=rows[0].childId;push({type:'allDone',key:'all:'+k,at:Math.max(...rows.map(r=>stamp(r.reviewedAt))),text:label(id,profiles[id])+'、今日の11チャレンジを全部達成したね！'});
- }
+ for(const e of allDoneEvents(s.docs.map(d=>d.data()),profiles))push(e);
 }));
 const castReasons=new Set(['muted','media_busy','other_app','status_unavailable','speaker_not_unique','tts_failed','tts_duration','receiver_no_start','receiver_no_finish','cast_error','timeout','process_error']);
 const safeReason=value=>castReasons.has(value)?value:'cast_error';
@@ -159,6 +161,7 @@ async function pump(){
      const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual');result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
      device=r.device||device;state=result==='sent'||result==='skipped'?'ready':'error';reason=result==='sent'?'':safeReason(r.reason);if(reason)log('Speaker notification '+result+': '+reason);
     }catch(e){state='error';log('Speaker playback failed.');}
+    log('Notification result: '+e.type+' '+result);
     saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{})});persist();playing=false;
     void status();
    }
@@ -168,5 +171,5 @@ async function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge MP3 fix 2026-11-24; waiting for authorized configuration.');
+log('Google Home bridge MP3 + operations 2026-11-24; waiting for authorized configuration.');
 void health();void pump();

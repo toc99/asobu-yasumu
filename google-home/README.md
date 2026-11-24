@@ -4,7 +4,7 @@
 ゲーム・動画開始、終了予告・お知らせ時刻、終了忘れ確認、休憩開始・終了、就寝準備、チャレンジ承認、経験値、ポケモン獲得・進化、レベルアップ、進化条件、全11チャレンジ達成、新世代解放。保護者画面で種別別ON/OFF、スピーカー名、音量、時間を設定できる。テスト・任意メッセージ、接続状態と最新20件の通知結果を表示する。音声による操作・質問、Switchの停止は行わない。
 
 ## 構成と制約
-同じ自宅LAN上のWindows PCでNode.jsのFirebaseクライアントが状態を監視し、PowerShellの日本語SAPI音声をWAVに合成し、Python/PyChromecastでスピーカーに送る。クラウドに家族名を送って音声合成する必要はない。Google Homeの名称が一致する1台を対象とする。
+同じ自宅LAN上のWindows PCでNode.jsのFirebaseクライアントが状態を監視し、PowerShellの日本語SAPI音声をWAVに合成し、PC内でMP3に変換してPython/PyChromecastでスピーカーに送る。クラウドに家族名を送って音声合成する必要はない。Google Homeの名称が一致する1台を対象とする。
 - **Node.js 22 LTS、Python 3.11以降、サポート中のWindows、Japanese desktop SAPI voice** が必要。古いWindows 7等のまま常時接続しない。
 - PCとGoogle Homeは同一LAN。ゲストWi-Fi、AP隔離、VPN等で通信を遮断しない。PCは電源接続、スリープ無効で運用する。画面消灯や蓋を閉じるだけなら可。
 - 自動通知は他のメディア再生中またはミュート中の場合にスキップ。手動通知は確認後に優先再生するため、既存の再生を停止する場合がある（ミュート中はスキップ）。音量を一時変更し、終了時に元に戻す（突然のPC停止時は復元できない場合あり）。
@@ -36,7 +36,7 @@
 
    PythonのmDNS通信をWindowsが確認した場合はプライベートネットワークのみ許可。ルーターでポート転送はしない。
 6. `google-home\start.cmd` を実行する。保護者画面で連携PCの接続表示を確認し、「テスト通知を送る」を押す。スピーカーで日本語が再生され、通知履歴が「送信済み」になることを確認。
-7. 実機確認後、Windows タスクスケジューラで、ログオン時起動、失敗時再起動、既に実行中なら新規起動しない設定でstart.cmdを登録する。PC再起動後に動作確認する。電源接続時に蓋を閉じてもスリープしない設定にする。
+7. 実機確認後、下記の自動起動登録を実施し、再ログオン後に動作確認する。電源接続時に蓋を閉じてもスリープしない設定にする。
 
 ## 日本語のデスクトップ音声を確認
 ```powershell
@@ -55,3 +55,39 @@ ja-JP がない場合、Windowsの言語・音声設定を確認する。OneCore
 
 ### 音声形式の更新（2026-11-24）
 既存環境は `git pull --ff-only` 後、`& .\google-home\.venv\Scripts\python.exe -m pip install -r .\google-home\requirements.txt` を実行してから起動。SAPIで生成したWAVはPC内でMP3へ変換し、前後の無音を含め最低5秒の音声を配信します。外部の音声合成サービスは使用しません。
+
+## 運用と検証（2026-11-24）
+
+### 自動起動・障害復旧
+手動起動を停止してから、リポジトリ直下で次を実行する（管理者権限を求められた場合は同じWindowsユーザーで昇格する）。
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\google-home\install-autostart.ps1 -StartNow
+Get-ScheduledTask -TaskName 'AsobuYasumu-GoogleHome'
+Get-ScheduledTaskInfo -TaskName 'AsobuYasumu-GoogleHome'
+```
+現在のユーザーのログオン時に自動起動。異常終了時は1分間隔で最大3回再起動。多重起動は名前付きミューテックスとタスクスケジューラで防止する（旧版プロセスは事前に停止すること）。PCが起動してもサインイン前は動かない。ログオフ・スリープ時は停止する。PC再起動で自動復帰するかは実機で確認する。Git更新やpipインストールは自動では行わない。
+停止・登録解除：
+```powershell
+Stop-ScheduledTask -TaskName 'AsobuYasumu-GoogleHome'
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\google-home\install-autostart.ps1 -Remove
+```
+ログは `google-home/.local/bridge.log` に保存し、1MB超で直前1世代を保持。メッセージ本文・認証情報は出力しない。確認：
+```powershell
+Get-Content .\google-home\.local\bridge.log -Tail 30
+```
+### IP固定なしの検証
+稼働中の連携を止め、同じLAN上で次を実行する。
+```powershell
+& .\google-home\.venv\Scripts\python.exe -X utf8 .\google-home\list-speakers.py
+```
+目的の名前が一覧に存在し、同名がないことを確認したら .env.local の GH_CAST_HOST をコメントアウトして再起動・テスト通知。mDNSで名前を検索するためIP変更に追随できる場合がある。失敗時は元の設定に戻す。これはローカルの一覧であり、保護者画面からの選択機能ではない。
+
+### 自動通知の確認
+まず静音時間帯外で、実利用中でないときに行う。現在の設定値を控え、変更後は保存、テスト完了後に戻す。家族の実データを削除・初期化したり、Firestoreを直接編集したりしない。
+- ゲーム開始、終了予告、終了時刻、終了忘れ：ゲーム通知3分、予告1分、忘れ確認1分に設定、対象4種を有効。iPadで通常のゲーム開始。2分・3分・4分の通知を確認し終了。
+- 休憩開始・終了：対象2種を有効にして、通常の終了操作後に休憩開始・終了を確認。夜間持ち越しや手動短縮は通常のアプリ操作の機会に確認する。
+- 動画開始・予告・終了時刻：動画利用の設定を一時的に3分、予告1分、対象3種を有効化。休憩終了後の新しい利用サイクルで確認。一時停止中に終了通知しないことも確認する。
+- 就寝通知：静音時間外の数分先に一時設定し確認。元に戻す。
+- 報酬・経験値・活動・進化等：通常の獲得・承認・レベルアップのタイミングで確認する。検証のために不正な報酬を作成しない。
+- 個別OFF、静音時間中の自動通知なし、手動通知の優先再生、PC停止中の古い通知を再生しないことを確認。
+- 実行ログの Notification result: <種別> sent / skipped / error と保護者画面の履歴を照合。自動通知は17種別ある。単体テストは `node --test tests/google-home-policy.test.mjs`。

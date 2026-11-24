@@ -86,6 +86,32 @@ export function approvalEvents(id,r,profiles){
  return [{type:'activity',key:'approval:'+id,at,text:n+'、'+(activities[r.activityKind]||'チャレンジ')+'が承認されたよ！'},
   {type:'xp',key:'xp:'+id,at,text:n+'、相棒の経験値が'+xp+'ポイント増えたよ。'}];
 }
+// All eleven current activities must be approved on the same reward day.
+export function allDoneEvents(rows,profiles){
+ const groups=new Map();
+ for(const r of rows){
+  if(r?.status!=='approved'||!['older','younger'].includes(r.childId)||!Number.isInteger(r.dayIndex)||!Object.hasOwn(activities,r.activityKind))continue;
+  const key=r.childId+':'+r.dayIndex,group=groups.get(key)||[];group.push(r);groups.set(key,group);
+ }
+ const out=[];
+ for(const [key,group] of groups){
+  if(new Set(group.map(r=>r.activityKind)).size!==Object.keys(activities).length)continue;
+  const id=group[0].childId,at=Math.max(...group.map(r=>stamp(r.reviewedAt)));
+  if(at>0)out.push({type:'allDone',key:'all:'+key,at,text:label(id,profiles[id])+'、今日の11チャレンジを全部達成したね！'});
+ }
+ return out;
+}
+export function rewardEvents(id,r,profiles){
+ const out=[],pokemon=rewardEvent(id,r,profiles);
+ if(pokemon)out.push(pokemon);
+ if(r?.kind==='rest_completed'&&!r.revoked&&['older','younger'].includes(r.childId))
+  out.push({type:'xp',key:'game-xp:'+id,at:stamp(r.claimedAt),text:label(r.childId,profiles[r.childId])+'、ゲームと休憩のごほうびで相棒の経験値を5ポイント獲得したよ。'});
+ return out;
+}
+export function eligibleNotice(e,c,now=Date.now(),maxAge=60000){
+ if(!e||!Number.isFinite(e.at)||e.at<=0||e.at>now+10000||now-e.at>maxAge||c?.enabled!==true)return false;
+ return e.type==='manual'||(c.types?.[e.type]===true&&!quiet(c,now));
+}
 const unlock=[30,60,100,150,220,300,400,500];
 export function inventoryEvents(id,before,after,profile,at){
  if(!before||!after)return [];
