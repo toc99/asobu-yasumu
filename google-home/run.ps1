@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$mutex = New-Object System.Threading.Mutex($false, 'Global\AsobuYasumuGoogleHomeBridge')
+$mutex = [System.Threading.Mutex]::new($false, 'Global\AsobuYasumuGoogleHomeBridge')
 $owned = $false
 $code = 1
 try {
