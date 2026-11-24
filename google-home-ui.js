@@ -22,7 +22,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   const labels={ready:'接続確認済み',unavailable:'スピーカー未検出',busy:'再生中',disabled:'通知停止中',error:'エラー'};
   get('state').textContent=!ready?'設定読み込み中':!fresh?'連携PC未接続（または停止中）':(labels[status.state]||'不明')+(status.device?' / '+status.device:'');
   const list=get('history');list.replaceChildren();
-  for(const h of (fresh&&Array.isArray(status.history)?status.history:[]).slice(0,20)){
+  for(const h of (status?.bridgeUid===cfg.bridgeUid&&Array.isArray(status.history)?status.history:[]).slice(0,20)){
    if(!h||typeof h!=='object')continue;
    const li=document.createElement('li');li.textContent=new Date(Number(h.at)||0).toLocaleString('ja-JP')+' '+(TYPES[h.type]|| (h.type==='manual'?'テスト・手動通知':'通知'))+'：'+({sent:'送信済み',error:'失敗',skipped:'スキップ'}[h.result]||'不明');list.append(li);
   }
