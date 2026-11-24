@@ -1,4 +1,5 @@
 import {defaultConfig,TYPES,stamp} from './google-home-policy.js';
+const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
  const configRef=dbApi.doc(db,'households',householdId,'googleHome','config');
@@ -24,7 +25,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   const list=get('history');list.replaceChildren();
   for(const h of (status?.bridgeUid===cfg.bridgeUid&&Array.isArray(status.history)?status.history:[]).slice(0,20)){
    if(!h||typeof h!=='object')continue;
-   const li=document.createElement('li');li.textContent=new Date(Number(h.at)||0).toLocaleString('ja-JP')+' '+(TYPES[h.type]|| (h.type==='manual'?'テスト・手動通知':'通知'))+'：'+({sent:'送信済み',error:'失敗',skipped:'スキップ'}[h.result]||'不明');list.append(li);
+   const li=document.createElement('li');li.textContent=new Date(Number(h.at)||0).toLocaleString('ja-JP')+' '+(TYPES[h.type]|| (h.type==='manual'?'テスト・手動通知':'通知'))+'：'+({sent:'送信済み',error:'失敗',skipped:'スキップ'}[h.result]||'不明')+(h.reason&&reasons[h.reason]?'（'+reasons[h.reason]+'）':'');list.append(li);
   }
   if(!list.childElementCount){const li=document.createElement('li');li.textContent='通知履歴なし';list.append(li);}
  }
@@ -52,7 +53,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
  });
  async function send(text){
   text=String(text||'').trim();if(!ready||dirty||!cfg.enabled||!text||text.length>160)return;
-  if(!confirm('指定したGoogle Homeから読み上げます。よろしいですか？'))return;
+  if(!confirm('指定したGoogle Homeから優先して読み上げます。再生中の音楽などが停止する場合があります。よろしいですか？'))return;
   try{
    await dbApi.updateDoc(configRef,{command:{id:crypto.randomUUID(),text,at:dbApi.serverTimestamp()}});
    toast('音声通知を依頼しました。結果は接続状態・履歴で確認してください。');

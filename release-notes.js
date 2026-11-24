@@ -2,8 +2,16 @@
 // バージョンを公開するたび、先頭に1件追加すること。
 // date は確認済みの公開日だけ記入。推測で日付を付けないこと。
 // 旧版は当時の主要変更をまとめたもの。細かな修正をすべて列挙しているわけではありません。
-export const APP_VERSION = 'v3.20.0';
+export const APP_VERSION = 'v3.20.1';
 export const RELEASE_NOTES = Object.freeze([
+  {
+    version:'v3.20.1',title:'Google Homeの音声通知スキップ判定改善',
+    changes:[
+      '待機状態のCastアプリと再生中のメディアを区別するよう改善',
+      'テスト・手動通知は確認後に優先再生。ミュート中は引き続きスキップ',
+      '通知履歴にスキップ・失敗理由を表示し、Windowsの日本語入力をUTF-8に固定'
+    ]
+  },
   {
     version:'v3.20.0',title:'Google Home音声通知連携',
     changes:[

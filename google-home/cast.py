@@ -28,7 +28,7 @@ def synthesize(text, target):
          "-InputFile", str(source), "-OutputFile", str(target)],
         capture_output=True, timeout=30, check=False)
     if run.returncode != 0 or not target.exists():
-        raise RuntimeError("Japanese speech synthesis failed; install a Japanese desktop voice")
+        raise NoticeError("tts_failed")
     with wave.open(str(target), "rb") as w:
         return w.getnframes() / w.getframerate()
 
@@ -43,8 +43,41 @@ def discover(request):
         for d in devices:
             with contextlib.suppress(Exception):
                 d.disconnect()
-        raise RuntimeError("Exactly one matching Google Home is required")
+        raise NoticeError("speaker_not_unique")
     return devices[0], browser
+
+class NoticeError(RuntimeError):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+def playback_block_reason(cast, manual=False):
+    """Do not equate an open receiver/ambient app with actual audio playback."""
+    status = cast.status
+    if status is None:
+        return "status_unavailable"
+    if status.volume_muted:
+        return "muted"
+    # A manual command is explicitly confirmed by the parent in the UI.
+    # It can interrupt another session, but never unmutes a device.
+    if manual:
+        return None
+    mc = cast.media_controller
+    if not cast.is_idle and "urn:x-cast:com.google.cast.media" in (status.namespaces or []):
+        received = threading.Event()
+        try:
+            mc.update_status(callback_function=lambda *args: received.set())
+            received.wait(2)
+        except Exception:
+            pass
+    if mc.status.player_state in ("PLAYING", "BUFFERING", "PAUSED", "LOADING"):
+        return "media_busy"
+    # A non-media app may be a Nest Hub ambient/idle screen. Only protect
+    # an unknown receiver for automatic messages if it is not demonstrably idle.
+    if not cast.is_idle and cast.app_id not in (None, "CC1AD845", "E8C28D3C"):
+        if mc.status.player_state != "IDLE":
+            return "other_app"
+    return None
 
 def run(request):
     cast, browser = discover(request)
@@ -58,18 +91,16 @@ def run(request):
         text = str(request.get("text", "")).strip()
         if not text or len(text) > 160:
             raise RuntimeError("Invalid message length")
-        # Do not interrupt a different Cast app, music, or a muted speaker.
         mc = cast.media_controller
-        if cast.status and (cast.status.volume_muted or
-            (not cast.is_idle and cast.app_id != "CC1AD845") or
-            (not cast.is_idle and mc.status.player_state not in ("IDLE", "UNKNOWN"))):
-            return {"result": "skipped", "device": name}
+        reason = playback_block_reason(cast, request.get("manual") is True)
+        if reason:
+            return {"result": "skipped", "device": name, "reason": reason}
         original = cast.status.volume_level if cast.status else None
         with tempfile.TemporaryDirectory(prefix="asobu-voice-") as tmp:
             wav = pathlib.Path(tmp) / "notice.wav"
             duration = synthesize(text, wav)
             if duration <= 0 or duration > 35:
-                raise RuntimeError("Invalid speech duration")
+                raise NoticeError("tts_duration")
             token = "/" + uuid.uuid4().hex + ".wav"
             payload = wav.read_bytes()
             class Handler(http.server.BaseHTTPRequestHandler):
@@ -114,13 +145,13 @@ def run(request):
                         break
                     time.sleep(.15)
                 if not started:
-                    raise RuntimeError("Receiver did not start the audio")
+                    raise NoticeError("receiver_no_start")
                 deadline = time.monotonic() + duration + 8
                 while time.monotonic() < deadline:
                     if mc.status.player_state == "IDLE":
                         return {"result": "sent", "device": name}
                     time.sleep(.2)
-                raise RuntimeError("Receiver did not finish audio")
+                raise NoticeError("receiver_no_finish")
             finally:
                 server.shutdown()
                 server.server_close()
@@ -135,8 +166,8 @@ def run(request):
 
 if __name__ == "__main__":
     try:
-        result(**run(json.load(sys.stdin)))
+        result(**run(json.loads(sys.stdin.buffer.read().decode("utf-8"))))
     except Exception as exc:
         # Do not print the message text or authentication data.
-        result(result="error", error=str(exc)[:180])
+        result(result="error", reason=getattr(exc, "reason", "cast_error"), error=str(exc)[:180])
         sys.exit(1)

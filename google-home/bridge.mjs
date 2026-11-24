@@ -85,20 +85,22 @@ unsub.push(listen(query(col('activityRequests'),orderBy('reviewedAt','desc'),lim
   const id=rows[0].childId;push({type:'allDone',key:'all:'+k,at:Math.max(...rows.map(r=>stamp(r.reviewedAt))),text:label(id,profiles[id])+'、今日の11チャレンジを全部達成したね！'});
  }
 }));
-function cast(op,text=''){
+const castReasons=new Set(['muted','media_busy','other_app','status_unavailable','speaker_not_unique','tts_failed','tts_duration','receiver_no_start','receiver_no_finish','cast_error','timeout','process_error']);
+const safeReason=value=>castReasons.has(value)?value:'cast_error';
+function cast(op,text='',manual=false){
  return new Promise((resolve,reject)=>{
-  const child=spawn(process.env.GH_PYTHON||'python',[path.join(here,'cast.py')],{cwd:here,stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const child=spawn(process.env.GH_PYTHON||'python',['-X','utf8',path.join(here,'cast.py')],{cwd:here,stdio:['pipe','pipe','pipe'],windowsHide:true});
   let out='',err='',done=false;
-  const timeout=setTimeout(()=>{child.kill();if(!done){done=true;reject(Error('Cast timeout'));}},90000);
+  const timeout=setTimeout(()=>{child.kill();if(!done){done=true;resolve({result:'error',reason:'timeout'});}},90000);
   child.stdout.on('data',d=>{out+=d;if(out.length>16000)child.kill();});
   child.stderr.on('data',d=>{err+=d;if(err.length>16000)child.kill();});
-  child.on('error',e=>{clearTimeout(timeout);if(!done){done=true;reject(e);}});
+  child.on('error',e=>{clearTimeout(timeout);if(!done){done=true;resolve({result:'error',reason:'process_error'});}});
   child.on('close',code=>{clearTimeout(timeout);if(done)return;done=true;
-   try{const result=JSON.parse(out);if(code!==0&&result.result!=='skipped')throw Error(result.error||'Cast failed');resolve(result);}
-   catch(e){reject(Error('Cast failed: '+(e.message||'unknown')));}
+   try{const result=JSON.parse(out);if(code!==0)resolve({result:'error',reason:safeReason(result.reason)});else resolve(result);}
+   catch(e){resolve({result:'error',reason:'process_error'});}
   });
   child.stdin.on('error',()=>{});
-  child.stdin.end(JSON.stringify({op,speaker:cfg.speaker,volume:cfg.volume,text,host:process.env.GH_CAST_HOST||'',lanIp:process.env.GH_LAN_IP||''}));
+  child.stdin.end(JSON.stringify({op,speaker:cfg.speaker,volume:cfg.volume,text,manual,host:process.env.GH_CAST_HOST||'',lanIp:process.env.GH_LAN_IP||''}));
  });
 }
 async function status(){
@@ -115,7 +117,7 @@ async function health(){
   settings=docs[0].data()||{};profiles.older=docs[1].data()||null;profiles.younger=docs[2].data()||null;
   freshDocs.add('config');freshDocs.add('settings');freshDocs.add('profile:older');freshDocs.add('profile:younger');
   if(cfg.enabled&&!playing&&!probing&&Date.now()-lastProbe>300000){
-   probing=true;lastProbe=Date.now();try{const result=await cast('probe');device=result.device||'';state=result.result==='ready'?'ready':'unavailable';}
+   probing=true;lastProbe=Date.now();try{const result=await cast('probe');device=result.device||'';state=result.result==='ready'?'ready':'unavailable';if(result.result!=='ready')log('Speaker probe: '+safeReason(result.reason));}
    catch{state='unavailable';device='';}finally{probing=false;}
   }
   await status();
@@ -137,12 +139,12 @@ async function pump(){
    if(!saved.seen[key]&&(e.type==='manual'||(cfg.types?.[e.type]&&!quiet(cfg,Date.now())))){
     // Persist before playback to prevent repeated speech after an interruption/crash.
     saved.seen[key]=Date.now();persist();playing=true;state='busy';
-    let result='error';
+    let result='error',reason='cast_error';
     try{
-     const r=await cast('speak',String(e.text).slice(0,160));result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
-     device=r.device||device;state=result==='sent'||result==='skipped'?'ready':'error';
+     const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual');result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
+     device=r.device||device;state=result==='sent'||result==='skipped'?'ready':'error';reason=result==='sent'?'':safeReason(r.reason);if(reason)log('Speaker notification '+result+': '+reason);
     }catch(e){state='error';log('Speaker playback failed.');}
-    saved.history.unshift({at:Date.now(),type:e.type,result});persist();playing=false;
+    saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{})});persist();playing=false;
     void status();
    }
   }
