@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,MIN} from '../google-home-policy.js';
+import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,rewardEvents,allDoneEvents,eligibleNotice,MIN} from '../google-home-policy.js';
 const ts=n=>({toMillis:()=>n});
 const at=Date.parse('2026-11-23T15:00:00+09:00');
 const cfg=()=>({...defaultConfig(),enabled:true,types:Object.fromEntries(Object.keys(defaultConfig().types).map(k=>[k,true]))});
@@ -30,4 +30,64 @@ test('level up generated only for same buddy on XP increase',()=>{
  const before={buddyId:'a',experience:{a:19},owned:{1:'a'},seen:{1:true},version:1};
  const after={...before,experience:{a:20},version:2};
  assert.equal(inventoryEvents('older',before,after,{},at)[0].type,'level');
+});
+
+test('game start, warning, due and forgotten use same session and no stale replay',()=>{
+ const p={activeStart:at,startedAt:ts(at)},c=cfg(),profiles={older:p};
+ for(const [offset,type] of [[0,'gameStart'],[55,'gameWarning'],[60,'gameDue'],[65,'forgotten']]){
+  const event=timedEvents(profiles,{},c,at+offset*MIN).find(e=>e.type===type);
+  assert.ok(event,type);assert.ok(eligibleNotice(event,c,at+offset*MIN));
+ }
+ assert.ok(!timedEvents(profiles,{},c,at+62*MIN).some(e=>e.type==='gameDue'));
+ assert.ok(!timedEvents({older:{...p,activeStart:0}}, {},c,at+65*MIN).some(e=>e.type==='forgotten'));
+});
+test('video start and warning honor existing cycle usage',()=>{
+ const p={videoStartedAt:ts(at),videoDurationMinutes:30,cycleVideoUsedMs:20*MIN};
+ const profiles={younger:p},c=cfg();
+ assert.ok(timedEvents(profiles,{},c,at).some(e=>e.type==='videoStart'));
+ assert.ok(timedEvents(profiles,{},c,at+5*MIN).some(e=>e.type==='videoWarning'));
+ assert.ok(timedEvents(profiles,{},c,at+10*MIN).some(e=>e.type==='videoDue'));
+});
+test('rest start and finish respect manual wait and revised deadline',()=>{
+ const c=cfg(),p={restStart:at,restUntil:at+5*MIN,manualRestUntil:at+8*MIN,lastSessionId:'s'};
+ assert.ok(timedEvents({older:p},{},c,at).some(e=>e.type==='restStart'));
+ assert.ok(!timedEvents({older:p},{},c,at+5*MIN).some(e=>e.type==='restEnd'));
+ assert.ok(timedEvents({older:p},{},c,at+8*MIN).some(e=>e.type==='restEnd'));
+ const night=Date.parse('2026-11-23T21:50:00+09:00'),resume=Date.parse('2026-11-24T06:00:00+09:00'),end=Date.parse('2026-11-24T07:00:00+09:00');
+ const settings={nightPause:{enabled:true,start:'22:00',end:'07:00',enabledAt:0}};
+ assert.equal(restDeadline({restStart:night,restUntil:night+30*MIN,nightResumeAt:ts(resume),nightResumeWindowEnd:end},settings),resume+20*MIN);
+});
+test('bedtime once per JST day; quiet and per-type switch gate only automatic notifications',()=>{
+ const c=cfg(),bed=Date.parse('2026-11-23T21:00:00+09:00'),late=Date.parse('2026-11-23T22:10:00+09:00');
+ assert.ok(timedEvents({}, {},c,bed).some(e=>e.type==='bedtime'));
+ const event={type:'bedtime',at:late};
+ assert.equal(eligibleNotice(event,c,late),false);
+ assert.equal(eligibleNotice({...event,type:'manual'},c,late),true);
+ assert.equal(eligibleNotice({...event,type:'manual'},c,late+61000),false);
+ assert.equal(eligibleNotice({type:'bedtime',at:bed},{...c,types:{...c.types,bedtime:false}},bed),false);
+ assert.equal(eligibleNotice({type:'manual',at:bed},{...c,enabled:false},bed),false);
+});
+test('game reward and activity approval generate XP and Pokemon only for valid records',()=>{
+ const r={kind:'rest_completed',childId:'older',pokemonNo:1,claimedAt:ts(at)};
+ assert.deepEqual(rewardEvents('r',r,{}).map(e=>e.type),['pokemon','xp']);
+ assert.deepEqual(rewardEvents('r',{...r,revoked:true},{}),[]);
+ assert.deepEqual(rewardEvents('r',{...r,childId:'unknown'},{}),[]);
+ const approval={childId:'older',status:'approved',activityKind:'study',slotNo:1,reviewedAt:ts(at)};
+ assert.deepEqual(approvalEvents('a',approval,{}).map(e=>e.type),['activity','xp']);
+ assert.deepEqual(approvalEvents('a',{...approval,status:'pending'},{}),[]);
+});
+test('all eleven approved activities must be on same reward day and child',()=>{
+ const kinds=['study','reading','exercise','helping','cleaning','creating','practicing','trying','persevering','outingCalm','upstairs21'];
+ const rows=kinds.map(activityKind=>({childId:'older',dayIndex:1,activityKind,status:'approved',reviewedAt:ts(at)}));
+ assert.equal(allDoneEvents(rows,{}).length,1);
+ assert.equal(allDoneEvents([...rows.slice(0,10),{...rows[10],activityKind:'kindness'}],{}).length,0);
+ assert.equal(allDoneEvents([...rows.slice(0,10),{...rows[10],dayIndex:2}],{}).length,0);
+ assert.equal(allDoneEvents([...rows.slice(0,10),{...rows[10],childId:'younger'}],{}).length,0);
+});
+test('inventory triggers evolution readiness and generation unlock from actual thresholds',()=>{
+ const seen=Object.fromEntries(Array.from({length:29},(_,i)=>[i+1,true]));
+ const before={buddyId:'a',experience:{a:79},owned:{1:'a'},reserved:{},seen,version:1};
+ const after={...before,experience:{a:80},seen:{...seen,30:true},version:2};
+ const types=inventoryEvents('older',before,after,{},at).map(e=>e.type);
+ assert.ok(types.includes('level'));assert.ok(types.includes('evolveReady'));assert.ok(types.includes('generation'));
 });
