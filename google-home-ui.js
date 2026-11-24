@@ -86,7 +86,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
  form.addEventListener('input',e=>{if(e.target===routeType)return;dirty=true;setButtons();});
  form.addEventListener('submit',async e=>{
   e.preventDefault();if(!ready)return;
-  const data={enabled:get('enabled').checked,types:{},speakerIds:draftIds,routes:Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,draftRoutes[k]||[]]))};
+  const data={enabled:get('enabled').checked,types:{},speakerIds:draftIds,routes:Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,(draftRoutes[k]||[]).join(',')]))};
   for(const name of fields)data[name]=numeric.has(name)?Number(get(name).value):get(name).value.trim();
   for(const i of switches.querySelectorAll('input'))data.types[i.name]=i.checked;
   if(data.enabled&&(!data.bridgeUid||(!data.speaker&&!data.speakerIds.length)))return toast('連携専用UIDと共通の通知先が必要です。');
