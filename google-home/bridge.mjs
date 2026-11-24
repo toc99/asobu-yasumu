@@ -129,6 +129,10 @@ async function pump(){
   if(cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
   for(const [key,e] of pending)if(Date.now()-e.at>60000)pending.delete(key);
   if(!playing&&!probing&&pending.size){
+   // Re-check scheduled notices against the latest profile (pause, undo, switch, override).
+   const liveKeys=new Set(timedEvents(profiles,settings,cfg).map(x=>x.key));
+   for(const [k,e] of pending)if(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime'].includes(e.type)&&!liveKeys.has(k))pending.delete(k);
+   if(!pending.size){setTimeout(pump,1000);return;}
    const [key,e]=pending.entries().next().value;pending.delete(key);
    if(!saved.seen[key]&&(e.type==='manual'||(cfg.types?.[e.type]&&!quiet(cfg,Date.now())))){
     // Persist before playback to prevent repeated speech after an interruption/crash.
