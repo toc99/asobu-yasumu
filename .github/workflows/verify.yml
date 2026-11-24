@@ -20,5 +20,7 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Unit and static regression tests
         run: npm test
+      - name: Google Home playback guard tests
+        run: python3 tests/google-home-playback.py
       - name: Firestore Security Rules emulator tests
         run: npm run test:rules
