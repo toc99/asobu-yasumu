@@ -3,7 +3,7 @@ import {initializeApp} from 'firebase/app';
 import {getAuth,signInWithEmailAndPassword} from 'firebase/auth';
 import {getFirestore,doc,collection,onSnapshot,query,orderBy,limit,getDocFromServer,setDoc,serverTimestamp} from 'firebase/firestore';
 import {firebaseConfig,householdId} from '../firebase-config.js';
-import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvents,eligibleNotice,inventoryEvents,stamp,DAY} from '../google-home-policy.js';
+import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvents,eligibleNotice,inventoryEvents,stamp,DAY,routeTargets,knownSpeakers,deliverySummary} from '../google-home-policy.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
 import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
@@ -18,6 +18,8 @@ let saved={seen:{},history:[]};
 try{saved=JSON.parse(readFileSync(statePath,'utf8'));}catch{}
 if(!saved.seen||typeof saved.seen!=='object')saved.seen={};
 if(!Array.isArray(saved.history))saved.history=[];
+let discovered=knownSpeakers(saved.speakers).map(d=>({...d,online:false})),hosts=saved.hosts&&typeof saved.hosts==='object'?saved.hosts:{};
+let lastScanRequest=0,scannedAt=0;
 function persist(){
  const now=Date.now();saved.seen=Object.fromEntries(Object.entries(saved.seen).filter(([,at])=>now-at<3*DAY).slice(-3000));
  saved.history=saved.history.slice(0,20);
@@ -58,7 +60,7 @@ function readConfig(snap){
  if(!data||data.bridgeUid!==uid){onlineAt=0;pending.clear();cfg=null;return;}
  const base=defaultConfig(),old=cfg;cfg={...base,...data,types:{...base.types,...data.types}};
  if(!cfg.enabled){pending.clear();state='disabled';}
- if(old?.speaker!==cfg.speaker){lastProbe=0;device='';state=cfg.enabled?'unavailable':'disabled';}
+ if(old?.speaker!==cfg.speaker||JSON.stringify(old?.speakerIds)!==JSON.stringify(cfg.speakerIds)){lastProbe=0;device='';state=cfg.enabled?'unavailable':'disabled';}
  if(cfg.enabled&&cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
 }
 const first=await getDocFromServer(configRef);readConfig(first);
@@ -89,7 +91,7 @@ unsub.push(listen(query(col('activityRequests'),orderBy('reviewedAt','desc'),lim
 }));
 const castReasons=new Set(['muted','media_busy','other_app','status_unavailable','speaker_not_unique','tts_failed','tts_duration','receiver_no_start','receiver_no_finish','cast_error','timeout','process_error']);
 const safeReason=value=>castReasons.has(value)?value:'cast_error';
-function cast(op,text='',manual=false){
+function cast(op,text='',manual=false,target={}){
  return new Promise((resolve,reject)=>{
   const child=spawn(process.env.GH_PYTHON||'python',['-X','utf8',path.join(here,'cast.py')],{cwd:here,stdio:['pipe','pipe','pipe'],windowsHide:true});
   let out='',err='',done=false;
@@ -117,12 +119,39 @@ function cast(op,text='',manual=false){
    catch(e){resolve({result:'error',reason:'process_error'});}
   });
   child.stdin.on('error',()=>{});
-  child.stdin.end(JSON.stringify({op,speaker:cfg.speaker,volume:cfg.volume,text,manual,host:process.env.GH_CAST_HOST||'',lanIp:process.env.GH_LAN_IP||''}));
+  child.stdin.end(JSON.stringify({op,speaker:target.name||cfg.speaker,speakerId:target.id||'',volume:cfg.volume,text,manual,hosts:[...new Set([hosts[target.id],process.env.GH_CAST_HOST,...Object.values(hosts)].filter(Boolean))].slice(0,20),lanIp:process.env.GH_LAN_IP||''}));
  });
 }
 async function status(){
  if(!cfg||Date.now()-onlineAt>90000)return;
- try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device,history:saved.history.slice(0,20)});}catch(e){log('Status update failed: '+e.code);}
+ try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt});}catch(e){log('Status update failed: '+e.code);}
+}
+async function maybeScan(){
+ if(!cfg||playing||probing||Date.now()-onlineAt>90000)return;
+ const requested=stamp(cfg.scanRequestedAt);
+ if(Date.now()-lastProbe<300000&&requested<=lastScanRequest)return;
+ if(Date.now()-lastProbe<10000)return;
+ probing=true;lastProbe=Date.now();lastScanRequest=requested;
+ try{
+  const r=await cast('scan');
+  if(r.result!=='ready')throw Error('scan failed');
+  const rows=knownSpeakers((r.speakers||[]).map(d=>({...d,online:true})));
+  const online=new Set(rows.map(d=>d.id));
+  discovered=knownSpeakers([...rows,...discovered.filter(d=>!online.has(d.id)).map(d=>({...d,online:false}))]);
+  const nextHosts={};
+  for(const d of discovered){
+   const h=(r.speakers||[]).find(x=>x.id===d.id)?.host||hosts[d.id];
+   if(typeof h==='string'&&h.length<=100)nextHosts[d.id]=h;
+  }
+  hosts=nextHosts;saved.speakers=discovered;saved.hosts=hosts;persist();
+  scannedAt=Date.now();
+  const selected=routeTargets(cfg,'manual');
+  const available=selected.filter(t=>discovered.some(d=>d.online&&(t.id?d.id===t.id:d.name===t.name)));
+  device=available.map(t=>discovered.find(d=>t.id?d.id===t.id:d.name===t.name)?.name||t.name).join(' / ');
+  state=available.length?'ready':'unavailable';
+  log('Speaker discovery: '+rows.length+' available');
+ }catch{state='unavailable';log('Speaker discovery failed.');}
+ finally{probing=false;void status();}
 }
 async function health(){
  if(stopped)return;
@@ -133,16 +162,14 @@ async function health(){
   const docs=await Promise.all([getDocFromServer(ref('settings','main')),...['older','younger'].map(id=>getDocFromServer(ref('profiles',id)))]);
   settings=docs[0].data()||{};profiles.older=docs[1].data()||null;profiles.younger=docs[2].data()||null;
   freshDocs.add('config');freshDocs.add('settings');freshDocs.add('profile:older');freshDocs.add('profile:younger');
-  if(cfg.enabled&&!playing&&!probing&&Date.now()-lastProbe>300000){
-   probing=true;lastProbe=Date.now();try{const result=await cast('probe');device=result.device||'';state=result.result==='ready'?'ready':'unavailable';if(result.result!=='ready')log('Speaker probe: '+safeReason(result.reason));}
-   catch{state='unavailable';device='';}finally{probing=false;}
-  }
+  await maybeScan();
   await status();
  }catch(e){onlineAt=0;freshDocs.clear();pending.clear();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
  finally{if(!stopped)setTimeout(health,60000);}
 }
 async function pump(){
  if(stopped)return;
+ if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest)void maybeScan();
  if(current()&&settings&&profiles.older&&profiles.younger){
   for(const e of timedEvents(profiles,settings,cfg))push(e);
   if(cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
@@ -156,13 +183,23 @@ async function pump(){
    if(!saved.seen[key]&&(e.type==='manual'||(cfg.types?.[e.type]&&!quiet(cfg,Date.now())))){
     // Persist before playback to prevent repeated speech after an interruption/crash.
     saved.seen[key]=Date.now();persist();playing=true;state='busy';
-    let result='error',reason='cast_error';
-    try{
-     const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual');result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
-     device=r.device||device;state=result==='sent'||result==='skipped'?'ready':'error';reason=result==='sent'?'':safeReason(r.reason);if(reason)log('Speaker notification '+result+': '+reason);
-    }catch(e){state='error';log('Speaker playback failed.');}
-    log('Notification result: '+e.type+' '+result);
-    saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{})});persist();playing=false;
+    const targets=routeTargets(cfg,e.type),results=[];
+    void status();
+    for(const target of targets){
+     const name=discovered.find(d=>d.id===target.id)?.name||target.name||'未検出のスピーカー';
+     // Never substitute a different device if a selected UUID is offline.
+     if(!current()||!eligibleNotice(e,cfg,Date.now(),180000)){results.push({name,result:'skipped',reason:'stale'});continue;}
+     try{
+      const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual',target);
+      const result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
+      results.push({name:String(r.device||name).slice(0,100),result,...(result==='sent'?{}:{reason:safeReason(r.reason)})});
+     }catch{results.push({name,result:'error',reason:'cast_error'});}
+    }
+    const summary=deliverySummary(results),result=summary.result,reason=summary.reason;
+    state=result==='sent'||result==='partial'||result==='skipped'?'ready':'error';
+    device=results.filter(r=>r.result==='sent').map(r=>r.name).join(' / ')||device;
+    log('Notification result: '+e.type+' '+result+' ('+results.filter(r=>r.result==='sent').length+'/'+results.length+')');
+    saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{}),targets:results});persist();playing=false;
     void status();
    }
   }
@@ -171,5 +208,5 @@ async function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge MP3 + operations 2026-11-24; waiting for authorized configuration.');
+log('Google Home bridge v3.21.0 multi-speaker; waiting for authorized configuration.');
 void health();void pump();
