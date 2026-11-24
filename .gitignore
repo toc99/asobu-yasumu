@@ -7,3 +7,9 @@ firestore-debug.log*
 
 # google-github-actions/auth ephemeral credentials (never commit or upload)
 gha-creds-*.json
+
+# Local Google Home credentials, venv and notification state (never commit)
+google-home/.env.local
+google-home/.local/
+google-home/.venv/
+google-home/__pycache__/

@@ -77,11 +77,11 @@ test('migration is unnecessary and original ticket creation remains compatible',
   assert.match(source,/dbApi\.orderBy\('createdAt','desc'\)/);
 });
 
-test('release, navigation and PWA cache agree on v3.19.2',()=>{
-  assert.match(notes,/APP_VERSION = 'v3\.19\.2'/);
-  assert.match(child,/v3\.19\.2/);
-  assert.match(parent,/v3\.19\.2/);
-  assert.match(app,/feedback\.js\?v=3\.19\.2/);
-  assert.match(file('sw.js'),/asobu-yasumu-v3-19-2/);
+test('release, navigation and PWA cache agree on v3.20.0',()=>{
+  assert.match(notes,/APP_VERSION = 'v3\.20\.0'/);
+  assert.match(child,/v3\.20\.0/);
+  assert.match(parent,/v3\.20\.0/);
+  assert.match(app,/feedback\.js\?v=3\.20\.0/);
+  assert.match(file('sw.js'),/asobu-yasumu-v3-20-0/);
   assert.match(style,/ui-primary-nav\.parent-nav\{grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);
 });

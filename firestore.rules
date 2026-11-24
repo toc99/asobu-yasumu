@@ -1375,7 +1375,58 @@ service cloud.firestore {
         && (d.count < 3 || releaseRewardIsLinked(h,eventId,d.childId,d.rewardIds[2]));
     }
 
+    // Dedicated Google Home bridge identity. Not a family member; cannot write
+    // profiles, rewards, sessions, settings, inventory, or other family records.
+    function speakerConfigPath(h) {
+      return /databases/$(database)/documents/households/$(h)/googleHome/config;
+    }
+    function isSpeaker(h) {
+      return signedIn() && !isMember(h) && exists(speakerConfigPath(h))
+        && get(speakerConfigPath(h)).data.bridgeUid == request.auth.uid;
+    }
+    function speakerTime(s) { return s is string && s.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'); }
+    function validSpeakerConfig(d) {
+      return d.keys().hasAll(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types'])
+        && d.keys().hasOnly(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types','command'])
+        && d.enabled is bool && d.bridgeUid is string && d.bridgeUid.size() <= 128
+        && d.speaker is string && d.speaker.size() <= 100
+        && (!d.enabled || (d.bridgeUid.size() > 0 && d.speaker.size() > 0))
+        && d.volume is int && d.volume >= 5 && d.volume <= 80
+        && d.gameMinutes is int && d.gameMinutes >= 1 && d.gameMinutes <= 240
+        && d.warningMinutes is int && d.warningMinutes >= 1 && d.warningMinutes <= 30
+        && d.forgottenMinutes is int && d.forgottenMinutes >= 1 && d.forgottenMinutes <= 30
+        && speakerTime(d.quietStart) && speakerTime(d.quietEnd) && speakerTime(d.bedtime)
+        && d.types is map
+        && d.types.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation'])
+        && d.types.values().hasOnly([true,false])
+        && (!d.keys().hasAny(['command']) || (d.command is map
+          && d.command.keys().hasAll(['id','text','at'])
+          && d.command.keys().hasOnly(['id','text','at'])
+          && d.command.id is string && d.command.id.size() > 0 && d.command.id.size() <= 100
+          && d.command.text is string && d.command.text.size() > 0 && d.command.text.size() <= 160
+          && d.command.at is timestamp
+          && (d.command.at == request.time || (resource != null && d.command == resource.data.get('command',{})))));
+    }
+    function validSpeakerStatus(d) {
+      return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
+        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history'])
+        && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
+        && d.state in ['ready','unavailable','disabled','busy','error']
+        && d.device is string && d.device.size() <= 100
+        && d.history is list && d.history.size() <= 20;
+    }
+
     match /households/{h} {
+      match /googleHome/{docId} {
+        allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
+        allow list: if false;
+        allow create, update: if (docId == 'config' && isParent(h) && validSpeakerConfig(request.resource.data))
+          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data));
+        allow delete: if docId == 'config' && isParent(h);
+      }
+
+
+
 
       // v3.15.0: ticketed feedback with in-document thread and child acknowledgement.
       // Legacy feedbackReports (without messages/closed) remain valid and readable.
@@ -1543,11 +1594,13 @@ service cloud.firestore {
       }
       match /settings/{settingsId} {
         allow read: if isMember(h);
+        allow get: if settingsId == 'main' && isSpeaker(h);
         allow create, update: if isParent(h) && settingsId == 'main';
         allow delete: if false;
       }
       match /profiles/{playerId} {
         allow read: if isMember(h);
+        allow get: if playerId in ['older','younger'] && isSpeaker(h);
         allow create: if isParent(h) && playerId in ['older','younger'];
         allow update: if (isParent(h) || (isKid(h) && (
           // Check morning rest resume before the general update validators to keep
@@ -1620,6 +1673,7 @@ service cloud.firestore {
       }
       match /activityRequests/{requestId} {
         allow read: if isMember(h);
+        allow list: if isSpeaker(h) && request.query.limit <= 40;
         allow create: if isKid(h) && validKidActivityRequest(h,requestId);
         allow update: if (isKid(h) && validKidActivityRetry(h,requestId))
           || (isParent(h) && validParentActivityDecision(h,requestId));
@@ -1657,6 +1711,7 @@ service cloud.firestore {
       // All future acquisitions and releases write this same versioned document atomically.
       match /pokemonInventory/{childId} {
         allow read: if isMember(h) && childId in ['older','younger'];
+        allow get: if childId in ['older','younger'] && isSpeaker(h);
         allow create: if isParent(h) && childId in ['older','younger']
           && validInventoryShape(request.resource.data) && request.resource.data.version == 1;
         allow update: if isMember(h) && childId in ['older','younger']
@@ -1666,6 +1721,7 @@ service cloud.firestore {
       }
       match /rewards/{rewardId} {
         allow read: if isMember(h);
+        allow list: if isSpeaker(h) && request.query.limit <= 40;
         allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
           ? validKidBonusReward(h,rewardId) : (request.resource.data.get('kind','') == 'evolution'
             ? validKidEvolutionReward(h,rewardId) : validKidPokemonReward(h,rewardId))))
