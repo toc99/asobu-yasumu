@@ -114,5 +114,12 @@ class Mp3EncodingTests(unittest.TestCase):
             self.assertGreater(target.stat().st_size, 1000)
             self.assertNotEqual(target.read_bytes()[:4], b"RIFF")
 
+class DiscoveryTests(unittest.TestCase):
+    def test_individual_devices_only(self):
+        self.assertTrue(module.individual_device(NS(cast_type="audio",model_name="Google Home",port=8009)))
+        self.assertFalse(module.individual_device(NS(cast_type="group",model_name="Google Cast Group",port=8009)))
+        self.assertFalse(module.individual_device(NS(cast_type=None,model_name="Google Cast Group",port=12345)))
+        self.assertEqual(module.host_hints({"hosts":["192.168.1.9","192.168.1.9",42]}),["192.168.1.9"])
+
 if __name__ == "__main__":
     unittest.main()

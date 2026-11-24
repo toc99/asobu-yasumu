@@ -2,8 +2,17 @@
 // バージョンを公開するたび、先頭に1件追加すること。
 // date は確認済みの公開日だけ記入。推測で日付を付けないこと。
 // 旧版は当時の主要変更をまとめたもの。細かな修正をすべて列挙しているわけではありません。
-export const APP_VERSION = 'v3.20.1';
+export const APP_VERSION = 'v3.21.0';
 export const RELEASE_NOTES = Object.freeze([
+  {
+    version:'v3.21.0',title:'Google Homeの複数スピーカー管理',
+    changes:[
+      '保護者画面でLAN内のCast機器を自動検出し、最大5台を選択可能',
+      '機器固有のUUIDで識別し、IPアドレスや名前の変更に追随',
+      '共通の通知先と通知種類別の出力先を設定。複数台への順次再生・機器別の結果表示',
+      '従来の名前指定を維持しつつ、連携PCの自動起動・ログ保存とMP3音声再生を改善'
+    ]
+  },
   {
     version:'v3.20.1',title:'Google Homeの音声通知スキップ判定改善',
     changes:[
