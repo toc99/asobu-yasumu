@@ -94,7 +94,7 @@ test('inventory triggers evolution readiness and generation unlock from actual t
 
 test('UUID routes replace common targets; legacy name remains fallback',()=>{
  const a='12345678-1234-1234-1234-123456789abc',b='22345678-1234-1234-1234-123456789abc';
- const c={speaker:'Living',speakerIds:[a,a,b,'invalid'],routes:{bedtime:[b],manual:[]}};
+ const c={speaker:'Living',speakerIds:[a,a,b,'invalid'],routes:{bedtime:b,manual:''}};
  assert.deepEqual(routeTargets(c,'gameDue').map(x=>x.id),[a,b]);
  assert.deepEqual(routeTargets(c,'bedtime').map(x=>x.id),[b]);
  assert.deepEqual(routeTargets(c,'manual').map(x=>x.id),[a,b]);
