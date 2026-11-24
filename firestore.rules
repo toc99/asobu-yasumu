@@ -1387,15 +1387,12 @@ service cloud.firestore {
     function speakerTime(s) { return s is string && s.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'); }
     function speakerUuid(s) { return s is string && s.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'); }
     function speakerIdList(l) {
-      return l is list && l.size() <= 5 && l.toSet().size() == l.size()
-        && (l.size() <= 0 || speakerUuid(l[0]))
-        && (l.size() <= 1 || speakerUuid(l[1]))
-        && (l.size() <= 2 || speakerUuid(l[2]))
-        && (l.size() <= 3 || speakerUuid(l[3]))
-        && (l.size() <= 4 || speakerUuid(l[4]));
+      return l is list && l.size() <= 5 && (l.size() == 0 ||
+        (l.toSet().size() == l.size() && l.join(',').matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4}$')
+          && l.join(',').split(',') == l));
     }
     function speakerRoutes(r) {
-      return r is map && r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+      return r is map && (r.size() == 0 || (r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
         && speakerIdList(r.get('gameStart',[]))
         && speakerIdList(r.get('gameWarning',[]))
         && speakerIdList(r.get('gameDue',[]))
@@ -1413,7 +1410,7 @@ service cloud.firestore {
         && speakerIdList(r.get('evolveReady',[]))
         && speakerIdList(r.get('allDone',[]))
         && speakerIdList(r.get('generation',[]))
-        && speakerIdList(r.get('manual',[]));
+        && speakerIdList(r.get('manual',[]))));
     }
     function discoveredSpeaker(d) {
       return d is map && d.keys().hasAll(['id','name','online']) && d.keys().hasOnly(['id','name','online'])
