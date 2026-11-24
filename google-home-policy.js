@@ -14,6 +14,32 @@ export const TYPES=Object.freeze({
 export const defaultConfig=()=>({enabled:false,bridgeUid:'',speaker:'',volume:35,gameMinutes:60,warningMinutes:5,
  forgottenMinutes:5,quietStart:'22:00',quietEnd:'07:00',bedtime:'21:00',
  types:Object.fromEntries(Object.keys(TYPES).map(k=>[k,['gameWarning','gameDue','videoWarning','videoDue','restEnd','forgotten','bedtime','pokemon','level','allDone'].includes(k)]))});
+export const MAX_SPEAKERS=5, MAX_DISCOVERED=12;
+export const ROUTE_TYPES=Object.freeze({...TYPES,manual:'テスト・手動通知'});
+const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const speakerIds=ids=>Array.isArray(ids)?[...new Set(ids.filter(x=>typeof x==='string'&&uuidPattern.test(x)))].slice(0,MAX_SPEAKERS):[];
+export function routeTargets(c,type){
+ const defaults=speakerIds(c?.speakerIds),overrides=speakerIds(c?.routes?.[type]);
+ const selected=overrides.length?overrides:defaults;
+ return selected.length?selected.map(id=>({id,name:''})):c?.speaker?[{id:'',name:c.speaker}]:[];
+}
+export function knownSpeakers(rows){
+ const seen=new Set(),out=[];
+ for(const d of Array.isArray(rows)?rows:[]){
+  if(!d||typeof d.id!=='string'||!uuidPattern.test(d.id)||seen.has(d.id)||typeof d.name!=='string'||!d.name.trim())continue;
+  seen.add(d.id);out.push({id:d.id,name:d.name.trim().slice(0,100),online:d.online===true});
+  if(out.length>=MAX_DISCOVERED)break;
+ }
+ return out;
+}
+export function deliverySummary(results){
+ if(!results.length)return {result:'error',reason:'speaker_not_unique'};
+ const sent=results.filter(r=>r.result==='sent').length;
+ if(sent===results.length)return {result:'sent'};
+ if(sent>0)return {result:'partial'};
+ if(results.every(r=>r.result==='skipped'))return {result:'skipped',reason:results[0].reason};
+ return {result:'error',reason:results.find(r=>r.result==='error')?.reason||'cast_error'};
+}
 export const stamp=x=>x?.toMillis?.()||0;
 const minute=s=>/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s||'')?Number(s.slice(0,2))*60+Number(s.slice(3)):null;
 const jstDay=t=>Math.floor((t+JST)/DAY)*DAY-JST;
