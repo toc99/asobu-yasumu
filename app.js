@@ -1,15 +1,15 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.19.2';
-import {effectivePausedMillis} from './pause-timing.js?v=3.19.2';
-import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.19.2';
-import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.19.2';
-import {canResumeInMorning} from './early-resume-policy.js?v=3.19.2';
-import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.19.2';
-import {setupFeedback} from './feedback.js?v=3.19.2';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.19.2';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.19.2';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.20.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.20.0';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.20.0';
+import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.20.0';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.20.0';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.20.0';
+import {setupFeedback} from './feedback.js?v=3.20.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.20.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.20.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -37,7 +37,7 @@ let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, famil
 // v3.12.0 UI state: no Firestore write, shared selection across the collection views.
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
-let lastActivityDayIndex=-1,feedbackUi=null;
+let lastActivityDayIndex=-1,feedbackUi=null,googleHomeUi=null;
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -2411,7 +2411,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();feedbackUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.retroReports=[];model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){unsubscribeListeners();feedbackUi?.stop();googleHomeUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.retroReports=[];model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -2975,6 +2975,11 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
 }
 function initUiEvents(){
   feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
+  // Optional integration is isolated from the existing application.
+  if(isParentPage)import('./google-home-ui.js?v=3.20.0').then(({setupGoogleHome})=>{
+    googleHomeUi=setupGoogleHome({dbApi,db,householdId,toast});
+    if(uid&&role==='parent')googleHomeUi.start();
+  }).catch(()=>{const el=$('gh-state');if(el)el.textContent='Google Home設定画面を読み込めませんでした。';});
   renderReleaseNotes();
  $('login-form').addEventListener('submit',async e=>{e.preventDefault();$('login-error').textContent='接続中…';try{await authApi.signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value);$('password').value='';}catch(err){$('login-error').textContent=errorText(err);}});
  $('logout').addEventListener('click',async()=>{await authApi.signOut(auth);});
@@ -3091,6 +3096,7 @@ async function authorizeCurrentUser(){
     $('login-error').textContent='';$('retry-login')?.classList.add('hidden');showApp();
     if(!cleanups.length)listen();
     feedbackUi?.start(uid,role);
+    if(isParentPage)googleHomeUi?.start();
     if(!isParentPage)heartbeat();
   }catch(e){
     if(auth.currentUser?.uid!==user.uid)return;
