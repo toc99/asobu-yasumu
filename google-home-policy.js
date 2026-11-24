@@ -109,7 +109,7 @@ export function rewardEvents(id,r,profiles){
  return out;
 }
 export function eligibleNotice(e,c,now=Date.now(),maxAge=60000){
- if(!e||!Number.isFinite(e.at)||e.at<=0||e.at>now||now-e.at>maxAge||c?.enabled!==true)return false;
+ if(!e||!Number.isFinite(e.at)||e.at<=0||e.at>now+10000||now-e.at>maxAge||c?.enabled!==true)return false;
  return e.type==='manual'||(c.types?.[e.type]===true&&!quiet(c,now));
 }
 const unlock=[30,60,100,150,220,300,400,500];
