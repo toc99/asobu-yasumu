@@ -1384,7 +1384,49 @@ service cloud.firestore {
       return signedIn() && !isMember(h) && exists(speakerConfigPath(h))
         && get(speakerConfigPath(h)).data.bridgeUid == request.auth.uid;
     }
-    function speakerTime(s) { return s is string && s.matches('^([01][0-9]|2[0-3]):[0-5][0-9]
+    function speakerTime(s) { return s is string && s.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'); }
+    function validSpeakerConfig(d) {
+      return d.keys().hasAll(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types'])
+        && d.keys().hasOnly(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types','command'])
+        && d.enabled is bool && d.bridgeUid is string && d.bridgeUid.size() <= 128
+        && d.speaker is string && d.speaker.size() <= 100
+        && (!d.enabled || (d.bridgeUid.size() > 0 && d.speaker.size() > 0))
+        && d.volume is int && d.volume >= 5 && d.volume <= 80
+        && d.gameMinutes is int && d.gameMinutes >= 1 && d.gameMinutes <= 240
+        && d.warningMinutes is int && d.warningMinutes >= 1 && d.warningMinutes <= 30
+        && d.forgottenMinutes is int && d.forgottenMinutes >= 1 && d.forgottenMinutes <= 30
+        && speakerTime(d.quietStart) && speakerTime(d.quietEnd) && speakerTime(d.bedtime)
+        && d.types is map
+        && d.types.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation'])
+        && d.types.values().hasOnly([true,false])
+        && (!d.keys().hasAny(['command']) || (d.command is map
+          && d.command.keys().hasAll(['id','text','at'])
+          && d.command.keys().hasOnly(['id','text','at'])
+          && d.command.id is string && d.command.id.size() > 0 && d.command.id.size() <= 100
+          && d.command.text is string && d.command.text.size() > 0 && d.command.text.size() <= 160
+          && d.command.at is timestamp
+          && (d.command.at == request.time || (resource != null && d.command == resource.data.get('command',{})))));
+    }
+    function validSpeakerStatus(d) {
+      return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
+        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history'])
+        && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
+        && d.state in ['ready','unavailable','disabled','busy','error']
+        && d.device is string && d.device.size() <= 100
+        && d.history is list && d.history.size() <= 20;
+    }
+
+    match /households/{h} {
+      match /googleHome/{docId} {
+        allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
+        allow list: if false;
+        allow create, update: if (docId == 'config' && isParent(h) && validSpeakerConfig(request.resource.data))
+          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data));
+        allow delete: if docId == 'config' && isParent(h);
+      }
+
+
+
 
       // v3.15.0: ticketed feedback with in-document thread and child acknowledgement.
       // Legacy feedbackReports (without messages/closed) remain valid and readable.
@@ -1680,363 +1722,6 @@ service cloud.firestore {
       match /rewards/{rewardId} {
         allow read: if isMember(h);
         allow list: if isSpeaker(h) && request.query.limit <= 40;
-        allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
-          ? validKidBonusReward(h,rewardId) : (request.resource.data.get('kind','') == 'evolution'
-            ? validKidEvolutionReward(h,rewardId) : validKidPokemonReward(h,rewardId))))
-          || (isParent(h) && ((request.resource.data.get('kind','') == 'evolution_restore'
-              && validParentEvolutionRecoveryReward(h,rewardId))
-            || validParentActivityReward(h,rewardId)));
-        allow update: if isParent(h) && (
-          validParentGameRewardRevocation()
-          || validParentPokemonReleaseReward(h,rewardId));
-        allow delete: if false;
-      }
-      match /pokemonReleases/{eventId} {
-        allow read: if isMember(h);
-        allow create: if validParentPokemonReleaseEvent(h,eventId);
-        allow update, delete: if false;
-      }
-      match /presence/{presenceId} {
-        allow read: if isMember(h);
-        allow create, update: if isKid(h) && presenceId == 'ipad'
-          && request.resource.data.keys().hasOnly(['lastSeenAt','device'])
-          && request.resource.data.lastSeenAt == request.time
-          && request.resource.data.device == 'ipad';
-        allow delete: if false;
-      }
-    }
-  }
-}); }
-    function validSpeakerConfig(d) {
-      return d.keys().hasAll(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types'])
-        && d.keys().hasOnly(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types','command'])
-        && d.enabled is bool && d.bridgeUid is string && d.bridgeUid.size() <= 128
-        && d.speaker is string && d.speaker.size() <= 100
-        && (!d.enabled || (d.bridgeUid.size() > 0 && d.speaker.size() > 0))
-        && d.volume is int && d.volume >= 5 && d.volume <= 80
-        && d.gameMinutes is int && d.gameMinutes >= 1 && d.gameMinutes <= 240
-        && d.warningMinutes is int && d.warningMinutes >= 1 && d.warningMinutes <= 30
-        && d.forgottenMinutes is int && d.forgottenMinutes >= 1 && d.forgottenMinutes <= 30
-        && speakerTime(d.quietStart) && speakerTime(d.quietEnd) && speakerTime(d.bedtime)
-        && d.types is map
-        && d.types.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation'])
-        && d.types.values().hasOnly([true,false])
-        && (!d.keys().hasAny(['command']) || (d.command is map
-          && d.command.keys().hasAll(['id','text','at'])
-          && d.command.keys().hasOnly(['id','text','at'])
-          && d.command.id is string && d.command.id.size() > 0 && d.command.id.size() <= 100
-          && d.command.text is string && d.command.text.size() > 0 && d.command.text.size() <= 160
-          && d.command.at is timestamp
-          && (d.command.at == request.time || (resource != null && d.command == resource.data.get('command',{})))));
-    }
-    function validSpeakerStatus(d) {
-      return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
-        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history'])
-        && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
-        && d.state in ['ready','unavailable','disabled','busy','error']
-        && d.device is string && d.device.size() <= 100
-        && d.history is list && d.history.size() <= 20;
-    }
-
-    match /households/{h} {
-      match /googleHome/{docId} {
-        allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
-        allow list: if false;
-        allow create, update: if (docId == 'config' && isParent(h) && validSpeakerConfig(request.resource.data))
-          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data));
-        allow delete: if docId == 'config' && isParent(h);
-      }
-
-
-      // v3.15.0: ticketed feedback with in-document thread and child acknowledgement.
-      // Legacy feedbackReports (without messages/closed) remain valid and readable.
-      function validFeedbackAppendedMessage(roleName) {
-        let before = resource.data.get('messages',[]);
-        let after = request.resource.data.get('messages',[]);
-        let message = after[after.size()-1];
-        let now = request.time.toMillis();
-        return before is list && after is list
-          && before.size() < 100 && after.size() == before.size()+1
-          && after == before.concat([message])
-          && message is map
-          && message.keys().hasAll(['text','authorRole','authorUid','postedAtMs'])
-          && message.keys().hasOnly(['text','authorRole','authorUid','postedAtMs'])
-          && message.text is string && message.text.size() >= 1 && message.text.size() <= 500
-          && message.authorRole == roleName
-          && message.authorUid == request.auth.uid
-          && message.postedAtMs is int
-          && message.postedAtMs >= now-300000 && message.postedAtMs <= now+300000;
-      }
-      function validKidFeedbackMessage() {
-        let prev = resource.data;
-        let next = request.resource.data;
-        return !prev.get('closed',false)
-          && prev.get('status','') in ['new','reviewing','planned','done','declined']
-          && next.diff(prev).affectedKeys().hasOnly([
-            'messages','lastActivityAt','needsParentReply','status'])
-          && next.status == (prev.status in ['done','declined'] ? 'reviewing' : prev.status)
-          && next.needsParentReply == true && next.lastActivityAt == request.time
-          && validFeedbackAppendedMessage('kid');
-      }
-      function validParentFeedbackMessage() {
-        let prev = resource.data;
-        let next = request.resource.data;
-        return !prev.get('closed',false)
-          && next.diff(prev).affectedKeys().hasOnly([
-            'messages','lastActivityAt','needsParentReply','status','reviewedBy','reviewedAt'])
-          && next.status == (prev.status == 'new' ? 'reviewing' : prev.status)
-          && next.needsParentReply == false && next.lastActivityAt == request.time
-          && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
-          && validFeedbackAppendedMessage('parent');
-      }
-      function validParentFeedbackStatus() {
-        let prev = resource.data;
-        let next = request.resource.data;
-        return next.diff(prev).affectedKeys().hasOnly([
-            'status','needsParentReply','reviewedBy','reviewedAt',
-            'lastActivityAt','closed','closedAt','closedBy'])
-          && next.status in ['new','reviewing','planned','done','declined']
-          && next.needsParentReply == false
-          && next.reviewedBy == request.auth.uid && next.reviewedAt == request.time
-          && next.lastActivityAt == request.time
-          && (prev.get('closed',false) == false
-            ? (next.get('closed',false) == false
-                && !next.diff(prev).affectedKeys().hasAny(['closed','closedAt','closedBy']))
-            : (next.status in ['new','reviewing','planned']
-                && next.closed == false && next.closedAt == null && next.closedBy == ''));
-      }
-      function validKidFeedbackAck() {
-        let prev = resource.data;
-        let next = request.resource.data;
-        return !prev.get('closed',false)
-          && prev.status in ['done','declined']
-          && next.diff(prev).affectedKeys().hasOnly([
-            'closed','closedAt','closedBy','needsParentReply','lastActivityAt'])
-          && next.closed == true && next.closedAt == request.time
-          && next.closedBy == request.auth.uid
-          && next.needsParentReply == false && next.lastActivityAt == request.time;
-      }
-      // v3.17: Self-reporting cannot trigger a punishment.
-      // Only a parent can confirm a notice, waive it, or settle it in a release.
-      match /retroReports/{reportId} {
-        allow read: if isMember(h);
-        allow create: if (isKid(h)||isParent(h))
-          && request.resource.data.keys().hasAll([
-            'childId','source','reportedBy','reportedAt','sessionStartedAt',
-            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
-          ])
-          && request.resource.data.keys().hasOnly([
-            'childId','source','reportedBy','reportedAt','sessionStartedAt',
-            'actualStartMs','reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
-          ])
-          && request.resource.data.childId in ['older','younger']
-          && request.resource.data.source in ['self','prompted']
-          && request.resource.data.reportedBy==request.auth.uid
-          && request.resource.data.reportedAt==request.time
-          && request.resource.data.sessionStartedAt is timestamp
-          && request.resource.data.actualStartMs is int
-          && request.resource.data.actualStartMs<=request.time.toMillis()
-          && request.resource.data.actualStartMs>=request.time.toMillis()-86400000
-          && request.resource.data.reviewStatus=='pending'
-          && request.resource.data.reviewedAt==null
-          && request.resource.data.reviewedBy==''
-          && request.resource.data.penaltyEventId==''
-          && existsAfter(profilePath(h,request.resource.data.childId))
-          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportId==reportId
-          && getAfter(profilePath(h,request.resource.data.childId)).data.retroReportStartedAt==request.resource.data.sessionStartedAt
-          && getAfter(profilePath(h,request.resource.data.childId)).data.activeStart==request.resource.data.actualStartMs
-          && getAfter(profilePath(h,request.resource.data.childId)).data.startedAt==request.resource.data.sessionStartedAt;
-        allow update: if isParent(h)
-          && resource.data.penaltyEventId==''
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'reviewStatus','reviewedAt','reviewedBy','penaltyEventId'
-          ])
-          && (
-            (
-              request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewStatus','reviewedAt'])
-              && request.resource.data.reviewStatus in ['acknowledged','counted','excused']
-              && request.resource.data.reviewStatus != resource.data.reviewStatus
-              && request.resource.data.reviewedBy==request.auth.uid
-              && request.resource.data.reviewedAt==request.time
-              && request.resource.data.penaltyEventId==''
-            )
-            ||
-            (
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['penaltyEventId'])
-              && resource.data.reviewStatus=='counted'
-              && request.resource.data.penaltyEventId is string
-              && request.resource.data.penaltyEventId.size()>0
-              && existsAfter(releasePath(h,request.resource.data.penaltyEventId))
-              && getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.reason=='retro_three_notices'
-              && reportId in getAfter(releasePath(h,request.resource.data.penaltyEventId)).data.triggerReports
-            )
-          );
-        allow delete: if false;
-      }
-
-      match /feedbackReports/{reportId} {
-        // Shared iPad user: separation by childId is in the UI, not per-child Auth UID.
-        allow read: if isMember(h);
-        // Keep creation format unchanged for backward compatibility and rollback.
-        allow create: if isKid(h)
-          && request.resource.data.keys().hasAll([
-            'childId','type','title','description','status',
-            'createdBy','createdAt','parentReply','reviewedBy','reviewedAt'
-          ])
-          && request.resource.data.keys().hasOnly([
-            'childId','type','title','description','status',
-            'createdBy','createdAt','parentReply','reviewedBy','reviewedAt'
-          ])
-          && request.resource.data.childId in ['older','younger']
-          && request.resource.data.type in ['feature','bug']
-          && request.resource.data.title is string
-          && request.resource.data.title.size() >= 2
-          && request.resource.data.title.size() <= 60
-          && request.resource.data.description is string
-          && request.resource.data.description.size() >= 2
-          && request.resource.data.description.size() <= 1000
-          && request.resource.data.status == 'new'
-          && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.createdAt == request.time
-          && request.resource.data.parentReply == ''
-          && request.resource.data.reviewedBy == ''
-          && request.resource.data.reviewedAt == null;
-        allow update: if (isKid(h) && (validKidFeedbackMessage() || validKidFeedbackAck()))
-          || (isParent(h) && (validParentFeedbackMessage() || validParentFeedbackStatus()));
-        // Physical deletion, including the entire embedded thread, is parent-only.
-        allow delete: if isParent(h);
-      }
-
-      match /members/{memberUid} {
-        allow get: if signedIn() && (request.auth.uid == memberUid || isParent(h));
-        allow list: if isParent(h);
-        allow write: if false;
-      }
-      match /settings/{settingsId} {
-        allow read: if isMember(h);
-        allow create, update: if isParent(h) && settingsId == 'main';
-        allow delete: if false;
-      }
-      match /profiles/{playerId} {
-        allow read: if isMember(h);
-        allow create: if isParent(h) && playerId in ['older','younger'];
-        allow update: if (isParent(h) || (isKid(h) && (
-          // Check morning rest resume before the general update validators to keep
-          // this narrow operation within Firestore's expression evaluation budget.
-          (request.resource.data.diff(resource.data).affectedKeys().hasAny(['nightResumeAt','nightResumeWindowEnd'])
-              && validKidNightResume(h, playerId))
-          // Route multi-step session transitions before other general validators.
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSessionId'])
-                && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cycleUsedMs','restException'])
-                && validKidSpecialEnd(h,playerId))
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastSwitchSessionId'])
-                && validKidCycleSwitch(h,playerId))
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['restException'])
-                && validKidExceptionStart(h,playerId))
-          || validKidFavoriteTeamUpdate()
-          || validKidPauseStart()
-          || validKidPauseResume()
-          || validKidPausedGameEnd(h,playerId)
-          || validKidPausedVideoEnd(h,playerId)
-          || validKidPlayerUpdate(h, playerId)
-          || validV33PlayerUpdate(h, playerId)
-          || validKidRetroStart(h, playerId)
-          || validKidRetroCorrection(h, playerId)
-          || validV33UndoStart()
-          || validV33UndoEnd(h, playerId)
-          || validKidManualRestUpdate(h, playerId)
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['videoStartedAt','videoDurationMinutes'])
-              && validKidVideoUpdate(h, playerId))
-          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['rewardLastSessionId','rewardLastDayIndex'])
-              && validKidRewardProfileUpdate(h, playerId))
-          ))) && playerId in ['older','younger'];
-        allow delete: if false;
-      }
-      match /sessions/{sid} {
-        allow read: if isMember(h);
-        allow create: if (isKid(h) && request.resource.data.keys().hasAll(['transition','childId'])
-              && validKidCycleSwitchSession(h,sid))
-          || (isKid(h) && request.resource.data.keys().hasAll(['cycleFinal','childId'])
-              && validKidSpecialSession(h,sid))
-          || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','activityType','childId'])
-              && validKidPausedVideoSessionCreate(h,sid))
-          || (isKid(h) && request.resource.data.keys().hasAll(['pauseMs','undoPrevious','childId'])
-              && validKidPausedGameSessionCreate(h,sid))
-          || (isKid(h) && request.resource.data.keys().hasAll(['activityType','childId'])
-              && validKidVideoSessionCreate(h,sid))
-          || (isKid(h) && request.resource.data.keys().hasAll(['undoPrevious','childId'])
-              && validV33SessionCreate(h,sid))
-          || (isKid(h)
-              && request.resource.data.keys().hasAll(['childId','start','end','duration','deviceId','createdAt','createdBy','edited'])
-              && request.resource.data.keys().hasOnly(['childId','start','end','duration','deviceId','createdAt','createdBy','edited'])
-              && request.resource.data.childId in ['older','younger']
-              && request.resource.data.start is int
-              && request.resource.data.end is int && request.resource.data.end > request.resource.data.start
-              && request.resource.data.duration == request.resource.data.end - request.resource.data.start
-              && request.resource.data.duration <= 604800000
-              && request.resource.data.deviceId in ['sw1','sw2']
-              && request.resource.data.createdAt == request.time
-              && request.resource.data.createdBy == request.auth.uid
-              && request.resource.data.edited == false
-              && getAfter(/databases/$(database)/documents/households/$(h)/profiles/$(request.resource.data.childId)).data.lastSessionId == sid
-              && getAfter(/databases/$(database)/documents/households/$(h)/profiles/$(request.resource.data.childId)).data.activeStart == 0);
-        allow update: if isParent(h);
-        allow delete: if isKid(h) && validV33SessionDelete(h);
-        allow create: if isParent(h) && validParentForgottenSessionCreate(h,sid);
-      }
-      match /auditLogs/{logId} {
-        allow read: if isParent(h);
-        allow create: if validV34Audit(h);
-        allow update, delete: if false;
-      }
-      match /activityRequests/{requestId} {
-        allow read: if isMember(h);
-        allow create: if isKid(h) && validKidActivityRequest(h,requestId);
-        allow update: if (isKid(h) && validKidActivityRetry(h,requestId))
-          || (isParent(h) && validParentActivityDecision(h,requestId));
-        allow delete: if false;
-      }
-      match /activitySlots/{slotId} {
-        allow read: if isMember(h);
-        allow create: if isKid(h) && validKidActivitySlot(h,slotId);
-        allow update: if (isKid(h) && resource.data.requestId == '' && validKidActivitySlot(h,slotId))
-          || (isParent(h) && validParentActivitySlotRelease(h));
-        allow delete: if false;
-      }
-      match /bonusGrants/{grantId} {
-        allow read: if isMember(h);
-        allow create: if isParent(h) && validParentBonusGrant();
-        allow update: if isKid(h) && validKidBonusConsume(h,grantId);
-        allow delete: if false;
-      }
-
-      // 既存のズル判定の報酬取消・復旧。逃走した個体の復旧には使用不可。
-      function validParentGameRewardRevocation() {
-        let prev = resource.data;
-        let next = request.resource.data;
-        return prev.kind == 'rest_completed'
-          && prev.get('revokedReason','') != 'released'
-          && next.diff(prev).affectedKeys().hasOnly(['revoked','revokedAt','revokedBy','restoredAt','restoredBy'])
-          && ((prev.get('revoked',false) == false
-              && next.revoked == true && next.revokedBy == request.auth.uid
-              && next.revokedAt == request.time)
-            || (prev.get('revoked',false) == true
-              && next.revoked == false && next.restoredBy == request.auth.uid
-              && next.restoredAt == request.time));
-      }
-      // Parent initializes after reading the existing rewards and pending challenges.
-      // All future acquisitions and releases write this same versioned document atomically.
-      match /pokemonInventory/{childId} {
-        allow read: if isMember(h) && childId in ['older','younger'];
-        allow create: if isParent(h) && childId in ['older','younger']
-          && validInventoryShape(request.resource.data) && request.resource.data.version == 1;
-        allow update: if isMember(h) && childId in ['older','younger']
-          && validInventoryShape(request.resource.data)
-          && request.resource.data.version == resource.data.version + 1;
-        allow delete: if false;
-      }
-      match /rewards/{rewardId} {
-        allow read: if isMember(h);
         allow create: if (isKid(h) && (request.resource.data.get('kind','') == 'special_bonus'
           ? validKidBonusReward(h,rewardId) : (request.resource.data.get('kind','') == 'evolution'
             ? validKidEvolutionReward(h,rewardId) : validKidPokemonReward(h,rewardId))))
