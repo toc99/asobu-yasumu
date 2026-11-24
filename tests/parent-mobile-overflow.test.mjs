@@ -21,10 +21,10 @@ test('dynamic rest-exception buttons and dashboard content may wrap',()=>{
   assert.match(css,/body\[data-role="parent"\]\s+\.ui-dashboard-alert p\s*\{\s*overflow-wrap:anywhere;\s*white-space:normal;/);
   assert.match(app,/data-rest-exception-grant/);
 });
-test('app, manifest, release note and service worker use v3.19.2',()=>{
-  assert.match(notes,/APP_VERSION = 'v3\.19\.2'/);
-  assert.match(parent,/style\.css\?v=3\.19\.2/);
-  assert.match(kid,/style\.css\?v=3\.19\.2/);
-  assert.match(app,/release-notes\.js\?v=3\.19\.2/);
-  assert.match(sw,/asobu-yasumu-v3-19-2/);
+test('app, manifest, release note and service worker use v3.20.0',()=>{
+  assert.match(notes,/APP_VERSION = 'v3\.20\.0'/);
+  assert.match(parent,/style\.css\?v=3\.20\.0/);
+  assert.match(kid,/style\.css\?v=3\.20\.0/);
+  assert.match(app,/release-notes\.js\?v=3\.20\.0/);
+  assert.match(sw,/asobu-yasumu-v3-20-0/);
 });
