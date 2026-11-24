@@ -31,5 +31,33 @@ class PlaybackGuardTests(unittest.TestCase):
     def test_missing_status_is_safe(self):
         self.assertEqual(module.playback_block_reason(NS(status=None), True), "status_unavailable")
 
+class ReceiverStartTests(unittest.TestCase):
+    def test_receiver_is_started_if_other_app_active(self):
+        device = NS(app_id="other", status=NS(namespaces=[]))
+        calls = []
+        def start_app(app, timeout):
+            calls.append(app)
+            device.app_id = app
+            device.status.namespaces = [module.MEDIA_NAMESPACE]
+        device.start_app = start_app
+        module.wait_receiver(device, timeout=1)
+        self.assertEqual(calls, [module.MEDIA_APP])
+
+    def test_ready_receiver_does_not_relaunch(self):
+        device = NS(app_id=module.MEDIA_APP, status=NS(namespaces=[module.MEDIA_NAMESPACE]))
+        module.wait_receiver(device, timeout=1)
+
+    def test_media_outcome_requires_matching_content(self):
+        status = NS(content_id="http://local/old.wav", player_state="IDLE", idle_reason="FINISHED")
+        self.assertEqual(module.media_outcome(status, "/new.wav"), "")
+        status.content_id = "http://local/new.wav"
+        self.assertEqual(module.media_outcome(status, "/new.wav"), "finished")
+        status.idle_reason = "ERROR"
+        self.assertEqual(module.media_outcome(status, "/new.wav"), "failed")
+        status.player_state = "PLAYING"
+        self.assertEqual(module.media_outcome(status, "/new.wav"), "playing")
+        status.player_state = "BUFFERING"
+        self.assertEqual(module.media_outcome(status, "/new.wav"), "")
+
 if __name__ == "__main__":
     unittest.main()
