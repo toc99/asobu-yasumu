@@ -24,7 +24,7 @@ def synthesize(text, target):
     source.write_text(text, encoding="utf-8-sig")
     script = pathlib.Path(__file__).with_name("speak.ps1")
     run = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script),
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-File", str(script),
          "-InputFile", str(source), "-OutputFile", str(target)],
         capture_output=True, timeout=30, check=False)
     if run.returncode != 0 or not target.exists():
