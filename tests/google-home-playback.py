@@ -2,6 +2,8 @@ import importlib.util
 import http.client
 import http.server
 import threading
+import tempfile
+import wave
 import pathlib
 import unittest
 from types import SimpleNamespace as NS
@@ -96,6 +98,21 @@ class AudioHttpTests(unittest.TestCase):
         self.assertEqual(self.request(headers={"Range": "bytes=100-"})[0], 416)
         self.assertEqual(self.request("HEAD")[2], b"")
         self.assertEqual(self.request(path="/wrong.wav")[0], 404)
+
+class Mp3EncodingTests(unittest.TestCase):
+    def test_local_encoding_and_padding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "source.wav"
+            target = pathlib.Path(tmp) / "notice.mp3"
+            with wave.open(str(source), "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(22050)
+                audio.writeframes(bytes(44100))
+            duration = module.encode_mp3(source, target, 1.0)
+            self.assertGreaterEqual(duration, 5.0)
+            self.assertGreater(target.stat().st_size, 1000)
+            self.assertNotEqual(target.read_bytes()[:4], b"RIFF")
 
 if __name__ == "__main__":
     unittest.main()

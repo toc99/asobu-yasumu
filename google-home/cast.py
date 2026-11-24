@@ -33,6 +33,22 @@ def synthesize(text, target):
     with wave.open(str(target), "rb") as w:
         return w.getnframes() / w.getframerate()
 
+def encode_mp3(source, target, duration):
+    """Normalize local SAPI audio to a buffered MP3 with short silence margins."""
+    import imageio_ffmpeg
+    tail = max(1.5, 5.0 - duration - 0.5)
+    try:
+        run = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+             "-i", str(source), "-af", f"adelay=500:all=1,apad=pad_dur={tail:.3f}",
+             "-ar", "44100", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "96k", str(target)],
+            capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise NoticeError("tts_failed") from exc
+    if run.returncode != 0 or not target.exists() or target.stat().st_size == 0:
+        raise NoticeError("tts_failed")
+    return duration + 0.5 + tail
+
 def discover(request):
     import pychromecast
     name = request["speaker"]
@@ -122,7 +138,7 @@ def byte_range(header, length):
     end = min(int(last), length - 1) if last else length - 1
     return (start, end) if start < length and end >= start else None
 
-def audio_handler(token, payload, diagnostics):
+def audio_handler(token, payload, diagnostics, content_type="audio/wav"):
     lock = threading.Lock()
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -168,7 +184,7 @@ def audio_handler(token, payload, diagnostics):
             data = payload[start:end + 1]
             try:
                 self.send_response(206 if header else 200)
-                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -212,11 +228,14 @@ def run(request, diagnostics=None):
             duration = synthesize(text, wav)
             if duration <= 0 or duration > 35:
                 raise NoticeError("tts_duration")
-            token = "/" + uuid.uuid4().hex + ".wav"
-            payload = wav.read_bytes()
+            mp3 = pathlib.Path(tmp) / "notice.mp3"
+            duration = encode_mp3(wav, mp3, duration)
+            token = "/" + uuid.uuid4().hex + ".mp3"
+            payload = mp3.read_bytes()
+            diagnostics["audioFormat"] = "mp3"
             diagnostics.update(httpGets=0, httpHeads=0, httpRanges=0, httpBytesSent=0,
                                httpErrors=0, audioBytes=len(payload), audioSeconds=round(duration, 1))
-            Handler = audio_handler(token, payload, diagnostics)
+            Handler = audio_handler(token, payload, diagnostics, 'audio/mpeg')
             ip = request.get("lanIp")
             if not ip:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -260,8 +279,8 @@ def run(request, diagnostics=None):
                     if not ok:
                         failed.set()
                 try:
-                    # A WAV notification is finite media, not a live stream.
-                    mc.play_media("http://" + ip + ":8765" + token, "audio/wav",
+                    # An MP3 notification is finite media, not a live stream.
+                    mc.play_media("http://" + ip + ":8765" + token, "audio/mpeg",
                                   stream_type="BUFFERED", media_info={"duration": duration},
                                   callback_function=acknowledged)
                     deadline = time.monotonic() + 28

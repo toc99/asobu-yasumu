@@ -52,3 +52,6 @@ ja-JP がない場合、Windowsの言語・音声設定を確認する。OneCore
 - PC停止中：アプリ本体はそのまま利用できる。保護者画面で接続状態が古くなる。
 - 再送防止は google-home/.local/delivery.json で行う。実行中の編集・削除は避ける。停止・廃棄時は専用Firebaseユーザーを無効化し、保護者画面のUIDを消去して保存する。
 - PC常時起動は電気代がかかる。バッテリー劣化、膨張・発熱、冷却、安全性を確認。PCは保守可能なOSに更新する。
+
+### 音声形式の更新（2026-11-24）
+既存環境は `git pull --ff-only` 後、`& .\google-home\.venv\Scripts\python.exe -m pip install -r .\google-home\requirements.txt` を実行してから起動。SAPIで生成したWAVはPC内でMP3へ変換し、前後の無音を含め最低5秒の音声を配信します。外部の音声合成サービスは使用しません。
