@@ -91,7 +91,7 @@ function cast(op,text='',manual=false){
  return new Promise((resolve,reject)=>{
   const child=spawn(process.env.GH_PYTHON||'python',['-X','utf8',path.join(here,'cast.py')],{cwd:here,stdio:['pipe','pipe','pipe'],windowsHide:true});
   let out='',err='',done=false;
-  const timeout=setTimeout(()=>{child.kill();if(!done){done=true;resolve({result:'error',reason:'timeout'});}},150000);
+  const timeout=setTimeout(()=>{child.kill();if(!done){done=true;resolve({result:'error',reason:'timeout'});}},180000);
   child.stdout.on('data',d=>{out+=d;if(out.length>16000)child.kill();});
   child.stderr.on('data',d=>{err+=d;if(err.length>16000)child.kill();});
   child.on('error',e=>{clearTimeout(timeout);if(!done){done=true;resolve({result:'error',reason:'process_error'});}});
@@ -100,6 +100,7 @@ function cast(op,text='',manual=false){
     // Only numeric / enumerated diagnostic fields, never URLs, message text or credentials.
     if(op==='speak'&&result.diagnostics){
      const d=result.diagnostics,trace={};
+     if(d.audioFormat==='mp3')trace.audioFormat=d.audioFormat;
      for(const k of ['httpGets','httpHeads','httpRanges','httpBytesSent','httpErrors','audioBytes','audioSeconds','loadFailed'])if(Number.isFinite(d[k]))trace[k]=d[k];
      for(const k of ['receiverReady','loadAcknowledged','playbackStarted'])if(typeof d[k]==='boolean')trace[k]=d[k];
      if(['default','idle','other'].includes(d.initialApp))trace.initialApp=d.initialApp;
@@ -167,5 +168,5 @@ async function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge HTTP-media fix 2026-11-24; waiting for authorized configuration.');
+log('Google Home bridge MP3 fix 2026-11-24; waiting for authorized configuration.');
 void health();void pump();
