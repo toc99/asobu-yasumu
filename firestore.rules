@@ -1391,26 +1391,14 @@ service cloud.firestore {
         (l.toSet().size() == l.size() && l.join(',').matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4}$')
           && l.join(',').split(',') == l));
     }
+    function validRouteValues(values) {
+      let joined = values.join('|');
+      return joined.matches('^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?([|]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?){0,17}$')
+        && joined.split('[|]') == values;
+    }
     function speakerRoutes(r) {
-      return r is map && (r.size() == 0 || (r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
-        && speakerIdList(r.get('gameStart',[]))
-        && speakerIdList(r.get('gameWarning',[]))
-        && speakerIdList(r.get('gameDue',[]))
-        && speakerIdList(r.get('videoStart',[]))
-        && speakerIdList(r.get('videoWarning',[]))
-        && speakerIdList(r.get('videoDue',[]))
-        && speakerIdList(r.get('forgotten',[]))
-        && speakerIdList(r.get('restStart',[]))
-        && speakerIdList(r.get('restEnd',[]))
-        && speakerIdList(r.get('bedtime',[]))
-        && speakerIdList(r.get('pokemon',[]))
-        && speakerIdList(r.get('activity',[]))
-        && speakerIdList(r.get('xp',[]))
-        && speakerIdList(r.get('level',[]))
-        && speakerIdList(r.get('evolveReady',[]))
-        && speakerIdList(r.get('allDone',[]))
-        && speakerIdList(r.get('generation',[]))
-        && speakerIdList(r.get('manual',[]))));
+      return r is map && r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+        && (r.size() == 0 || validRouteValues(r.values()));
     }
     function discoveredSpeaker(d) {
       return d is map && d.keys().hasAll(['id','name','online']) && d.keys().hasOnly(['id','name','online'])
