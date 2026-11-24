@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,rewardEvents,allDoneEvents,eligibleNotice,MIN} from '../google-home-policy.js';
+import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,rewardEvents,allDoneEvents,eligibleNotice,MIN,routeTargets,knownSpeakers,deliverySummary,speakerIds} from '../google-home-policy.js';
 const ts=n=>({toMillis:()=>n});
 const at=Date.parse('2026-11-23T15:00:00+09:00');
 const cfg=()=>({...defaultConfig(),enabled:true,types:Object.fromEntries(Object.keys(defaultConfig().types).map(k=>[k,true]))});
@@ -90,4 +90,22 @@ test('inventory triggers evolution readiness and generation unlock from actual t
  const after={...before,experience:{a:80},seen:{...seen,30:true},version:2};
  const types=inventoryEvents('older',before,after,{},at).map(e=>e.type);
  assert.ok(types.includes('level'));assert.ok(types.includes('evolveReady'));assert.ok(types.includes('generation'));
+});
+
+test('UUID routes replace common targets; legacy name remains fallback',()=>{
+ const a='12345678-1234-1234-1234-123456789abc',b='22345678-1234-1234-1234-123456789abc';
+ const c={speaker:'Living',speakerIds:[a,a,b,'invalid'],routes:{bedtime:[b],manual:[]}};
+ assert.deepEqual(routeTargets(c,'gameDue').map(x=>x.id),[a,b]);
+ assert.deepEqual(routeTargets(c,'bedtime').map(x=>x.id),[b]);
+ assert.deepEqual(routeTargets(c,'manual').map(x=>x.id),[a,b]);
+ assert.deepEqual(routeTargets({speaker:'Living'},'manual'),[{id:'',name:'Living'}]);
+ assert.deepEqual(routeTargets({},'manual'),[]);
+ assert.equal(speakerIds(Array.from({length:6},(_,i)=>i+a.slice(1))).length,5);
+ assert.deepEqual(knownSpeakers([{id:a,name:'Living',online:true,host:'secret'},{id:a,name:'Duplicate'},{id:b,name:'Bedroom',online:false}]),[{id:a,name:'Living',online:true},{id:b,name:'Bedroom',online:false}]);
+});
+test('delivery result is partial if only some selected targets succeed',()=>{
+ assert.deepEqual(deliverySummary([{result:'sent'},{result:'error',reason:'cast_error'}]),{result:'partial'});
+ assert.deepEqual(deliverySummary([{result:'sent'},{result:'sent'}]),{result:'sent'});
+ assert.deepEqual(deliverySummary([{result:'skipped',reason:'muted'}]),{result:'skipped',reason:'muted'});
+ assert.equal(deliverySummary([]).result,'error');
 });
