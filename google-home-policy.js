@@ -17,7 +17,7 @@ export const defaultConfig=()=>({enabled:false,bridgeUid:'',speaker:'',volume:35
 export const MAX_SPEAKERS=5, MAX_DISCOVERED=12;
 export const ROUTE_TYPES=Object.freeze({...TYPES,manual:'テスト・手動通知'});
 const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-export const speakerIds=ids=>Array.isArray(ids)?[...new Set(ids.filter(x=>typeof x==='string'&&uuidPattern.test(x)))].slice(0,MAX_SPEAKERS):[];
+export const speakerIds=value=>{const ids=typeof value==='string'?value.split(','):value;return Array.isArray(ids)?[...new Set(ids.filter(x=>typeof x==='string'&&uuidPattern.test(x)))].slice(0,MAX_SPEAKERS):[];};
 export function routeTargets(c,type){
  const defaults=speakerIds(c?.speakerIds),overrides=speakerIds(c?.routes?.[type]);
  const selected=overrides.length?overrides:defaults;
