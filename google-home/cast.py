@@ -79,7 +79,34 @@ def playback_block_reason(cast, manual=False):
             return "other_app"
     return None
 
-def run(request):
+MEDIA_APP = "CC1AD845"
+MEDIA_NAMESPACE = "urn:x-cast:com.google.cast.media"
+
+def wait_receiver(cast, timeout=18):
+    # Force the default media receiver only after the playback guard permits it.
+    if cast.app_id != MEDIA_APP:
+        cast.start_app(MEDIA_APP, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cast.app_id == MEDIA_APP and cast.status and MEDIA_NAMESPACE in (cast.status.namespaces or []):
+            return
+        time.sleep(.1)
+    raise NoticeError("receiver_no_start")
+
+def media_outcome(status, token):
+    if not status or token not in (status.content_id or ""):
+        return ""
+    if status.player_state == "IDLE":
+        if status.idle_reason == "FINISHED":
+            return "finished"
+        if status.idle_reason in ("ERROR", "CANCELLED", "INTERRUPTED"):
+            return "failed"
+    if status.player_state == "PLAYING":
+        return "playing"
+    return ""
+
+def run(request, diagnostics=None):
+    diagnostics = diagnostics if diagnostics is not None else {}
     cast, browser = discover(request)
     try:
         cast.wait(timeout=12)
@@ -95,6 +122,7 @@ def run(request):
         reason = playback_block_reason(cast, request.get("manual") is True)
         if reason:
             return {"result": "skipped", "device": name, "reason": reason}
+        diagnostics["initialApp"] = "default" if cast.app_id == MEDIA_APP else "idle" if cast.is_idle else "other"
         original = cast.status.volume_level if cast.status else None
         with tempfile.TemporaryDirectory(prefix="asobu-voice-") as tmp:
             wav = pathlib.Path(tmp) / "notice.wav"
@@ -103,6 +131,7 @@ def run(request):
                 raise NoticeError("tts_duration")
             token = "/" + uuid.uuid4().hex + ".wav"
             payload = wav.read_bytes()
+            diagnostics.update(httpGets=0, httpHeads=0, audioBytes=len(payload), audioSeconds=round(duration, 1))
             class Handler(http.server.BaseHTTPRequestHandler):
                 def log_message(self, *args):
                     pass
@@ -114,6 +143,8 @@ def run(request):
                     if self.path != token:
                         self.send_error(404)
                         return
+                    key = "httpGets" if body else "httpHeads"
+                    diagnostics[key] += 1
                     self.send_response(200)
                     self.send_header("Content-Type", "audio/wav")
                     self.send_header("Content-Length", str(len(payload)))
@@ -132,26 +163,70 @@ def run(request):
             thread.start()
             changed = False
             try:
+                wait_receiver(cast)
+                diagnostics["receiverReady"] = True
                 cast.set_volume(max(.05, min(.8, float(request["volume"]) / 100.0)))
                 changed = True
-                mc.play_media("http://" + ip + ":8765" + token, "audio/wav")
-                mc.block_until_active(timeout=15)
-                # Confirm that the Cast receiver actually started this media.
-                deadline = time.monotonic() + 12
-                started = False
-                while time.monotonic() < deadline:
-                    if mc.status.player_state in ("PLAYING", "BUFFERING") and mc.status.content_id and token in mc.status.content_id:
-                        started = True
-                        break
-                    time.sleep(.15)
-                if not started:
-                    raise NoticeError("receiver_no_start")
-                deadline = time.monotonic() + duration + 8
-                while time.monotonic() < deadline:
-                    if mc.status.player_state == "IDLE":
-                        return {"result": "sent", "device": name}
-                    time.sleep(.2)
-                raise NoticeError("receiver_no_finish")
+                # Observe status transitions even for clips shorter than the polling interval.
+                started = threading.Event()
+                finished = threading.Event()
+                failed = threading.Event()
+                class Listener:
+                    def new_media_status(self, status):
+                        outcome = media_outcome(status, token)
+                        if outcome == "playing":
+                            started.set()
+                        elif outcome == "finished":
+                            finished.set()
+                        elif outcome == "failed":
+                            failed.set()
+                    def load_media_failed(self, item, code):
+                        diagnostics["loadFailed"] = int(code)
+                        failed.set()
+                listener = Listener()
+                mc.register_status_listener(listener)
+                def acknowledged(ok, response):
+                    diagnostics["loadAcknowledged"] = bool(ok)
+                    if not ok:
+                        failed.set()
+                try:
+                    # A WAV notification is finite media, not a live stream.
+                    mc.play_media("http://" + ip + ":8765" + token, "audio/wav",
+                                  stream_type="BUFFERED", callback_function=acknowledged)
+                    deadline = time.monotonic() + 28
+                    next_poll = 0
+                    while time.monotonic() < deadline:
+                        listener.new_media_status(mc.status)
+                        if finished.is_set():
+                            return {"result": "sent", "device": name}
+                        if failed.is_set():
+                            raise NoticeError("receiver_no_start")
+                        if started.is_set():
+                            break
+                        if time.monotonic() >= next_poll:
+                            with contextlib.suppress(Exception):
+                                mc.update_status()
+                            next_poll = time.monotonic() + 3
+                        time.sleep(.15)
+                    if not started.is_set():
+                        raise NoticeError("receiver_no_start")
+                    diagnostics["playbackStarted"] = True
+                    deadline = time.monotonic() + duration + 12
+                    while time.monotonic() < deadline:
+                        listener.new_media_status(mc.status)
+                        if finished.is_set():
+                            return {"result": "sent", "device": name}
+                        if failed.is_set():
+                            raise NoticeError("receiver_no_finish")
+                        # Some receivers clear content_id on completion. Only
+                        # accept this after matching playback actually started.
+                        if mc.status.player_state == "IDLE" and mc.status.idle_reason == "FINISHED":
+                            return {"result": "sent", "device": name}
+                        time.sleep(.15)
+                    raise NoticeError("receiver_no_finish")
+                finally:
+                    # disconnect() below releases media listeners.
+                    diagnostics["finalState"] = mc.status.player_state or "UNKNOWN"
             finally:
                 server.shutdown()
                 server.server_close()
@@ -165,9 +240,11 @@ def run(request):
             browser.stop_discovery()
 
 if __name__ == "__main__":
+    diagnostics = {}
     try:
-        result(**run(json.loads(sys.stdin.buffer.read().decode("utf-8"))))
+        outcome = run(json.loads(sys.stdin.buffer.read().decode("utf-8")), diagnostics)
+        result(**outcome, diagnostics=diagnostics)
     except Exception as exc:
         # Do not print the message text or authentication data.
-        result(result="error", reason=getattr(exc, "reason", "cast_error"), error=str(exc)[:180])
+        result(result="error", reason=getattr(exc, "reason", "cast_error"), error=str(exc)[:180], diagnostics=diagnostics)
         sys.exit(1)
