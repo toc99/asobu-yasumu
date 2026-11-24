@@ -6,13 +6,14 @@ import {firebaseConfig,householdId} from '../firebase-config.js';
 import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvent,inventoryEvents,label,stamp,DAY} from '../google-home-policy.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
 import {spawn} from 'node:child_process';
-import {mkdirSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
+import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const here=path.dirname(fileURLToPath(import.meta.url));
 const stateDir=process.env.GH_STATE_DIR||path.join(here,'.local');
 mkdirSync(stateDir,{recursive:true});
 const statePath=path.join(stateDir,'delivery.json');
+const logPath=path.join(stateDir,'bridge.log');
 let saved={seen:{},history:[]};
 try{saved=JSON.parse(readFileSync(statePath,'utf8'));}catch{}
 if(!saved.seen||typeof saved.seen!=='object')saved.seen={};
@@ -25,14 +26,21 @@ function persist(){
 const email=process.env.GH_EMAIL,password=process.env.GH_PASSWORD;
 if(!email||!password)throw Error('GH_EMAIL and GH_PASSWORD are required in the local .env file.');
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
-const login=await signInWithEmailAndPassword(auth,email,password);
+let login;
+try{login=await signInWithEmailAndPassword(auth,email,password);}catch(e){log('Firebase authentication failed: '+(e.code||'auth error'));process.exit(2);}
 const uid=login.user.uid;
 const ref=(name,id)=>doc(db,'households',householdId,name,id);
 const col=name=>collection(db,'households',householdId,name);
 const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status');
 const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unavailable',device='',playing=false,probing=false,lastProbe=0,stopped=false;
 const pending=new Map(),freshDocs=new Set();
-function log(msg){console.log(new Date().toISOString(),msg);}
+function log(msg){
+ const line=new Date().toISOString()+' '+msg;console.log(line);
+ try{
+  if(existsSync(logPath)&&statSync(logPath).size>1024*1024){rmSync(logPath+'.1',{force:true});renameSync(logPath,logPath+'.1');}
+  appendFileSync(logPath,line+'\n',{encoding:'utf8',mode:0o600});
+ }catch{console.error('Local log write failed.');}
+}
 const current=()=>cfg&&cfg.bridgeUid===uid&&cfg.enabled===true&&Date.now()-onlineAt<90000&&freshDocs.size===4;
 function listen(target,key,cb){
  return onSnapshot(target,{includeMetadataChanges:true},snap=>{
@@ -159,6 +167,7 @@ async function pump(){
      const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual');result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
      device=r.device||device;state=result==='sent'||result==='skipped'?'ready':'error';reason=result==='sent'?'':safeReason(r.reason);if(reason)log('Speaker notification '+result+': '+reason);
     }catch(e){state='error';log('Speaker playback failed.');}
+    log('Notification result: '+e.type+' '+result);
     saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{})});persist();playing=false;
     void status();
    }
@@ -168,5 +177,5 @@ async function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge MP3 fix 2026-11-24; waiting for authorized configuration.');
+log('Google Home bridge MP3 + operations 2026-11-24; waiting for authorized configuration.');
 void health();void pump();
