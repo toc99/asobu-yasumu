@@ -49,17 +49,54 @@ def encode_mp3(source, target, duration):
         raise NoticeError("tts_failed")
     return duration + 0.5 + tail
 
+def individual_device(info):
+    # Speaker groups can overlap with individual devices and cause duplicate audio.
+    return info.cast_type != "group" and "group" not in (info.model_name or "").lower() and info.port == 8009
+
+def host_hints(request):
+    # Hosts are local hints only, never identity. UUID must match discovered device.
+    return list(dict.fromkeys(h for h in request.get("hosts", []) if isinstance(h, str) and h))[:20]
+
+def scan(request):
+    from pychromecast.discovery import discover_chromecasts
+    infos, browser = discover_chromecasts(timeout=6, known_hosts=host_hints(request))
+    try:
+        return {"result": "ready", "speakers": [
+            {"id": str(info.uuid), "name": info.friendly_name or str(info.uuid), "host": info.host}
+            for info in infos if individual_device(info)
+        ][:12]}
+    finally:
+        browser.stop_discovery()
+
 def discover(request):
     import pychromecast
-    name = request["speaker"]
-    known = [request["host"]] if request.get("host") else None
-    devices, browser = pychromecast.get_listed_chromecasts(
-        friendly_names=[name], known_hosts=known, discovery_timeout=8)
-    if len(devices) != 1:
+    identity = request.get("speakerId")
+    hints = host_hints(request)
+    if request.get("host"):
+        hints.insert(0, request["host"])
+    if identity:
+        # A changed IP is automatically recovered via multicast discovery.
+        devices, browser = pychromecast.get_listed_chromecasts(
+            uuids=[uuid.UUID(identity)], known_hosts=list(dict.fromkeys(hints)) or None, discovery_timeout=8)
+    else:
+        # Legacy name setting: full scan so duplicate names cannot select a random device.
+        from pychromecast.discovery import discover_chromecasts
+        infos, browser = discover_chromecasts(timeout=6, known_hosts=list(dict.fromkeys(hints)) or None)
+        matches = [info for info in infos if individual_device(info) and info.friendly_name == request["speaker"]]
+        browser.stop_discovery()
+        if len(matches) != 1:
+            raise NoticeError("speaker_not_unique")
+        devices, browser = pychromecast.get_listed_chromecasts(
+            uuids=[matches[0].uuid], known_hosts=[matches[0].host], discovery_timeout=8)
+    if len(devices) != 1 or not individual_device(devices[0].cast_info):
         browser.stop_discovery()
         for d in devices:
             with contextlib.suppress(Exception):
                 d.disconnect()
+        raise NoticeError("speaker_not_unique")
+    if identity and str(devices[0].cast_info.uuid) != identity:
+        browser.stop_discovery()
+        devices[0].disconnect()
         raise NoticeError("speaker_not_unique")
     return devices[0], browser
 
@@ -206,10 +243,12 @@ def audio_handler(token, payload, diagnostics, content_type="audio/wav"):
 
 def run(request, diagnostics=None):
     diagnostics = diagnostics if diagnostics is not None else {}
+    if request.get("op") == "scan":
+        return scan(request)
     cast, browser = discover(request)
     try:
         cast.wait(timeout=12)
-        name = cast.name or request["speaker"]
+        name = cast.name or request.get("speaker") or str(cast.cast_info.uuid)
         if request.get("op") == "probe":
             return {"result": "ready", "device": name}
         if request.get("op") != "speak":
