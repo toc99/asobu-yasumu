@@ -829,3 +829,19 @@ body[data-role="parent"] #settings-form input[type="date"]::-webkit-date-and-tim
 #google-home-panel .gh-check-row input[type="checkbox"]:disabled {cursor:not-allowed;}
 #google-home-panel .gh-check-row span {min-width:0;}
 @media(pointer:coarse){#google-home-panel .gh-check-row{min-height:44px;padding:5px 0;}}
+
+/* v3.24.0: parent settings are opened on demand, not above the Pokédex. */
+.parent-more-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.parent-more-heading>div{min-width:0;flex:1}
+.parent-settings-menu{position:relative;flex:none;max-width:48%}
+.parent-settings-menu summary{list-style:none;cursor:pointer;background:#fff;border:1px solid #cfe1f7;border-radius:12px;padding:10px 9px;min-height:44px;display:flex;align-items:center;color:#366bb1;font-weight:850;font-size:13px;white-space:nowrap}
+.parent-settings-menu summary::-webkit-details-marker{display:none}
+.parent-settings-options{position:absolute;right:0;top:calc(100% + 6px);z-index:12;width:220px;max-width:calc(100vw - 32px);display:grid;background:#fff;border:1px solid #dce8f6;border-radius:14px;padding:5px;box-shadow:0 10px 24px #274b772c}
+.parent-settings-menu:not([open]) .parent-settings-options{display:none}
+.parent-settings-options button{min-height:46px;text-align:left;background:#fff;color:#315a76;padding:10px 12px;border-radius:8px;font-weight:800;font-size:14px}
+.parent-settings-options button:hover,.parent-settings-options button:focus-visible{background:#edf4fc}
+#parent-more-overview>.card{margin-bottom:18px}
+#parent-settings-back{margin-bottom:8px}
+#parent-settings-export .ui-export-panel,#google-home-panel [data-more-panel="manual"] .ui-export-panel{margin-top:8px}
+#google-home-panel #gh-message{display:block;box-sizing:border-box;width:100%;max-width:100%;font:inherit;margin:8px 0}
+@media(max-width:390px){.parent-settings-menu summary{font-size:12px;padding-inline:7px}.parent-more-heading h2{font-size:18px}}

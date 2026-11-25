@@ -30,10 +30,10 @@ test('Firestore XP credit matches the approval record and supports old cached cl
   assert.match(rules,/next\.diff\(prev\)\.affectedKeys\(\)\.hasOnly\(\['status','reviewedAt','reviewedBy','awardedXp'\]\)/);
 });
 
-test('release notes and service worker identify v3.22.0',()=>{
-  assert.match(notes,/APP_VERSION = 'v3\.22\.0'/);
+test('release notes and service worker identify v3.24.0',()=>{
+  assert.match(notes,/APP_VERSION = 'v3\.24\.0'/);
   assert.match(notes,/version:'v3\.19\.2',title:'6件目以降/);
-  assert.match(sw,/asobu-yasumu-v3-22-0-google-home/);
+  assert.match(sw,/asobu-yasumu-v3-24-0-parent-settings/);
   for(const f of ['index.html','parent.html','app.js'])
-    assert.match(read(f),/3\.22\.0/);
+    assert.match(read(f),/3\.24\.0/);
 });
