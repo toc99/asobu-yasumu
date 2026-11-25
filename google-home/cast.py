@@ -18,23 +18,33 @@ def result(**kwargs):
     print(json.dumps(kwargs, ensure_ascii=True), flush=True)
 
 def synthesize(text, target):
-    if os.name != "nt":
-        raise RuntimeError("Windows Japanese SAPI voice is required for this version")
-    # Text is passed through a UTF-8 file, never as a shell command.
+    """Generate local Japanese WAV audio without sending text to an API."""
     source = target.with_suffix(".txt")
-    source.write_text(text, encoding="utf-8-sig")
-    script = pathlib.Path(__file__).with_name("speak.ps1")
-    run = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-File", str(script),
-         "-InputFile", str(source), "-OutputFile", str(target)],
-        capture_output=True, timeout=30, check=False)
-    if run.returncode != 0 or not target.exists():
+    if os.name == "nt":
+        source.write_text(text, encoding="utf-8-sig")
+        script = pathlib.Path(__file__).with_name("speak.ps1")
+        command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned",
+                   "-File", str(script), "-InputFile", str(source), "-OutputFile", str(target)]
+    elif sys.platform.startswith("linux"):
+        source.write_text(text, encoding="utf-8")
+        dictionary = os.environ.get("GH_JTALK_DICT") or "/var/lib/mecab/dic/open-jtalk/naist-jdic"
+        voice = os.environ.get("GH_JTALK_VOICE") or "/usr/share/hts-voice/nitech-jp-atr503-m001/nitech_jp_atr503_m001.htsvoice"
+        if not pathlib.Path(dictionary).is_dir() or not pathlib.Path(voice).is_file():
+            raise NoticeError("tts_failed")
+        command = ["open_jtalk", "-x", dictionary, "-m", voice, "-ow", str(target), str(source)]
+    else:
         raise NoticeError("tts_failed")
-    with wave.open(str(target), "rb") as w:
-        return w.getnframes() / w.getframerate()
+    try:
+        run = subprocess.run(command, capture_output=True, timeout=30, check=False)
+        if run.returncode != 0 or not target.is_file():
+            raise NoticeError("tts_failed")
+        with wave.open(str(target), "rb") as w:
+            return w.getnframes() / w.getframerate()
+    except (OSError, EOFError, wave.Error, subprocess.TimeoutExpired) as exc:
+        raise NoticeError("tts_failed") from exc
 
 def encode_mp3(source, target, duration):
-    """Normalize local SAPI audio to a buffered MP3 with short silence margins."""
+    """Normalize locally synthesized audio to a buffered MP3 with short silence margins."""
     import imageio_ffmpeg
     tail = max(1.5, 5.0 - duration - 0.5)
     try:
@@ -280,7 +290,7 @@ def run(request, diagnostics=None):
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                     sock.connect((cast.cast_info.host, 8009))
                     ip = sock.getsockname()[0]
-            # Fixed LAN port for a single Windows private-network firewall rule.
+            # Fixed LAN port; allow access only from the trusted home LAN.
             server = http.server.ThreadingHTTPServer((ip, 8765), Handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
