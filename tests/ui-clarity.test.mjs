@@ -57,13 +57,13 @@ test('backup tools clearly distinguish private full export and minimal activity 
   assert.match(parent,/活動実績JSONには氏名・生年月日を含みません/);
 });
 
-test('release and service worker use the same v3.22.0',()=>{
-  assert.match(release,/APP_VERSION = 'v3\.22\.0'/);
-  assert.match(kid,/v3\.22\.0/);
-  assert.match(parent,/v3\.22\.0/);
-  assert.match(sw,/asobu-yasumu-v3-22-0/);
-  assert.match(sw,/style\.css\?v=3\.22\.0/);
-  assert.match(sw,/app\.js\?v=3\.22\.0/);
+test('release and service worker use the same v3.24.0',()=>{
+  assert.match(release,/APP_VERSION = 'v3\.24\.0'/);
+  assert.match(kid,/v3\.24\.0/);
+  assert.match(parent,/v3\.24\.0/);
+  assert.match(sw,/asobu-yasumu-v3-24-0/);
+  assert.match(sw,/style\.css\?v=3\.24\.0/);
+  assert.match(sw,/app\.js\?v=3\.24\.0/);
 });
 
 test('records tab prioritizes play history over release notes',()=>{
@@ -73,9 +73,16 @@ test('records tab prioritizes play history over release notes',()=>{
   assert.ok(recordsStart>=0&&history>recordsStart&&release>history);
 });
 
-test('parent settings and exports appear before the large Pokédex',()=>{
-  const settingsStart=parent.indexOf('id="parent-pane-more"');
-  const settings=parent.indexOf('⚙️ 家族の設定',settingsStart);
-  const pokedex=parent.indexOf('id="pokemon-collection"',settingsStart);
-  assert.ok(settingsStart>=0&&settings>settingsStart&&pokedex>settings);
+test('parent settings are hidden initially and accessible from the right-hand menu',()=>{
+  const menu=parent.match(/<details class="parent-settings-menu" id="parent-settings-menu">([\s\S]*?)<\/details>/);
+  assert.ok(menu);
+  for(const section of ['family','export','google','manual']){
+    assert.match(menu[1],new RegExp('data-more-section="'+section+'"'));
+    assert.match(parent,new RegExp('class="[^"]*hidden[^"]*"[^>]*data-more-panel="'+section+'"'));
+  }
+  assert.match(parent,/id="parent-more-overview"/);
+  assert.match(parent,/id="parent-settings-back" data-more-section="overview"/);
+  assert.match(script,/if\(view==='more'\)setParentMoreSection\(\)/);
+  const gh=parent.slice(parent.indexOf('id="google-home-panel"'),parent.indexOf('id="parent-more-overview"'));
+  for(const id of ['gh-enabled','gh-test','gh-send','gh-history'])assert.ok(gh.includes('id="'+id+'"'));
 });
