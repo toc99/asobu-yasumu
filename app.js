@@ -1,15 +1,15 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.22.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.22.0';
-import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.22.0';
-import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.22.0';
-import {canResumeInMorning} from './early-resume-policy.js?v=3.22.0';
-import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.22.0';
-import {setupFeedback} from './feedback.js?v=3.22.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.22.0';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.22.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.24.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.24.0';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.24.0';
+import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.24.0';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.24.0';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.24.0';
+import {setupFeedback} from './feedback.js?v=3.24.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.24.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.24.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -2234,6 +2234,21 @@ function setKidView(view,scroll=true){
   if(view==='more'&&model.ready){renderWeek();renderHistory();}
   if(scroll)revealNavigation();
 }
+function setParentMoreSection(section='overview',focus=false){
+  if(!isParentPage||!['overview','family','export','google','manual'].includes(section))return;
+  const menu=$('parent-settings-menu');
+  if(menu)menu.open=false;
+  $('parent-more-overview')?.classList.toggle('hidden',section!=='overview');
+  $('parent-settings-back')?.classList.toggle('hidden',section==='overview');
+  $('google-home-panel')?.classList.toggle('hidden',!['google','manual'].includes(section));
+  document.querySelectorAll('[data-more-panel]').forEach(panel=>panel.classList.toggle('hidden',panel.dataset.morePanel!==section));
+  $('parent-focus-toolbar')?.classList.toggle('hidden',section!=='overview');
+  if(focus){
+    revealNavigation();
+    if(section==='overview')menu?.querySelector('summary')?.focus({preventScroll:true});
+    else $('parent-settings-back')?.focus({preventScroll:true});
+  }
+}
 function setParentView(view,scroll=true,targetId=''){
   if(!isParentPage||!PARENT_VIEWS.includes(view))return;
   parentView=view;
@@ -2247,6 +2262,8 @@ function setParentView(view,scroll=true,targetId=''){
   const parentFocus=$('parent-focus-toolbar');
   // The global child selector applies to calendar, buddy and Pokédex, not to the two-child home.
   if(parentFocus)parentFocus.classList.toggle('hidden',view==='home'||view==='actions'||view==='feedback');
+  if(view==='more')setParentMoreSection();
+  else if($('parent-settings-menu'))$('parent-settings-menu').open=false;
   if(view==='reports'&&model.ready){renderWeek();renderHistory();}
   if(view==='home')renderParentDashboard();
   if(scroll){
@@ -2976,7 +2993,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
 function initUiEvents(){
   feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
   // Optional integration is isolated from the existing application.
-  if(isParentPage)import('./google-home-ui.js?v=3.22.0').then(({setupGoogleHome})=>{
+  if(isParentPage)import('./google-home-ui.js?v=3.24.0').then(({setupGoogleHome})=>{
     googleHomeUi=setupGoogleHome({dbApi,db,householdId,toast});
     if(uid&&role==='parent')googleHomeUi.start();
   }).catch(()=>{const el=$('gh-state');if(el)el.textContent='Google Home設定画面を読み込めませんでした。';});
@@ -2992,7 +3009,9 @@ function initUiEvents(){
    initNotifySettings();
  }
  document.addEventListener('click',e=>{
+   const menu=$('parent-settings-menu');if(menu?.open&&!menu.contains(e.target))menu.open=false;
    const btn=e.target.closest('button');if(!btn)return;
+   if(btn.dataset.moreSection){setParentMoreSection(btn.dataset.moreSection,true);return;}
    if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
    if(btn.dataset.focusChild){setFocusChild(btn.dataset.focusChild);return;}
    if(btn.dataset.kidView){setKidView(btn.dataset.kidView);return;}
@@ -3065,6 +3084,7 @@ function initUiEvents(){
   $('export-audit')?.addEventListener('click',exportAuditCsv);
   $('retry-login')?.addEventListener('click',()=>authorizeCurrentUser());
  $('init-family')?.addEventListener('click',initFamily);
+ $('parent-settings-menu')?.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('parent-settings-menu').open){$('parent-settings-menu').open=false;$('parent-settings-menu').querySelector('summary')?.focus();}});
  $('settings-form')?.addEventListener('submit',saveSettings);
  $('edit-form')?.addEventListener('submit',editHistory);
  $('export-json')?.addEventListener('click',()=>exportData('json'));
