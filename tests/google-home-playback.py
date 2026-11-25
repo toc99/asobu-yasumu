@@ -121,5 +121,46 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(module.individual_device(NS(cast_type=None,model_name="Google Cast Group",port=12345)))
         self.assertEqual(module.host_hints({"hosts":["192.168.1.9","192.168.1.9",42]}),["192.168.1.9"])
 
+class LinuxSynthesisTests(unittest.TestCase):
+    @unittest.skipUnless(module.sys.platform.startswith("linux"), "Linux only")
+    def test_open_jtalk_uses_local_utf8_file(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            dic = root / "dictionary"
+            dic.mkdir()
+            voice = root / "sample.htsvoice"
+            voice.touch()
+            target = root / "speech.wav"
+
+            def fake_run(command, **kwargs):
+                self.assertEqual(command, ["open_jtalk", "-x", str(dic), "-m", str(voice),
+                                           "-ow", str(target), str(root / "speech.txt")])
+                self.assertEqual((root / "speech.txt").read_text(encoding="utf-8"), "日本語です。")
+                self.assertNotIn("shell", kwargs)
+                with wave.open(str(target), "wb") as audio:
+                    audio.setnchannels(1)
+                    audio.setsampwidth(2)
+                    audio.setframerate(16000)
+                    audio.writeframes(bytes(32000))
+                return NS(returncode=0)
+
+            with patch.dict(module.os.environ, {"GH_JTALK_DICT": str(dic), "GH_JTALK_VOICE": str(voice)}):
+                with patch.object(module.subprocess, "run", side_effect=fake_run):
+                    self.assertEqual(module.synthesize("日本語です。", target), 1.0)
+
+    @unittest.skipUnless(module.sys.platform.startswith("linux"), "Linux only")
+    def test_missing_voice_fails_without_external_fallback(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            with patch.dict(module.os.environ, {"GH_JTALK_DICT": str(root), "GH_JTALK_VOICE": str(root / "missing")}):
+                with patch.object(module.subprocess, "run") as run:
+                    with self.assertRaises(module.NoticeError) as error:
+                        module.synthesize("テスト", root / "speech.wav")
+                    self.assertEqual(error.exception.reason, "tts_failed")
+                    run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
