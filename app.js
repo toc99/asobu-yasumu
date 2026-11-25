@@ -1,15 +1,15 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.24.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.24.0';
-import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.24.0';
-import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.24.0';
-import {canResumeInMorning} from './early-resume-policy.js?v=3.24.0';
-import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.24.0';
-import {setupFeedback} from './feedback.js?v=3.24.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.24.0';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.24.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.25.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.25.0';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.25.0';
+import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.25.0';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.25.0';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.25.0';
+import {setupFeedback} from './feedback.js?v=3.25.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.25.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.25.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -1015,7 +1015,7 @@ function renderRetroAdmin(){
   }).join('');
   const pending=model.retroReports.filter(x=>x.reviewStatus==='pending');
   const reviewed=model.retroReports.filter(x=>x.reviewStatus!=='pending').slice(0,25);
-  root.innerHTML=[...pending,...reviewed].slice(0,70).map(x=>{
+  const retroHtml=x=>{
     const type=x.source==='self'?'自分からの申告':'保護者に言われて申告';
     const status={pending:'未確認',acknowledged:'自主申告を確認',counted:'指摘あり',excused:'事情を確認・免除'}[x.reviewStatus]||'確認中';
     const locked=!!x.penaltyEventId||busy||!canOperate()||!model.retroReportsServerConfirmed;
@@ -1027,7 +1027,10 @@ function renderRetroAdmin(){
     return '<article class="retro-record"><div><strong>'+safe(playerLabel(x.childId))+'</strong> · '+safe(type)+'</div>'+
       '<small>'+safe(dateTime(stampMillis(x.reportedAt)))+' ／ '+safe(status)+'</small>'+
       '<p>最初に申告した開始時刻：'+safe(dateTime(x.actualStartMs))+'</p>'+controls+'</article>';
-  }).join('')||'<p class="empty">まだ開始忘れの申告はありません。</p>';
+  };
+  root.innerHTML=pending.map(retroHtml).join('')||'<p class="empty">未確認の申告はありません。</p>';
+  if($('retro-pending-count'))$('retro-pending-count').textContent=pending.length+'件';
+  if($('retro-reviewed-list'))$('retro-reviewed-list').innerHTML=reviewed.map(retroHtml).join('')||'<p class="empty">対応済みの申告はありません。</p>';
   const thresholds=ids.filter(id=>unresolvedNotices(model.retroReports,id,now).length>=RETRO_PENALTY_THRESHOLD);
   if(thresholds.length){
     root.insertAdjacentHTML('afterbegin',thresholds.map(id=>{
@@ -1585,18 +1588,21 @@ function renderApprovals(){
   const pending=pendingAll.filter(matches).sort((a,b)=>stampMillis(a.requestedAt)-stampMillis(b.requestedAt));
   const recent=all.filter(r=>r.status!=='pending'&&matches(r))
     .sort((a,b)=>stampMillis(b.reviewedAt)-stampMillis(a.reviewedAt)).slice(0,8);
-  const requests=[...pending,...recent];
+  const requests=pending;
   const staleCount=pendingAll.filter(r=>stampMillis(r.requestedAt)>0 && Date.now()-stampMillis(r.requestedAt)>=DAY).length;
   const summary=$('approval-filter-summary');if(summary)summary.textContent=
     `全員の確認待ち ${count}件${staleCount?`（うち24時間以上 ${staleCount}件）`:''}。表示中 ${pending.length}件。`;
-  root.innerHTML=(requests.length?requests.map(r=>{
+  const approvalHtml=r=>{
     const kind=activityKindLabel(r.activityKind);
     const when=stampMillis(r.requestedAt)?dateTime(stampMillis(r.requestedAt)):'日時確認中';
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
     const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:r.status==='pending'&&activityIsXpOnly(r)?`<small>🌱 承認すると相棒へ +${ACTIVITY_EXTRA_XP} XP（くじなし）</small>`:'';
     return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>${activityIsXpOnly(r)?'経験値を承認':'正式にゲット'}</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
-  }).join(''):'<p class="empty">この条件に該当する申請はありません。</p>');
+  };
+  root.innerHTML=requests.length?requests.map(approvalHtml).join(''):'<p class="empty">この条件に該当する承認待ちはありません。</p>';
+  const reviewed=$('activity-reviewed');if(reviewed)reviewed.innerHTML=recent.length?recent.map(approvalHtml).join(''):'<p class="empty">対応済みの活動はありません。</p>';
+  if($('approval-reviewed-count'))$('approval-reviewed-count').textContent=recent.length+'件';
 }
 async function requestActivity(id,kind){
   if(isParentPage||!ids.includes(id)||!Object.hasOwn(ACTIVITY_KINDS,kind))return;
@@ -2176,7 +2182,18 @@ function weekData(now=Date.now()){
     const vs=videoStartedMillis(p);if(vs>0)sum+=Math.round(overlap(vs,now,d,end)*videoElapsed(p,now)/Math.max(1,now-vs));return sum;
   }));return {days,totals};
 }
-function renderWeek(){if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
+function renderParentTodayUsage(now=Date.now()){
+  const root=$('parent-today-usage');if(!isParentPage||!root||!model.ready)return;
+  const start=dayStart(now),end=addDays(start,1);
+  root.innerHTML=displayIds().map(id=>{
+    const p=model.profiles[id],videoStart=videoStartedMillis(p);
+    const video=model.sessions.reduce((sum,s)=>sum+(s.childId===id&&s.activityType==='video'?activeSessionOverlap(s,start,end):0),0)+(videoStart>0?Math.round(overlap(videoStart,now,start,end)*videoElapsed(p,now)/Math.max(1,now-videoStart)):0);
+    const total=todayTotal(id,now),game=Math.max(0,total-video);
+    const width=total?Math.max(0,Math.min(100,game/total*100)):0;
+    return `<div class="parent-usage-row"><div><strong>${safe(playerLabel(id))}</strong><strong>${safe(brief(total))}</strong></div><div class="parent-usage-bar" aria-hidden="true"><i style="width:${width}%"></i><b style="width:${total?100-width:0}%"></b></div><small>ゲーム ${safe(brief(game))} ／ 動画 ${safe(brief(video))}</small></div>`;
+  }).join('');
+}
+function renderWeek(){renderParentTodayUsage();if(!$('week-chart'))return;const {days,totals}=weekData();const max=Math.max(15*MIN,...totals.flat());
   const ordered = displayIds();
   $('week-chart').innerHTML=`<div class="chart-legend">${ordered.map(id=>`<span><i class="dot ${themeFor(model.profiles[id])}"></i>${safe(playerLabel(id))}</span>`).join('')}</div>` + days.map((d,i)=>{
     const label=new Date(d).toLocaleDateString('ja-JP',{month:'numeric',day:'numeric',weekday:'short'}),t=totals[i];
@@ -2234,8 +2251,26 @@ function setKidView(view,scroll=true){
   if(view==='more'&&model.ready){renderWeek();renderHistory();}
   if(scroll)revealNavigation();
 }
+function setParentNavCount(id,count){const el=$(id);if(!el)return;el.textContent=count>99?'99+':String(count);el.classList.toggle('hidden',!count);}
+function setParentActionSection(section='overview',focus=false){
+  if(!isParentPage||!['overview','bonus','release','honesty'].includes(section))return;
+  if($('parent-actions-menu'))$('parent-actions-menu').open=false;
+  $('parent-actions-overview')?.classList.toggle('hidden',section!=='overview');
+  $('parent-management')?.classList.toggle('hidden',section==='overview');
+  $('parent-actions-back')?.classList.toggle('hidden',section==='overview');
+  document.querySelectorAll('[data-action-panel]').forEach(panel=>panel.classList.toggle('hidden',panel.dataset.actionPanel!==section));
+  if(focus){revealNavigation();(section==='overview'?$('parent-actions-menu')?.querySelector('summary'):$('parent-actions-back'))?.focus({preventScroll:true});}
+}
+function setParentReportSection(section='overview',focus=false){
+  if(!isParentPage||!['overview','day','week','calendar','weekly'].includes(section))return;
+  $('parent-reports-overview')?.classList.toggle('hidden',section!=='overview');
+  $('parent-reports-back')?.classList.toggle('hidden',section==='overview');
+  document.querySelectorAll('[data-report-panel]').forEach(panel=>panel.classList.toggle('hidden',panel.dataset.reportPanel!==section));
+  $('parent-focus-toolbar')?.classList.add('hidden');
+  if(focus){revealNavigation();(section==='overview'?$('parent-reports-overview')?.querySelector('button'):$('parent-reports-back'))?.focus({preventScroll:true});}
+}
 function setParentMoreSection(section='overview',focus=false){
-  if(!isParentPage||!['overview','family','export','google','manual'].includes(section))return;
+  if(!isParentPage||!['overview','family','export','google','manual','audit'].includes(section))return;
   const menu=$('parent-settings-menu');
   if(menu)menu.open=false;
   $('parent-more-overview')?.classList.toggle('hidden',section!=='overview');
@@ -2262,12 +2297,16 @@ function setParentView(view,scroll=true,targetId=''){
   const parentFocus=$('parent-focus-toolbar');
   // The global child selector applies to calendar, buddy and Pokédex, not to the two-child home.
   if(parentFocus)parentFocus.classList.toggle('hidden',view==='home'||view==='actions'||view==='feedback');
+  if(view==='actions'){const targetSections={'bonus-admin':'bonus','pokemon-release-admin':'release','honesty-admin':'honesty'};setParentActionSection(targetSections[targetId]||'overview');}
+  if(view==='reports')setParentReportSection();
   if(view==='more')setParentMoreSection();
   else if($('parent-settings-menu'))$('parent-settings-menu').open=false;
+  if(view!=='actions'&&$('parent-actions-menu'))$('parent-actions-menu').open=false;
+  if(view==='updates')parentFocus?.classList.add('hidden');
   if(view==='reports'&&model.ready){renderWeek();renderHistory();}
   if(view==='home')renderParentDashboard();
   if(scroll){
-    if(targetId){const target=$(targetId);if(target){const details=target.closest('details');if(details)details.open=true;target.scrollIntoView({behavior:'auto',block:'start'});}else revealNavigation();}
+    if(targetId){const target=$(targetId);if(target){for(let details=target.closest('details');details;details=details.parentElement?.closest('details'))details.open=true;target.scrollIntoView({behavior:'auto',block:'start'});}else revealNavigation();}
     else revealNavigation();
   }
 }
@@ -2333,12 +2372,24 @@ function renderParentDashboard(now=Date.now()){
   const total=pending.length;
   const feedbackCountText=$('feedback-open-count')?.textContent||'';
   const feedbackOpen=Number(feedbackCountText.match(/[0-9]+/)?.[0]||0);
+  const retroPending=model.retroReports.filter(x=>x.reviewStatus==='pending').length;
+  const thresholds=model.retroReportsLoaded?ids.filter(id=>unresolvedNotices(model.retroReports,id,now).length>=RETRO_PENALTY_THRESHOLD).length:0;
+  const actionCount=total+retroPending+thresholds;
+  setParentNavCount('parent-nav-actions',actionCount);
+  if($('parent-home-actions'))$('parent-home-actions').textContent=model.activityLoaded&&model.retroReportsLoaded?actionCount+'件':'確認中';
+  if($('parent-home-feedback'))$('parent-home-feedback').textContent=feedbackCountText.includes('件')?feedbackOpen+'件':'確認中';
   const actionParts=[];
+  if(retroPending)actionParts.push('開始忘れの申告 '+retroPending+'件');
+  if(thresholds)actionParts.push('指摘3回の判断 '+thresholds+'件');
   if(total)actionParts.push('活動の承認待ち '+total+'件'+(stale?'（24時間以上 '+stale+'件）':''));
   if(feedbackOpen)actionParts.push('いけんばこ・要確認 '+feedbackOpen+'件');
-  $('parent-action-summary').textContent=!model.activityLoaded?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、新しい活動申請・要確認の意見はありません';
+  $('parent-action-summary').textContent=!model.activityLoaded||!model.retroReportsLoaded||!feedbackCountText.includes('件')?'申請状況を確認中…':actionParts.length?actionParts.join(' ／ '):'現在、未対応の申請・申告・意見はありません';
   $('dashboard-sync-status').textContent=canOperate()?'クラウド確認済み':'通信・同期を確認中';
   if(!model.ready){container.innerHTML='<p class="empty">家族の情報を読み込み中…</p>';return;}
+  const opened=new Set([...container.querySelectorAll('details[data-home-actions][open]')].map(el=>el.dataset.homeActions));
+  const active=document.activeElement,activeCard=active?.closest?.('[data-home-actions]');
+  const activeKey=activeCard&&active.tagName==='BUTTON'?[...active.attributes].find(at=>at.name.startsWith('data-'))?.name:null;
+  const activeValue=activeKey?active.getAttribute(activeKey):null;
   container.innerHTML=ids.map(id=>{
     const p=model.profiles[id]||playerBase(id),st=status(p,now);
     const names={playing:'ゲーム中',watching:'動画中',resting:'休憩中',ready:'あそべる'};
@@ -2349,8 +2400,10 @@ function renderParentDashboard(now=Date.now()){
     const exceptionControl=st==='resting'?`<button type="button" class="btn outline" data-rest-exception-grant="${id}" ${busy||!canOperate()?'disabled':''}>🎟️ 特例で遊ぶことを許可</button>`+(e?.state==='offered'?`<button type="button" class="btn outline" data-rest-exception-cancel="${id}">未使用の特例を取り消す</button>`:''):exceptionActive(p)?'<small>🎟️ 保護者承認の特例利用中（終了後に休憩を繰り越し）</small>':'';
     const detail=st==='resting'?`残り ${brief(waitingRemaining(p,now))}`:st==='playing'?`開始から ${brief(gameDuration(p,now))}`:st==='watching'?`視聴時間 ${brief(videoElapsed(p,now))}`:'ゲーム・動画を開始できます';
     const carry=nightCarryoverInfo(p,now);
-    return `<article class="ui-person-summary ${id}"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span><small>${safe(detail)}</small>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small>${restOverrideControl}${exceptionControl}${(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:''}</article>`;
+    const retroControl=(st==='playing'||st==='ready')?`<button type="button" class="btn outline" data-retro-start="${id}" ${busy||!canOperate()?'disabled':''}>開始時刻を${st==='playing'?'修正':'後から入力'}</button>`:'';
+    return `<article class="ui-person-summary ${id}"><div class="parent-person-head"><strong>${safe(playerLabel(id))}</strong><span class="ui-person-state ${st}">${state}</span></div><div class="parent-person-time">${safe(detail)}</div>${carry?`<small class="night-carryover-summary">${safe(carry.message)}</small>`:''}<small>今日の合計 ${brief(todayTotal(id,now))}</small>${exceptionActive(p)?'<small>特例利用中（終了後に休憩を繰り越し）</small>':''}<details class="parent-person-actions" data-home-actions="${id}" ${opened.has(id)?'open':''}><summary>その他の操作</summary><div>${restOverrideControl}${exceptionControl}${retroControl}<button type="button" class="btn outline" data-parent-view="home" data-focus-target="players">時間の詳細・調整</button></div></details></article>`;
   }).join('');
+  if(activeCard){const next=[...container.querySelectorAll('[data-home-actions]')].find(el=>el.dataset.homeActions===activeCard.dataset.homeActions);const target=activeKey?[...next?.querySelectorAll('button')||[]].find(el=>el.getAttribute(activeKey)===activeValue):next?.querySelector('summary');target?.focus({preventScroll:true});}
 }
 function playerLayoutSignature(now=Date.now()){
   if(!model.ready)return '';
@@ -2993,7 +3046,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
 function initUiEvents(){
   feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
   // Optional integration is isolated from the existing application.
-  if(isParentPage)import('./google-home-ui.js?v=3.24.0').then(({setupGoogleHome})=>{
+  if(isParentPage)import('./google-home-ui.js?v=3.25.0').then(({setupGoogleHome})=>{
     googleHomeUi=setupGoogleHome({dbApi,db,householdId,toast});
     if(uid&&role==='parent')googleHomeUi.start();
   }).catch(()=>{const el=$('gh-state');if(el)el.textContent='Google Home設定画面を読み込めませんでした。';});
@@ -3009,9 +3062,11 @@ function initUiEvents(){
    initNotifySettings();
  }
  document.addEventListener('click',e=>{
-   const menu=$('parent-settings-menu');if(menu?.open&&!menu.contains(e.target))menu.open=false;
+   for(const id of ['parent-settings-menu','parent-actions-menu']){const menu=$(id);if(menu?.open&&!menu.contains(e.target))menu.open=false;}
    const btn=e.target.closest('button');if(!btn)return;
    if(btn.dataset.moreSection){setParentMoreSection(btn.dataset.moreSection,true);return;}
+   if(btn.dataset.actionSection){setParentActionSection(btn.dataset.actionSection,true);return;}
+   if(btn.dataset.reportSection){setParentReportSection(btn.dataset.reportSection,true);return;}
    if(btn.hasAttribute('data-close')){btn.closest('dialog')?.close();return;}
    if(btn.dataset.focusChild){setFocusChild(btn.dataset.focusChild);return;}
    if(btn.dataset.kidView){setKidView(btn.dataset.kidView);return;}
@@ -3084,7 +3139,7 @@ function initUiEvents(){
   $('export-audit')?.addEventListener('click',exportAuditCsv);
   $('retry-login')?.addEventListener('click',()=>authorizeCurrentUser());
  $('init-family')?.addEventListener('click',initFamily);
- $('parent-settings-menu')?.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('parent-settings-menu').open){$('parent-settings-menu').open=false;$('parent-settings-menu').querySelector('summary')?.focus();}});
+ for(const id of ['parent-settings-menu','parent-actions-menu'])$(id)?.addEventListener('keydown',e=>{if(e.key==='Escape'&&$(id).open){$(id).open=false;$(id).querySelector('summary')?.focus();}});
  $('settings-form')?.addEventListener('submit',saveSettings);
  $('edit-form')?.addEventListener('submit',editHistory);
  $('export-json')?.addEventListener('click',()=>exportData('json'));
