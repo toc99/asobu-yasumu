@@ -1,5 +1,5 @@
-import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.21.2';
-const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更'};
+import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.22.0';
+const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更',queue_full:'待機上限に達したためスキップ',interrupted:'再生中に連携PCが停止したため再送なし'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
  const configRef=dbApi.doc(db,'households',householdId,'googleHome','config');
@@ -12,7 +12,9 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
    const caption=document.createElement('span');caption.textContent=label;line.append(input,caption);switches.append(line);
  }
  let cfg=defaultConfig(),status=null,subs=[],dirty=false,ready=false,active=false,timer=null;
- let draftIds=[],draftRoutes={},saving=false;
+ let draftIds=[],draftRoutes={},saving=false,sending=false;
+ const queueReady=()=>status?.bridgeUid===cfg.bridgeUid&&status?.queue?.version===1&&Date.now()-stamp(status.updatedAt)>=-30000&&Date.now()-stamp(status.updatedAt)<150000;
+ const typeLabel=t=>ROUTE_TYPES[t]||'通知';
  const times=new Set(['quietStart','quietEnd','bedtime']);
  const bounds={volume:[5,80],gameMinutes:[1,240],warningMinutes:[1,30],forgottenMinutes:[1,30]};
  const fieldLabels={volume:'通知音量',gameMinutes:'ゲームのお知らせ時間',warningMinutes:'終了予告',forgottenMinutes:'終了押し忘れの確認',quietStart:'静音開始時刻',quietEnd:'静音終了時刻',bedtime:'就寝準備時刻'};
@@ -63,16 +65,23 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   for(const input of switches.querySelectorAll('input'))input.checked=c.types?.[input.name]===true;
   draftIds=speakerIds(c.speakerIds);draftRoutes=Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(c.routes?.[k])]));renderChoices();
  }
- function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready||saving);get('send').disabled=!ready||dirty||saving||!cfg.enabled;get('test').disabled=!ready||dirty||saving||!cfg.enabled;get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
+ function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready||saving);get('send').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('test').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
  function renderStatus(){
   const age=Date.now()-stamp(status?.updatedAt);
   const fresh=!!status&&status.bridgeUid===cfg.bridgeUid&&age>=-30000&&age<150000;
   const labels={ready:'通知先検出済み',unavailable:'スピーカー未検出',busy:'再生中',disabled:'通知停止中',error:'エラー'};
   get('state').textContent=!ready?'設定読み込み中':!fresh?'連携PC未接続（または停止中）':(labels[status.state]||'不明')+(status.device?' / '+status.device:'');
+  const q=queueReady()?status.queue:null;
+  get('queue-state').textContent=q?'待機中 '+q.waiting+'件 ／ 処理中 '+q.active+'件':'連携PC v3.22.0以降の接続を確認してください。';
+  get('queue-active').textContent=q&&q.activeTypes?.length?'処理中：'+q.activeTypes.map(typeLabel).join('・'):'';
+  const waiting=get('queue-waiting');waiting.replaceChildren();
+  if(q)for(const type of q.types||[]){const li=document.createElement('li');li.textContent=typeLabel(type);waiting.append(li);}
+  get('queue-more').textContent=q&&q.waiting>(q.types?.length||0)?'ほか '+(q.waiting-q.types.length)+'件':'';
+  setButtons();
   const list=get('history');list.replaceChildren();
   for(const h of (status?.bridgeUid===cfg.bridgeUid&&Array.isArray(status.history)?status.history:[]).slice(0,20)){
    if(!h||typeof h!=='object')continue;
-   const li=document.createElement('li');li.textContent=new Date(Number(h.at)||0).toLocaleString('ja-JP')+' '+(TYPES[h.type]|| (h.type==='manual'?'テスト・手動通知':'通知'))+'：'+({sent:'送信済み',partial:'一部成功',error:'失敗',skipped:'スキップ'}[h.result]||'不明')+(h.reason&&reasons[h.reason]?'（'+reasons[h.reason]+'）':'');if(Array.isArray(h.targets)){const details=document.createElement('div');details.className='tiny';details.textContent=h.targets.map(t=>t.name+'：'+({sent:'成功',error:'失敗',skipped:'スキップ'}[t.result]||'不明')+(reasons[t.reason]?'（'+reasons[t.reason]+'）':'')).join(' ／ ');li.append(details);}list.append(li);
+   const li=document.createElement('li');li.textContent=new Date(Number(h.at)||0).toLocaleString('ja-JP')+' '+(Array.isArray(h.types)&&h.types.length>1?h.types.map(typeLabel).join('・')+'（まとめ通知）':typeLabel(h.type))+'：'+({sent:'送信済み',partial:'一部成功',error:'失敗',skipped:'スキップ'}[h.result]||'不明')+(h.reason&&reasons[h.reason]?'（'+reasons[h.reason]+'）':'');if(Array.isArray(h.targets)){const details=document.createElement('div');details.className='tiny';details.textContent=h.targets.map(t=>t.name+'：'+({sent:'成功',error:'失敗',skipped:'スキップ'}[t.result]||'不明')+(reasons[t.reason]?'（'+reasons[t.reason]+'）':'')).join(' ／ ');li.append(details);}list.append(li);
   }
   renderChoices();
   if(!list.childElementCount){const li=document.createElement('li');li.textContent='通知履歴なし';list.append(li);}
@@ -115,12 +124,16 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   finally{saving=false;setButtons();}
  });
  async function send(text){
-  text=String(text||'').trim();if(!ready||dirty||!cfg.enabled||!text||text.length>160)return;
-  if(!confirm('指定したGoogle Homeから優先して読み上げます。再生中の音楽などが停止する場合があります。よろしいですか？'))return;
+  text=String(text||'').trim();if(!ready||dirty||saving||sending||!cfg.enabled||!text||text.length>160)return;
+  if(!queueReady())return toast('連携PCをv3.22.0以降へ更新してください。');
+  if(!confirm('指定したGoogle Homeに音声通知を依頼します。再生中の音楽などが停止する場合があります。よろしいですか？'))return;
+  sending=true;setButtons();
   try{
-   await dbApi.updateDoc(configRef,{command:{id:crypto.randomUUID(),text,at:dbApi.serverTimestamp()}});
-   toast('音声通知を依頼しました。結果は接続状態・履歴で確認してください。');
-  }catch(e){toast('通知依頼に失敗しました。');}
+   const id=crypto.randomUUID();
+   await dbApi.setDoc(dbApi.doc(db,'households',householdId,'googleHomeCommands',id),{text,at:dbApi.serverTimestamp()});
+   toast('音声通知を受け付けました。待機状況と履歴を確認してください。');
+  }catch(e){toast('通知依頼に失敗：'+errorMessage(e));}
+  finally{sending=false;setButtons();}
  }
  get('test').addEventListener('click',()=>send('あそぶ・やすむのGoogle Home連携テストです。'));
  get('send').addEventListener('click',()=>send(get('message').value));

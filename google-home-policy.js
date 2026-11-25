@@ -76,10 +76,10 @@ export function restDeadline(p,settings){const start=Number(p?.restStart)||0,raw
 }
 export function label(id,p){const n=String(p?.name||'').trim();return n&&n!=='お姉ちゃん'&&n!=='弟くん'?n:(id==='older'?'子ども1':'子ども2');}
 const when=t=>new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',hour:'numeric',minute:'numeric',month:'numeric',day:'numeric'}).format(t);
-export function timedEvents(profiles,settings,c,now=Date.now()){
+export function timedEvents(profiles,settings,c,now=Date.now(),validationWindow=0){
  const out=[];
  function add(type,key,at,text,grace=45000){
-  if(c.types?.[type]&&at>0&&now>=at&&now-at<grace)out.push({type,key:type+':'+key,at,text});
+  if(c.types?.[type]&&at>0&&now>=at&&now-at<(validationWindow||grace))out.push({type,key:type+':'+key,at,text});
  }
  for(const [id,p] of Object.entries(profiles)){
   if(!p)continue;const name=label(id,p),game=Number(p.activeStart)||0,video=stamp(p.videoStartedAt),start=game||video;
@@ -111,14 +111,14 @@ export function timedEvents(profiles,settings,c,now=Date.now()){
 export function rewardEvent(id,r,profiles){
  if(!r||r.revoked||!r.pokemonNo||!['older','younger'].includes(r.childId)||r.kind==='evolution_restore')return null;
  const n=label(r.childId,profiles[r.childId]),species=pokemonName(Number(r.pokemonNo));
- return {type:'pokemon',key:'reward:'+id,at:stamp(r.claimedAt),text:r.kind==='evolution'?n+'、相棒が'+species+'に進化したよ！':n+'、'+species+'をゲットしたよ！'};
+ return {childId:r.childId,type:'pokemon',key:'reward:'+id,at:stamp(r.claimedAt),text:r.kind==='evolution'?n+'、相棒が'+species+'に進化したよ！':n+'、'+species+'をゲットしたよ！'};
 }
 const activities={study:'勉強',reading:'読書',exercise:'運動',helping:'お手伝い',cleaning:'片付け',creating:'ものづくり',practicing:'練習',trying:'新しいことへの挑戦',persevering:'最後まで頑張ること',outingCalm:'お出かけ',upstairs21:'夜9時までに2階に上がること'};
 export function approvalEvents(id,r,profiles){
  if(r?.status!=='approved'||!['older','younger'].includes(r.childId))return [];
  const n=label(r.childId,profiles[r.childId]),at=stamp(r.reviewedAt),xp=Number(r.slotNo)>5?(r.awardedXp===5?5:2):10;
- return [{type:'activity',key:'approval:'+id,at,text:n+'、'+(activities[r.activityKind]||'チャレンジ')+'が承認されたよ！'},
-  {type:'xp',key:'xp:'+id,at,text:n+'、相棒の経験値が'+xp+'ポイント増えたよ。'}];
+ return [{childId:r.childId,type:'activity',key:'approval:'+id,at,text:n+'、'+(activities[r.activityKind]||'チャレンジ')+'が承認されたよ！'},
+  {childId:r.childId,type:'xp',key:'xp:'+id,at,text:n+'、相棒の経験値が'+xp+'ポイント増えたよ。'}];
 }
 // All eleven current activities must be approved on the same reward day.
 export function allDoneEvents(rows,profiles){
@@ -131,7 +131,7 @@ export function allDoneEvents(rows,profiles){
  for(const [key,group] of groups){
   if(new Set(group.map(r=>r.activityKind)).size!==Object.keys(activities).length)continue;
   const id=group[0].childId,at=Math.max(...group.map(r=>stamp(r.reviewedAt)));
-  if(at>0)out.push({type:'allDone',key:'all:'+key,at,text:label(id,profiles[id])+'、今日の11チャレンジを全部達成したね！'});
+  if(at>0)out.push({childId:id,type:'allDone',key:'all:'+key,at,text:label(id,profiles[id])+'、今日の11チャレンジを全部達成したね！'});
  }
  return out;
 }
@@ -139,7 +139,7 @@ export function rewardEvents(id,r,profiles){
  const out=[],pokemon=rewardEvent(id,r,profiles);
  if(pokemon)out.push(pokemon);
  if(r?.kind==='rest_completed'&&!r.revoked&&['older','younger'].includes(r.childId))
-  out.push({type:'xp',key:'game-xp:'+id,at:stamp(r.claimedAt),text:label(r.childId,profiles[r.childId])+'、ゲームと休憩のごほうびで相棒の経験値を5ポイント獲得したよ。'});
+  out.push({childId:r.childId,type:'xp',key:'game-xp:'+id,at:stamp(r.claimedAt),text:label(r.childId,profiles[r.childId])+'、ゲームと休憩のごほうびで相棒の経験値を5ポイント獲得したよ。'});
  return out;
 }
 export function eligibleNotice(e,c,now=Date.now(),maxAge=60000){
@@ -153,13 +153,13 @@ export function inventoryEvents(id,before,after,profile,at){
  const key=id+':'+after.version;
  if(uid&&uid===before.buddyId&&xp>old){
   const level=Math.min(99,1+Math.floor(xp/20));
-  if(level>Math.min(99,1+Math.floor(old/20)))out.push({type:'level',key:'level:'+key,at,text:n+'、相棒がレベル'+level+'になったよ！'});
+  if(level>Math.min(99,1+Math.floor(old/20)))out.push({childId:id,type:'level',key:'level:'+key,at,text:n+'、相棒がレベル'+level+'になったよ！'});
   const no=Number(Object.keys(after.owned||{}).find(k=>after.owned[k]===uid));
   const max=[151,251,386,493,649,721,809,905,1025][unlock.filter(x=>Object.keys(after.seen||{}).length>=x).length];
   if((EVOLUTION_TARGETS[no]||[]).some(to=>{const needed=evolutionStage(to)>=3?180:80;return old<needed&&xp>=needed&&to<=max&&!after.owned?.[to]&&!after.reserved?.[to];}))
-   out.push({type:'evolveReady',key:'evolve:'+key,at,text:n+'、相棒が進化できるようになったよ！'});
+   out.push({childId:id,type:'evolveReady',key:'evolve:'+key,at,text:n+'、相棒が進化できるようになったよ！'});
  }
  const oldCount=Object.keys(before.seen||{}).length,count=Object.keys(after.seen||{}).length;
- for(let i=0;i<unlock.length;i++)if(oldCount<unlock[i]&&count>=unlock[i])out.push({type:'generation',key:'generation:'+id+':'+i,at,text:n+'、第'+(i+2)+'世代のポケモンが解放されたよ！'});
+ for(let i=0;i<unlock.length;i++)if(oldCount<unlock[i]&&count>=unlock[i])out.push({childId:id,type:'generation',key:'generation:'+id+':'+i,at,text:n+'、第'+(i+2)+'世代のポケモンが解放されたよ！'});
  return out;
 }
