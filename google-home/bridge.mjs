@@ -25,6 +25,7 @@ function persist(){
  const now=Date.now();saved.seen=Object.fromEntries(Object.entries(saved.seen).filter(([,at])=>now-at<3*DAY).slice(-3000));
  saved.history=saved.history.slice(0,20);
  saved.pending=[...pending.values()];saved.owner=uid;
+ saved.inFlight=activeBatch?{at:Date.now(),types:activeBatch.batch.map(e=>e.type)}:null;
  writeFileSync(statePath+'.tmp',JSON.stringify(saved),{mode:0o600});renameSync(statePath+'.tmp',statePath);
 }
 const email=process.env.GH_EMAIL,password=process.env.GH_PASSWORD;
@@ -40,6 +41,7 @@ const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unav
 const pending=new Map(),freshDocs=new Set();
 let activeBatch=null,lastStatus=0,statusDirty=true,statusWriting=false;const deleting=new Set();
 for(const e of saved.owner===uid&&Array.isArray(saved.pending)?saved.pending:[])if(validQueued(e,Date.now())&&!saved.seen[e.key]&&pending.size<MAX_PENDING)pending.set(e.key,e);
+if(saved.owner===uid&&Array.isArray(saved.inFlight?.types)&&saved.inFlight.types.length){saved.history.unshift({at:Date.now(),type:saved.inFlight.types[0],types:saved.inFlight.types.slice(0,4),result:'skipped',reason:'interrupted'});persist();}
 function clearPending(){if(pending.size){for(const e of pending.values())terminal(e,'stale');persist();statusDirty=true;}}
 function remember(e){saved.seen[e.key]=Date.now();}
 function terminal(e,reason){pending.delete(e.key);remember(e);saved.history.unshift({at:Date.now(),type:e.type,result:'skipped',reason});statusDirty=true;}
@@ -155,7 +157,7 @@ async function status(){
  try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())});}catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
 }
 async function maybeScan(){
- if(!cfg||playing||probing||Date.now()-onlineAt>90000)return;
+ if(!cfg||playing||probing||pending.size||Date.now()-onlineAt>90000)return;
  const requested=stamp(cfg.scanRequestedAt);
  if(Date.now()-lastProbe<300000&&requested<=lastScanRequest)return;
  if(Date.now()-lastProbe<10000)return;
@@ -206,13 +208,14 @@ async function deliver(){
  if(['pokemon','activity','xp','level','evolveReady','allDone','generation'].includes(first.type)&&now-(first.queuedAt||first.at)<2000)return;
  const selected=batchFor(first,pending.values(),cfg),batch=selected.batch;
  const targets=routeTargets(cfg,first.type),results=[];
+ const targetKey=JSON.stringify(targets.map(t=>t.id||'name:'+t.name).sort());
  // Claim before invoking Cast: interrupted in-flight audio is never replayed on restart.
  for(const e of batch){pending.delete(e.key);remember(e);}
  activeBatch=selected;playing=true;state='busy';persist();statusDirty=true;
  try{
   for(const target of targets){
    const name=discovered.find(d=>d.id===target.id)?.name||target.name||'未検出のスピーカー';
-   const currentBatch=()=>batch.map(e=>liveEvent(e,cfg,profiles,settings,Date.now())).filter(e=>e&&routeTargets(cfg,e.type).some(t=>t.id===target.id&&t.name===target.name));
+   const currentBatch=()=>batch.map(e=>liveEvent(e,cfg,profiles,settings,Date.now())).filter(e=>e&&JSON.stringify(routeTargets(cfg,e.type).map(t=>t.id||'name:'+t.name).sort())===targetKey);
    const speak=async()=>{
     const live=currentBatch();
     if(!current()||!live.length)return {result:'skipped',reason:'stale'};
