@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,rewardEvents,allDoneEvents,eligibleNotice,MIN,routeTargets,knownSpeakers,deliverySummary,speakerIds} from '../google-home-policy.js';
+import {defaultConfig,timedEvents,restDeadline,quiet,approvalEvents,inventoryEvents,rewardEvents,allDoneEvents,eligibleNotice,MIN,routeTargets,knownSpeakers,deliverySummary,speakerIds,normalizeClock,compactRoutes} from '../google-home-policy.js';
 const ts=n=>({toMillis:()=>n});
 const at=Date.parse('2026-11-23T15:00:00+09:00');
 const cfg=()=>({...defaultConfig(),enabled:true,types:Object.fromEntries(Object.keys(defaultConfig().types).map(k=>[k,true]))});
@@ -108,4 +108,14 @@ test('delivery result is partial if only some selected targets succeed',()=>{
  assert.deepEqual(deliverySummary([{result:'sent'},{result:'sent'}]),{result:'sent'});
  assert.deepEqual(deliverySummary([{result:'skipped',reason:'muted'}]),{result:'skipped',reason:'muted'});
  assert.equal(deliverySummary([]).result,'error');
+});
+
+test('mobile time input values are normalized to minute precision',()=>{
+ for(const value of ['07:00','07:00:00','07:00:00.000'])assert.equal(normalizeClock(value),'07:00');
+ for(const value of ['', '24:00','7:00','07:60','invalid'])assert.equal(normalizeClock(value),null);
+});
+test('only actual route overrides are saved; clearing routes produces an empty map',()=>{
+ const id='12345678-1234-1234-1234-123456789abc';
+ assert.deepEqual(compactRoutes({manual:[id,id],bedtime:[],unknown:[id]}),{manual:id});
+ assert.deepEqual(compactRoutes({manual:[],bedtime:''}),{});
 });

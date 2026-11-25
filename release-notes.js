@@ -2,8 +2,16 @@
 // バージョンを公開するたび、先頭に1件追加すること。
 // date は確認済みの公開日だけ記入。推測で日付を付けないこと。
 // 旧版は当時の主要変更をまとめたもの。細かな修正をすべて列挙しているわけではありません。
-export const APP_VERSION = 'v3.21.0';
+export const APP_VERSION = 'v3.21.1';
 export const RELEASE_NOTES = Object.freeze([
+  {
+    version:'v3.21.1',title:'Google Home連携設定の保存改善',
+    changes:[
+      'スマートフォンを含む端末間で時刻・数値の保存形式を統一',
+      '個別通知先の未指定項目を整理し、解除した設定が残らないよう改善',
+      '保存失敗時の原因表示と保存中の二重操作防止'
+    ]
+  },
   {
     version:'v3.21.0',title:'Google Homeの複数スピーカー管理',
     changes:[

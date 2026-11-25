@@ -70,6 +70,16 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertFails(getDoc(d(kid,'googleHome','status')));
   await assertSucceeds(updateDoc(config(parent),{routes:Object.fromEntries([...Object.keys(setup.types),'manual'].map(k=>[k,ids.join(',')]))}));
 
+  // Same write shape as the actual settings form; preserve command and scan timestamps.
+  const formData={...setup,speakerIds:[ids[0]],routes:{manual:ids[0]}};
+  await assertSucceeds(setDoc(config(parent),formData,{mergeFields:Object.keys(formData)}));
+  assert.deepEqual((await getDoc(config(parent))).data().routes,{manual:ids[0]});
+  const cleared={...formData,routes:{}};
+  await assertSucceeds(setDoc(config(parent),cleared,{mergeFields:Object.keys(cleared)}));
+  const afterClear=(await getDoc(config(parent))).data();
+  assert.deepEqual(afterClear.routes,{});
+  assert.equal(afterClear.command.id,'abc');
+  assert.ok(afterClear.scanRequestedAt);
   await assertSucceeds(updateDoc(config(parent),{enabled:false,bridgeUid:''}));
   await assertFails(getDoc(d(bridge,'profiles','older')));
   await assertFails(setDoc(d(bridge,'googleHome','status'),status));

@@ -1,15 +1,15 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.21.0';
-import {effectivePausedMillis} from './pause-timing.js?v=3.21.0';
-import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.21.0';
-import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.21.0';
-import {canResumeInMorning} from './early-resume-policy.js?v=3.21.0';
-import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.21.0';
-import {setupFeedback} from './feedback.js?v=3.21.0';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.21.0';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.21.0';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.21.1';
+import {effectivePausedMillis} from './pause-timing.js?v=3.21.1';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.21.1';
+import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.21.1';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.21.1';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.21.1';
+import {setupFeedback} from './feedback.js?v=3.21.1';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.21.1';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.21.1';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -2976,7 +2976,7 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
 function initUiEvents(){
   feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
   // Optional integration is isolated from the existing application.
-  if(isParentPage)import('./google-home-ui.js?v=3.21.0').then(({setupGoogleHome})=>{
+  if(isParentPage)import('./google-home-ui.js?v=3.21.1').then(({setupGoogleHome})=>{
     googleHomeUi=setupGoogleHome({dbApi,db,householdId,toast});
     if(uid&&role==='parent')googleHomeUi.start();
   }).catch(()=>{const el=$('gh-state');if(el)el.textContent='Google Home設定画面を読み込めませんでした。';});

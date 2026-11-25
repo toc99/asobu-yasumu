@@ -1,4 +1,4 @@
-import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS} from './google-home-policy.js';
+import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.21.1';
 const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
@@ -12,7 +12,12 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
    line.append(input,document.createTextNode(' '+label));switches.append(line);
  }
  let cfg=defaultConfig(),status=null,subs=[],dirty=false,ready=false,active=false,timer=null;
- let draftIds=[],draftRoutes={};
+ let draftIds=[],draftRoutes={},saving=false;
+ const times=new Set(['quietStart','quietEnd','bedtime']);
+ const bounds={volume:[5,80],gameMinutes:[1,240],warningMinutes:[1,30],forgottenMinutes:[1,30]};
+ const fieldLabels={volume:'通知音量',gameMinutes:'ゲームのお知らせ時間',warningMinutes:'終了予告',forgottenMinutes:'終了押し忘れの確認',quietStart:'静音開始時刻',quietEnd:'静音終了時刻',bedtime:'就寝準備時刻'};
+ function errorMessage(e){const code=String(e?.code||'unknown').replace(/^firestore\//,'');return ({'permission-denied':'保存権限または設定値の検証で拒否されました','unavailable':'通信できません','unauthenticated':'ログイン状態を確認してください','invalid-argument':'設定値が不正です','deadline-exceeded':'通信がタイムアウトしました'})[code]||'通信・保存エラー（'+(/^[a-z-]{1,50}$/.test(code)?code:'unknown')+'）';}
+ function saveMessage(text){get('save-result').textContent=text;toast(text);}
  const routeType=get('route-type');
  for(const [type,label] of Object.entries(ROUTE_TYPES)){
   const option=document.createElement('option');option.value=type;option.textContent=label;routeType.append(option);
@@ -58,7 +63,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   for(const input of switches.querySelectorAll('input'))input.checked=c.types?.[input.name]===true;
   draftIds=speakerIds(c.speakerIds);draftRoutes=Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(c.routes?.[k])]));renderChoices();
  }
- function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready);get('send').disabled=!ready||dirty||!cfg.enabled;get('test').disabled=!ready||dirty||!cfg.enabled;get('scan').disabled=!ready||!cfg.bridgeUid;}
+ function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready||saving);get('send').disabled=!ready||dirty||saving||!cfg.enabled;get('test').disabled=!ready||dirty||saving||!cfg.enabled;get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
  function renderStatus(){
   const age=Date.now()-stamp(status?.updatedAt);
   const fresh=!!status&&status.bridgeUid===cfg.bridgeUid&&age>=-30000&&age<150000;
@@ -72,7 +77,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   renderChoices();
   if(!list.childElementCount){const li=document.createElement('li');li.textContent='通知履歴なし';list.append(li);}
  }
- function stop(){active=false;ready=false;dirty=false;subs.forEach(fn=>fn());subs=[];clearInterval(timer);timer=null;cfg=defaultConfig();status=null;fill(cfg);renderStatus();setButtons();}
+ function stop(){active=false;ready=false;dirty=false;saving=false;get('save-result').textContent='';subs.forEach(fn=>fn());subs=[];clearInterval(timer);timer=null;cfg=defaultConfig();status=null;fill(cfg);renderStatus();setButtons();}
  function start(){
   if(active)return;active=true;
   subs.push(dbApi.onSnapshot(configRef,{includeMetadataChanges:true},s=>{
@@ -85,14 +90,29 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
  }
  form.addEventListener('input',e=>{if(e.target===routeType)return;dirty=true;setButtons();});
  form.addEventListener('submit',async e=>{
-  e.preventDefault();if(!ready)return;
-  const data={enabled:get('enabled').checked,types:{},speakerIds:draftIds,routes:Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,(draftRoutes[k]||[]).join(',')]))};
-  for(const name of fields)data[name]=numeric.has(name)?Number(get(name).value):get(name).value.trim();
+  e.preventDefault();if(!ready||saving)return;
+  const data={enabled:get('enabled').checked,types:{},speakerIds:speakerIds(draftIds),routes:compactRoutes(draftRoutes)};
+  for(const name of fields){
+   const raw=get(name).value.trim();
+   if(numeric.has(name)){
+    const value=Number(raw),[min,max]=bounds[name];
+    if(!raw||!Number.isInteger(value)||value<min||value>max)return saveMessage(fieldLabels[name]+'は'+min+'〜'+max+'の整数を入力してください。');
+    data[name]=value;
+   }else if(times.has(name)){
+    const value=normalizeClock(raw);
+    if(value===null)return saveMessage(fieldLabels[name]+'を確認してください。');
+    data[name]=value;
+   }else data[name]=raw;
+  }
   for(const i of switches.querySelectorAll('input'))data.types[i.name]=i.checked;
-  if(data.enabled&&(!data.bridgeUid||(!data.speaker&&!data.speakerIds.length)))return toast('連携専用UIDと共通の通知先が必要です。');
+  if(data.enabled&&(!data.bridgeUid||(!data.speaker&&!data.speakerIds.length)))return saveMessage('連携専用UIDと共通の通知先が必要です。');
+  saving=true;get('save-result').textContent='保存中…';setButtons();
   try{
-   await dbApi.setDoc(configRef,data,{merge:true});cfg={...cfg,...data};dirty=false;fill(cfg);setButtons();toast('Google Home設定を保存しました。');
-  }catch(e){toast('Google Home設定の保存に失敗しました。');}
+   // Replace only these top-level fields; do not merge stale per-type routes or touch command/scan timestamps.
+   await dbApi.setDoc(configRef,data,{mergeFields:Object.keys(data)});
+   cfg={...cfg,...data};dirty=false;fill(cfg);saveMessage('Google Home設定を保存しました。');
+  }catch(e){saveMessage('Google Home設定の保存に失敗：'+errorMessage(e));}
+  finally{saving=false;setButtons();}
  });
  async function send(text){
   text=String(text||'').trim();if(!ready||dirty||!cfg.enabled||!text||text.length>160)return;

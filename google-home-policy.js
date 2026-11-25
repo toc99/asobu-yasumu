@@ -40,6 +40,14 @@ export function deliverySummary(results){
  if(results.every(r=>r.result==='skipped'))return {result:'skipped',reason:results[0].reason};
  return {result:'error',reason:results.find(r=>r.result==='error')?.reason||'cast_error'};
 }
+// HTML time inputs can expose optional seconds; the stored policy is minute precision.
+export function normalizeClock(value){
+ const m=/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d{1,3})?)?$/.exec(String(value??'').trim());
+ return m?m[1]+':'+m[2]:null;
+}
+export function compactRoutes(routes){
+ return Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(routes?.[k]).join(',')]).filter(([,ids])=>ids));
+}
 export const stamp=x=>x?.toMillis?.()||0;
 const minute=s=>/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s||'')?Number(s.slice(0,2))*60+Number(s.slice(3)):null;
 const jstDay=t=>Math.floor((t+JST)/DAY)*DAY-JST;
