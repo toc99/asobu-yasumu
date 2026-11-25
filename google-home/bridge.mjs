@@ -1,9 +1,10 @@
 // Local Windows PC bridge. Uses Firebase client authentication, never Admin SDK.
 import {initializeApp} from 'firebase/app';
 import {getAuth,signInWithEmailAndPassword} from 'firebase/auth';
-import {getFirestore,doc,collection,onSnapshot,query,orderBy,limit,getDocFromServer,setDoc,serverTimestamp} from 'firebase/firestore';
+import {getFirestore,doc,collection,onSnapshot,query,orderBy,limit,getDocFromServer,setDoc,serverTimestamp,deleteDoc} from 'firebase/firestore';
 import {firebaseConfig,householdId} from '../firebase-config.js';
 import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvents,eligibleNotice,inventoryEvents,stamp,DAY,routeTargets,knownSpeakers,deliverySummary} from '../google-home-policy.js';
+import {MAX_PENDING,validQueued,liveEvent,sortedQueue,batchFor,safeRetry,queueView,lifetime} from '../google-home-queue.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
 import {spawn} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
@@ -23,6 +24,7 @@ let lastScanRequest=0,scannedAt=0;
 function persist(){
  const now=Date.now();saved.seen=Object.fromEntries(Object.entries(saved.seen).filter(([,at])=>now-at<3*DAY).slice(-3000));
  saved.history=saved.history.slice(0,20);
+ saved.pending=[...pending.values()];
  writeFileSync(statePath+'.tmp',JSON.stringify(saved),{mode:0o600});renameSync(statePath+'.tmp',statePath);
 }
 const email=process.env.GH_EMAIL,password=process.env.GH_PASSWORD;
@@ -36,6 +38,11 @@ const col=name=>collection(db,'households',householdId,name);
 const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status');
 const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unavailable',device='',playing=false,probing=false,lastProbe=0,stopped=false;
 const pending=new Map(),freshDocs=new Set();
+let activeBatch=null,lastStatus=0,statusDirty=true;const deleting=new Set();
+for(const e of Array.isArray(saved.pending)?saved.pending:[])if(validQueued(e,Date.now())&&!saved.seen[e.key]&&pending.size<MAX_PENDING)pending.set(e.key,e);
+function clearPending(){if(pending.size){pending.clear();persist();statusDirty=true;}}
+function remember(e){saved.seen[e.key]=Date.now();}
+function terminal(e,reason){pending.delete(e.key);remember(e);saved.history.unshift({at:Date.now(),type:e.type,result:'skipped',reason});statusDirty=true;}
 function log(msg){
  const line=new Date().toISOString()+' '+msg;console.log(line);
  try{
@@ -48,18 +55,23 @@ function listen(target,key,cb){
  return onSnapshot(target,{includeMetadataChanges:true},snap=>{
   if(snap.metadata.fromCache||snap.metadata.hasPendingWrites){if(key)freshDocs.delete(key);return;}
   if(key)freshDocs.add(key);cb(snap);
- },e=>{onlineAt=0;freshDocs.clear();pending.clear();log('Firebase listener disconnected: '+e.code);process.exit(2);});
+ },e=>{onlineAt=0;freshDocs.clear();clearPending();log('Firebase listener disconnected: '+e.code);process.exit(2);});
 }
 const unsub=[];
 function push(e){
- if(!current()||!eligibleNotice(e,cfg)||saved.seen[e.key]||pending.has(e.key))return;
- pending.set(e.key,e);
+ if(!cfg||cfg.bridgeUid!==uid||!validQueued(e,Date.now())||!eligibleNotice(e,cfg,Date.now(),lifetime(e))||saved.seen[e.key]||pending.has(e.key))return false;
+ if(pending.size>=MAX_PENDING){
+  const candidates=sortedQueue([...pending.values(),e]),drop=candidates.at(-1);
+  terminal(drop,'queue_full');
+  if(drop.key===e.key){persist();return false;}
+ }
+ pending.set(e.key,{...e,queuedAt:Date.now()});persist();statusDirty=true;return true;
 }
 function readConfig(snap){
  const data=snap.exists()?snap.data():null;
- if(!data||data.bridgeUid!==uid){onlineAt=0;pending.clear();cfg=null;return;}
+ if(!data||data.bridgeUid!==uid){onlineAt=0;clearPending();cfg=null;return;}
  const base=defaultConfig(),old=cfg;cfg={...base,...data,types:{...base.types,...data.types}};
- if(!cfg.enabled){pending.clear();state='disabled';}
+ if(!cfg.enabled){clearPending();state='disabled';}
  if(old?.speaker!==cfg.speaker||JSON.stringify(old?.speakerIds)!==JSON.stringify(cfg.speakerIds)){lastProbe=0;device='';state=cfg.enabled?'unavailable':'disabled';}
  if(cfg.enabled&&cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
 }
@@ -72,7 +84,7 @@ for(const id of ['older','younger']){
  unsub.push(listen(ref('profiles',id),'profile:'+id,s=>profiles[id]=s.exists()?s.data():null));
  unsub.push(listen(ref('pokemonInventory',id),null,s=>{
   const before=inventory[id],after=s.exists()?s.data():null;inventory[id]=after;
-  if(current()&&before&&after&&after.version!==before.version)
+  if(before&&after&&after.version!==before.version)
    for(const e of inventoryEvents(id,before,after,profiles[id],stamp(after.updatedAt)))push(e);
  }));
 }
@@ -88,6 +100,21 @@ unsub.push(listen(query(col('activityRequests'),orderBy('reviewedAt','desc'),lim
  if(!approvalBaseline){approvalBaseline=true;return;}
  for(const ch of s.docChanges())for(const e of approvalEvents(ch.doc.id,ch.doc.data(),profiles))push(e);
  for(const e of allDoneEvents(s.docs.map(d=>d.data()),profiles))push(e);
+}));
+// Each manual request has its own document. Delete only after durable admission or terminal discard.
+unsub.push(listen(query(col('googleHomeCommands'),orderBy('at','desc'),limit(40)),null,s=>{
+ for(const d of s.docs){
+  if(deleting.has(d.id))continue;
+  const r=d.data(),e={type:'manual',key:'manual:'+d.id,at:stamp(r.at),text:r.text};
+  if(!cfg||cfg.bridgeUid!==uid)continue;
+  if(validQueued(e,Date.now())&&cfg.enabled&&!saved.seen[e.key]&&!pending.has(e.key)){
+   push(e);
+   if(!pending.has(e.key)&&!saved.seen[e.key])continue;
+  }else if(!saved.seen[e.key]&&!pending.has(e.key)){
+   terminal(e,'stale');persist();
+  }
+  deleting.add(d.id);deleteDoc(d.ref).catch(()=>log('Manual queue acknowledgement failed.')).finally(()=>deleting.delete(d.id));
+ }
 }));
 const castReasons=new Set(['muted','media_busy','other_app','status_unavailable','speaker_not_unique','tts_failed','tts_duration','receiver_no_start','receiver_no_finish','cast_error','timeout','process_error']);
 const safeReason=value=>castReasons.has(value)?value:'cast_error';
@@ -124,7 +151,7 @@ function cast(op,text='',manual=false,target={}){
 }
 async function status(){
  if(!cfg||Date.now()-onlineAt>90000)return;
- try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt});}catch(e){log('Status update failed: '+e.code);}
+ try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())});lastStatus=Date.now();statusDirty=false;}catch(e){log('Status update failed: '+e.code);}
 }
 async function maybeScan(){
  if(!cfg||playing||probing||Date.now()-onlineAt>90000)return;
@@ -164,49 +191,66 @@ async function health(){
   freshDocs.add('config');freshDocs.add('settings');freshDocs.add('profile:older');freshDocs.add('profile:younger');
   await maybeScan();
   await status();
- }catch(e){onlineAt=0;freshDocs.clear();pending.clear();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
+ }catch(e){onlineAt=0;freshDocs.clear();clearPending();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
  finally{if(!stopped)setTimeout(health,60000);}
 }
-async function pump(){
+async function deliver(){
+ if(playing||probing||!current()||!settings||!profiles.older||!profiles.younger)return;
+ const now=Date.now();
+ let changed=false;for(const e of pending.values())if(!liveEvent(e,cfg,profiles,settings,now)){terminal(e,'stale');changed=true;}
+ if(changed)persist();
+ const first=sortedQueue(pending.values())[0];
+ if(!first)return;
+ // Allow related reward listeners a brief collection window; manual and time-critical notices are immediate.
+ if(['pokemon','activity','xp','level','evolveReady','allDone','generation'].includes(first.type)&&now-(first.queuedAt||first.at)<2000)return;
+ const selected=batchFor(first,pending.values(),cfg),batch=selected.batch;
+ const targets=routeTargets(cfg,first.type),results=[];
+ // Claim before invoking Cast: interrupted in-flight audio is never replayed on restart.
+ for(const e of batch){pending.delete(e.key);remember(e);}
+ activeBatch=selected;playing=true;state='busy';persist();statusDirty=true;
+ try{
+  for(const target of targets){
+   const name=discovered.find(d=>d.id===target.id)?.name||target.name||'未検出のスピーカー';
+   const currentBatch=()=>batch.map(e=>liveEvent(e,cfg,profiles,settings,Date.now())).filter(e=>e&&routeTargets(cfg,e.type).some(t=>t.id===target.id&&t.name===target.name));
+   const speak=async()=>{
+    const live=currentBatch();
+    if(!current()||!live.length)return {result:'skipped',reason:'stale'};
+    const text=batchFor(live[0],live,cfg).text;
+    return cast('speak',text,first.type==='manual',target);
+   };
+   try{
+    let r=await speak();
+    if(safeRetry(r)&&current()&&currentBatch().length){await new Promise(resolve=>setTimeout(resolve,1500));r=await speak();}
+    const result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
+    results.push({name:String(r.device||name).slice(0,100),result,...(result==='sent'?{}:{reason:r.reason==='stale'?'stale':safeReason(r.reason)})});
+   }catch{results.push({name,result:'error',reason:'cast_error'});}
+  }
+  const summary=deliverySummary(results),result=summary.result,reason=summary.reason;
+  state=result==='sent'||result==='partial'||result==='skipped'?'ready':'error';
+  device=results.filter(r=>r.result==='sent').map(r=>r.name).join(' / ')||device;
+  log('Notification result: '+batch.map(e=>e.type).join('+')+' '+result+' ('+results.filter(r=>r.result==='sent').length+'/'+results.length+')');
+  saved.history.unshift({at:Date.now(),type:first.type,types:batch.map(e=>e.type),result,...(reason?{reason}:{}),targets:results});
+ }finally{activeBatch=null;playing=false;persist();statusDirty=true;}
+}
+function pump(){
  if(stopped)return;
- if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest)void maybeScan();
- if(current()&&settings&&profiles.older&&profiles.younger){
-  for(const e of timedEvents(profiles,settings,cfg))push(e);
-  if(cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
-  for(const [key,e] of pending)if(Date.now()-e.at>60000)pending.delete(key);
-  if(!playing&&!probing&&pending.size){
-   // Re-check scheduled notices against the latest profile (pause, undo, switch, override).
-   const liveKeys=new Set(timedEvents(profiles,settings,cfg).map(x=>x.key));
-   for(const [k,e] of pending)if(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime'].includes(e.type)&&!liveKeys.has(k))pending.delete(k);
-   if(!pending.size){setTimeout(pump,1000);return;}
-   const [key,e]=pending.entries().next().value;pending.delete(key);
-   if(!saved.seen[key]&&(e.type==='manual'||(cfg.types?.[e.type]&&!quiet(cfg,Date.now())))){
-    // Persist before playback to prevent repeated speech after an interruption/crash.
-    saved.seen[key]=Date.now();persist();playing=true;state='busy';
-    const targets=routeTargets(cfg,e.type),results=[];
-    void status();
-    for(const target of targets){
-     const name=discovered.find(d=>d.id===target.id)?.name||target.name||'未検出のスピーカー';
-     // Never substitute a different device if a selected UUID is offline.
-     if(!current()||!eligibleNotice(e,cfg,Date.now(),180000)){results.push({name,result:'skipped',reason:'stale'});continue;}
-     try{
-      const r=await cast('speak',String(e.text).slice(0,160),e.type==='manual',target);
-      const result=r.result==='sent'?'sent':r.result==='skipped'?'skipped':'error';
-      results.push({name:String(r.device||name).slice(0,100),result,...(result==='sent'?{}:{reason:safeReason(r.reason)})});
-     }catch{results.push({name,result:'error',reason:'cast_error'});}
-    }
-    const summary=deliverySummary(results),result=summary.result,reason=summary.reason;
-    state=result==='sent'||result==='partial'||result==='skipped'?'ready':'error';
-    device=results.filter(r=>r.result==='sent').map(r=>r.name).join(' / ')||device;
-    log('Notification result: '+e.type+' '+result+' ('+results.filter(r=>r.result==='sent').length+'/'+results.length+')');
-    saved.history.unshift({at:Date.now(),type:e.type,result,...(reason?{reason}:{}),targets:results});persist();playing=false;
-    void status();
+ try{
+  if(current()&&settings&&profiles.older&&profiles.younger){
+   for(const e of timedEvents(profiles,settings,cfg))push(e);
+   if(cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
+   let changed=false;
+   for(const e of pending.values())if(!validQueued(e,Date.now())){terminal(e,'stale');changed=true;}
+   if(changed)persist();
+   if(!playing&&!probing){
+    if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest&&!pending.size)void maybeScan();
+    else if(pending.size)void deliver().catch(()=>{log('Queue delivery failed.');process.exit(2);});
    }
   }
- }else pending.clear();
+  if(statusDirty&&Date.now()-lastStatus>=5000){lastStatus=Date.now();void status();}
+ }catch{log('Queue processing failed.');process.exit(2);}
  if(!stopped)setTimeout(pump,1000);
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge v3.21.0 multi-speaker; waiting for authorized configuration.');
+log('Google Home bridge v3.22.0 notification queue; waiting for authorized configuration.');
 void health();void pump();
