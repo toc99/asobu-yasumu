@@ -7,7 +7,7 @@ node -e 'if (+process.versions.node.split(".")[0] !== 22) { console.error("Node.
 python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
 command -v open_jtalk >/dev/null
 command -v flock >/dev/null
-npm ci --no-audit --no-fund
+npm install --no-audit --no-fund
 python3 -m venv google-home/.venv
 google-home/.venv/bin/python -m pip install -r google-home/requirements.txt
 install -d -m 700 google-home/.local
