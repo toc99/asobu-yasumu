@@ -794,3 +794,38 @@ body[data-role="parent"] #settings-form input[type="date"]::-webkit-date-and-tim
 .retro-threshold strong,.retro-threshold p{flex-basis:100%;margin:0}
 .retro-threshold p{font-size:13px;line-height:1.6}
 @media(max-width:580px){.retro-report-admin .retro-summary{grid-template-columns:1fr}.retro-review-actions .btn,.retro-threshold button{flex:1 1 100%}}
+
+/* v3.21.2: compact native Google Home checkboxes, with tappable label rows. */
+#google-home-panel .gh-check-row {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-width:0;
+  min-height:30px;
+  padding:3px 0;
+  font-size:14px;
+  font-weight:600;
+  line-height:1.5;
+  overflow-wrap:anywhere;
+  cursor:pointer;
+}
+#google-home-panel .gh-check-row input[type="checkbox"] {
+  -webkit-appearance:checkbox;
+  appearance:auto;
+  flex:0 0 16px;
+  width:16px;
+  height:16px;
+  min-width:16px;
+  min-height:16px;
+  max-width:16px;
+  max-height:16px;
+  margin:0;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  accent-color:var(--blue);
+}
+#google-home-panel .gh-check-row input[type="checkbox"]:disabled {cursor:not-allowed;}
+#google-home-panel .gh-check-row span {min-width:0;}
+@media(pointer:coarse){#google-home-panel .gh-check-row{min-height:44px;padding:5px 0;}}
