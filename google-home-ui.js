@@ -8,8 +8,8 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
  const fields=['bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime'];
  const numeric=new Set(['volume','gameMinutes','warningMinutes','forgottenMinutes']);
  const switches=get('types');for(const [key,label] of Object.entries(TYPES)){
-   const line=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.name=key;
-   line.append(input,document.createTextNode(' '+label));switches.append(line);
+   const line=document.createElement('label'),input=document.createElement('input');line.className='gh-check-row';input.type='checkbox';input.name=key;
+   const caption=document.createElement('span');caption.textContent=label;line.append(input,caption);switches.append(line);
  }
  let cfg=defaultConfig(),status=null,subs=[],dirty=false,ready=false,active=false,timer=null;
  let draftIds=[],draftRoutes={},saving=false;
@@ -33,10 +33,10 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
    container.replaceChildren();
    if(!rows.length){container.textContent='連携PCで機器を検出してください。';return;}
    for(const d of rows){
-    const line=document.createElement('label'),input=document.createElement('input');
+    const line=document.createElement('label'),input=document.createElement('input');line.className='gh-check-row';
     input.type='checkbox';input.checked=selected.includes(d.id);
     input.disabled=!ready||(!input.checked&&selected.length>=MAX_SPEAKERS);
-    line.append(input,document.createTextNode(' '+d.name+(d.online?'':'（未検出）')));
+    const caption=document.createElement('span');caption.textContent=d.name+(d.online?'':'（未検出）');line.append(input,caption);
     input.addEventListener('change',()=>{
      const next=input.checked?[...selected,d.id]:selected.filter(x=>x!==d.id);
      change(speakerIds(next));dirty=true;renderChoices();setButtons();
