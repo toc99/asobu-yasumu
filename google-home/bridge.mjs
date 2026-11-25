@@ -24,7 +24,7 @@ let lastScanRequest=0,scannedAt=0;
 function persist(){
  const now=Date.now();saved.seen=Object.fromEntries(Object.entries(saved.seen).filter(([,at])=>now-at<3*DAY).slice(-3000));
  saved.history=saved.history.slice(0,20);
- saved.pending=[...pending.values()];
+ saved.pending=[...pending.values()];saved.owner=uid;
  writeFileSync(statePath+'.tmp',JSON.stringify(saved),{mode:0o600});renameSync(statePath+'.tmp',statePath);
 }
 const email=process.env.GH_EMAIL,password=process.env.GH_PASSWORD;
@@ -38,9 +38,9 @@ const col=name=>collection(db,'households',householdId,name);
 const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status');
 const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unavailable',device='',playing=false,probing=false,lastProbe=0,stopped=false;
 const pending=new Map(),freshDocs=new Set();
-let activeBatch=null,lastStatus=0,statusDirty=true;const deleting=new Set();
-for(const e of Array.isArray(saved.pending)?saved.pending:[])if(validQueued(e,Date.now())&&!saved.seen[e.key]&&pending.size<MAX_PENDING)pending.set(e.key,e);
-function clearPending(){if(pending.size){pending.clear();persist();statusDirty=true;}}
+let activeBatch=null,lastStatus=0,statusDirty=true,statusWriting=false;const deleting=new Set();
+for(const e of saved.owner===uid&&Array.isArray(saved.pending)?saved.pending:[])if(validQueued(e,Date.now())&&!saved.seen[e.key]&&pending.size<MAX_PENDING)pending.set(e.key,e);
+function clearPending(){if(pending.size){for(const e of pending.values())terminal(e,'stale');persist();statusDirty=true;}}
 function remember(e){saved.seen[e.key]=Date.now();}
 function terminal(e,reason){pending.delete(e.key);remember(e);saved.history.unshift({at:Date.now(),type:e.type,result:'skipped',reason});statusDirty=true;}
 function log(msg){
@@ -55,7 +55,7 @@ function listen(target,key,cb){
  return onSnapshot(target,{includeMetadataChanges:true},snap=>{
   if(snap.metadata.fromCache||snap.metadata.hasPendingWrites){if(key)freshDocs.delete(key);return;}
   if(key)freshDocs.add(key);cb(snap);
- },e=>{onlineAt=0;freshDocs.clear();clearPending();log('Firebase listener disconnected: '+e.code);process.exit(2);});
+ },e=>{onlineAt=0;freshDocs.clear();log('Firebase listener disconnected: '+e.code);process.exit(2);});
 }
 const unsub=[];
 function push(e){
@@ -150,8 +150,9 @@ function cast(op,text='',manual=false,target={}){
  });
 }
 async function status(){
- if(!cfg||Date.now()-onlineAt>90000)return;
- try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())});lastStatus=Date.now();statusDirty=false;}catch(e){log('Status update failed: '+e.code);}
+ if(!cfg||Date.now()-onlineAt>90000||statusWriting)return;
+ statusWriting=true;statusDirty=false;lastStatus=Date.now();
+ try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())});}catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
 }
 async function maybeScan(){
  if(!cfg||playing||probing||Date.now()-onlineAt>90000)return;
@@ -191,7 +192,7 @@ async function health(){
   freshDocs.add('config');freshDocs.add('settings');freshDocs.add('profile:older');freshDocs.add('profile:younger');
   await maybeScan();
   await status();
- }catch(e){onlineAt=0;freshDocs.clear();clearPending();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
+ }catch(e){onlineAt=0;freshDocs.clear();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
  finally{if(!stopped)setTimeout(health,60000);}
 }
 async function deliver(){
@@ -235,18 +236,17 @@ async function deliver(){
 function pump(){
  if(stopped)return;
  try{
+  let expired=false;for(const e of pending.values())if(!validQueued(e,Date.now())){terminal(e,'stale');expired=true;}
+  if(expired)persist();
   if(current()&&settings&&profiles.older&&profiles.younger){
    for(const e of timedEvents(profiles,settings,cfg))push(e);
    if(cfg.command?.id)push({type:'manual',key:'manual:'+cfg.command.id,at:stamp(cfg.command.at),text:cfg.command.text});
-   let changed=false;
-   for(const e of pending.values())if(!validQueued(e,Date.now())){terminal(e,'stale');changed=true;}
-   if(changed)persist();
    if(!playing&&!probing){
-    if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest&&!pending.size)void maybeScan();
-    else if(pending.size)void deliver().catch(()=>{log('Queue delivery failed.');process.exit(2);});
+    if(pending.size)void deliver().catch(()=>{log('Queue delivery failed.');process.exit(2);});
+    else if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest)void maybeScan();
    }
   }
-  if(statusDirty&&Date.now()-lastStatus>=5000){lastStatus=Date.now();void status();}
+  if(statusDirty&&Date.now()-lastStatus>=5000)void status();
  }catch{log('Queue processing failed.');process.exit(2);}
  if(!stopped)setTimeout(pump,1000);
 }
