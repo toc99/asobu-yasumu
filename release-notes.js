@@ -2,8 +2,15 @@
 // バージョンを公開するたび、先頭に1件追加すること。
 // date は確認済みの公開日だけ記入。推測で日付を付けないこと。
 // 旧版は当時の主要変更をまとめたもの。細かな修正をすべて列挙しているわけではありません。
-export const APP_VERSION = 'v3.21.1';
+export const APP_VERSION = 'v3.21.2';
 export const RELEASE_NOTES = Object.freeze([
+  {
+    version:'v3.21.2',title:'Google Homeのチェックボックス表示改善',
+    changes:[
+      '有効化・通知先・通知種類のチェックボックスを標準的な16pxサイズに統一',
+      '項目名を横に配置し、スマートフォンでは行全体をタップ可能'
+    ]
+  },
   {
     version:'v3.21.1',title:'Google Home連携設定の保存改善',
     changes:[
