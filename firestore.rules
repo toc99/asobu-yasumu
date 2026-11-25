@@ -1443,9 +1443,19 @@ service cloud.firestore {
           && d.command.at is timestamp
           && (d.command.at == request.time || (resource != null && d.command == resource.data.get('command',{})))));
     }
+    function validSpeakerQueue(q) {
+      return q is map && q.keys().hasAll(['version','waiting','active','types','activeTypes','at'])
+        && q.keys().hasOnly(['version','waiting','active','types','activeTypes','at'])
+        && q.version == 1 && q.waiting is int && q.waiting >= 0 && q.waiting <= 100
+        && q.active is int && q.active >= 0 && q.active <= 4
+        && q.types is list && q.types.size() <= 10 && q.types.size() <= q.waiting && q.types.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+        && q.activeTypes is list && q.activeTypes.size() == q.active && q.activeTypes.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+        && q.at is int && q.at >= 0 && q.at <= request.time.toMillis()+10000;
+    }
     function validSpeakerStatus(d) {
       return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
-        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt'])
+        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue'])
+        && (!d.keys().hasAny(['queue']) || validSpeakerQueue(d.queue))
         && discoveredSpeakers(d.get('speakers',[])) && d.get('scannedAt',0) is int && d.get('scannedAt',0) >= 0 && d.get('scannedAt',0) <= request.time.toMillis()+10000
         && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
         && d.state in ['ready','unavailable','disabled','busy','error']
@@ -1454,6 +1464,19 @@ service cloud.firestore {
     }
 
     match /households/{h} {
+      // Separate immutable requests prevent concurrent parents overwriting a single command.
+      match /googleHomeCommands/{commandId} {
+        allow create: if isParent(h) && exists(speakerConfigPath(h)) && get(speakerConfigPath(h)).data.enabled == true
+          && speakerUuid(commandId)
+          && request.resource.data.keys().hasAll(['text','at'])
+          && request.resource.data.keys().hasOnly(['text','at'])
+          && request.resource.data.text is string && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 160 && request.resource.data.at == request.time;
+        allow get: if isParent(h) || isSpeaker(h);
+        allow list: if (isParent(h) || isSpeaker(h)) && request.query.limit != null && request.query.limit <= 40;
+        allow update: if false;
+        allow delete: if isSpeaker(h) || isParent(h);
+      }
       match /googleHome/{docId} {
         allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
         allow list: if false;
