@@ -92,7 +92,12 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
     const byChild=$('feedback-filter-child');
     if(byChild)for(const option of byChild.options)if(['older','younger'].includes(option.value))option.textContent=playerLabel(option.value);
     const pendingCount=reports.filter(needsParent).length;
-    if($('feedback-open-count'))$('feedback-open-count').textContent='要確認 '+pendingCount+'件';
+    if($('feedback-open-count'))$('feedback-open-count').textContent=loaded?'要確認 '+pendingCount+'件':'要確認 読み込み中';
+    const nav=$('parent-nav-feedback');if(nav){nav.textContent=pendingCount>99?'99+':String(pendingCount);nav.classList.toggle('hidden',!loaded||!pendingCount);}
+    if($('feedback-needs-count'))$('feedback-needs-count').textContent=loaded?String(pendingCount):'';
+    if($('feedback-active-count'))$('feedback-active-count').textContent=loaded?String(reports.filter(r=>!archived(r)).length):'';
+    if($('feedback-filter-active'))$('feedback-filter-active').textContent=parentFilters.child!=='all'||parentFilters.type!=='all'||parentFilters.status!=='all'||parentFilters.keyword?'（適用中）':'';
+    document.querySelectorAll('[data-feedback-scope]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.feedbackScope===parentFilters.scope)));
     if(kidList){
       const prev=preserveDrafts(kidList);
       if(loadError)kidList.textContent=loadError;
@@ -112,7 +117,7 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
       else if(!loaded)parentList.textContent='チケットを読み込み中…';
       else{
         const filtered=reports.filter(r=>
-          (parentFilters.scope==='all'||(parentFilters.scope==='archived'?archived(r):!archived(r)))&&
+          (parentFilters.scope==='all'||(parentFilters.scope==='needs'?needsParent(r):parentFilters.scope==='archived'?archived(r):!archived(r)))&&
           (parentFilters.child==='all'||r.childId===parentFilters.child)&&
           (parentFilters.type==='all'||r.type===parentFilters.type)&&
           (parentFilters.status==='all'||r.status===parentFilters.status)&&
@@ -227,6 +232,7 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
     ['feedback-filter-type','type'],['feedback-filter-status','status'],['feedback-filter-keyword','keyword']]){
     $(field)?.addEventListener(key==='keyword'?'input':'change',e=>{parentFilters[key]=key==='keyword'?e.target.value.trim():e.target.value;render();});
   }
+  document.querySelectorAll('[data-feedback-scope]').forEach(b=>b.addEventListener('click',()=>{parentFilters.scope=b.dataset.feedbackScope;if($('feedback-filter-scope'))$('feedback-filter-scope').value=parentFilters.scope;render();}));
   $('feedback-filter-reset')?.addEventListener('click',()=>{
     parentFilters={scope:'active',child:'all',type:'all',status:'all',keyword:''};
     for(const [id,key] of [['feedback-filter-scope','scope'],['feedback-filter-child','child'],

@@ -845,3 +845,61 @@ body[data-role="parent"] #settings-form input[type="date"]::-webkit-date-and-tim
 #parent-settings-export .ui-export-panel,#google-home-panel [data-more-panel="manual"] .ui-export-panel{margin-top:8px}
 #google-home-panel #gh-message{display:block;box-sizing:border-box;width:100%;max-width:100%;font:inherit;margin:8px 0}
 @media(max-width:390px){.parent-settings-menu summary{font-size:12px;padding-inline:7px}.parent-more-heading h2{font-size:18px}}
+
+/* v3.25.0 parent-only compact navigation and progressive disclosure. */
+body[data-role="parent"] .topinner{padding:9px 16px}
+body[data-role="parent"] .brand-icon{width:40px;height:40px;font-size:23px;border-radius:12px}
+body[data-role="parent"] .brand-title{font-size:20px}
+body[data-role="parent"] .brand-sub{display:none}
+body[data-role="parent"] .app-version{font-size:10px}
+body[data-role="parent"] .clock{font-size:21px}
+body[data-role="parent"] .container{padding-top:10px}
+body[data-role="parent"] .syncbar{gap:6px;margin:0 0 8px;padding:7px 9px;font-size:11px}
+body[data-role="parent"] .signal{padding:4px 7px}
+body[data-role="parent"] .ui-primary-nav.parent-nav{margin:8px 0;gap:3px;padding:4px;border-radius:13px}
+body[data-role="parent"] .ui-primary-nav.parent-nav .ui-nav-button{position:relative;min-height:49px;border-radius:10px;line-height:1.25}
+.parent-nav-count{position:absolute;right:3px;top:2px;border-radius:999px;padding:2px 5px;font-size:11px;line-height:1.15;color:white;background:#ad4c32;min-width:18px}
+body[data-role="parent"] .ui-view-heading{margin:12px 0 9px}
+body[data-role="parent"] .ui-view-heading h2{font-size:20px}
+body[data-role="parent"] .ui-view-pane .card{padding:14px;border-radius:16px;box-shadow:0 3px 10px #274b770d;margin-bottom:12px;min-width:0}
+body[data-role="parent"] .ui-view-pane .section-head{gap:8px;margin-bottom:10px}
+body[data-role="parent"] .ui-view-pane .section-head h2{font-size:17px;line-height:1.4}
+body[data-role="parent"] .ui-view-pane .section-head p{font-size:12px}
+body[data-role="parent"] .ui-dashboard-people{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}
+body[data-role="parent"] .ui-person-summary{padding:11px;gap:6px;border-radius:12px;background:#fff;align-content:start}
+.parent-person-head{display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:space-between}
+body[data-role="parent"] .ui-person-summary strong{font-size:16px}
+body[data-role="parent"] .ui-person-summary .ui-person-state{font-size:12px;background:#eaf3ff;padding:4px 7px;border-radius:9px;white-space:nowrap}
+body[data-role="parent"] .ui-person-summary .ui-person-state.resting{background:#fff0da}
+.parent-person-time{font-size:clamp(16px,3vw,23px);font-weight:850;line-height:1.45;overflow-wrap:anywhere}
+.parent-person-actions{border-top:1px solid #e5edf5;padding-top:4px;min-width:0}
+.parent-person-actions summary,.parent-fold>summary{cursor:pointer;color:#3b6285;font-size:13px;font-weight:850;padding:10px 2px;min-height:40px;overflow-wrap:anywhere}
+.parent-person-actions>div{display:grid;gap:6px;padding:4px 0}
+.parent-person-actions .btn{font-size:12px;padding:8px;min-height:44px;white-space:normal}
+.parent-action-links{display:flex;gap:7px;flex-wrap:wrap;width:100%}
+.parent-action-links .btn{flex:1 1 110px;min-height:44px;padding:8px;font-size:13px;text-align:left;display:flex;justify-content:space-between;gap:5px}
+body[data-role="parent"] .ui-dashboard-alert{padding:11px;border-radius:12px;gap:8px}
+body[data-role="parent"] .ui-guide{margin:7px 0 0}
+.parent-fold{border-top:1px solid #e5edf5;margin-top:10px;min-width:0}
+.parent-fold[open]>summary{margin-bottom:6px}
+.parent-back{margin-bottom:10px;min-height:44px}
+.parent-inline-count{font-size:13px;color:#526b89}
+.parent-feedback-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-bottom:8px}
+.parent-feedback-tabs button{min-height:44px;border:1px solid #dce8f6;border-radius:9px;background:#f5f9fd;color:#466480;font-size:13px;font-weight:800;padding:6px 2px}
+.parent-feedback-tabs button[aria-pressed="true"]{background:#326eaf;color:white}
+.parent-link-list{display:grid;border:1px solid #dce8f6;border-radius:14px;background:white;overflow:hidden}
+.parent-link-list button{display:flex;justify-content:space-between;align-items:center;min-height:52px;text-align:left;background:white;color:#315a76;padding:12px;font-weight:800;border-bottom:1px solid #e5edf5}
+.parent-link-list button:last-child{border-bottom:0}
+.parent-usage-row{display:grid;gap:6px;padding:8px 0}
+.parent-usage-row>div:first-child{display:flex;justify-content:space-between;gap:8px}
+.parent-usage-row small{color:#61778f}
+.parent-usage-bar{height:9px;background:#edf2f7;display:flex;border-radius:10px;overflow:hidden}
+.parent-usage-bar i{background:#5b92e3}.parent-usage-bar b{background:#e8b36e}
+body[data-role="parent"] .parent-local-child{display:none}
+body[data-role="parent"] .ui-parent-focus{padding:4px 0;margin:5px 0}
+body[data-role="parent"] .parent-settings-menu summary{min-height:44px}
+body[data-role="parent"] .approval-item{padding:10px;gap:8px}
+body[data-role="parent"] .approval-buttons .btn{min-height:44px;padding:8px 11px}
+body[data-role="parent"] .retro-report-admin .retro-summary{gap:5px;margin-bottom:8px}
+body[data-role="parent"] .retro-count{padding:8px}
+@media(max-width:390px){body[data-role="parent"] .container{padding-inline:10px}body[data-role="parent"] .ui-view-pane .card{padding:11px}body[data-role="parent"] .ui-person-summary{padding:8px}.parent-person-head{align-items:flex-start;flex-direction:column}.parent-action-links .btn{font-size:12px}}

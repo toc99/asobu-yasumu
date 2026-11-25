@@ -44,7 +44,7 @@ test('child next-action text responds to each state without automatically contro
 test('parent frequent actions are visible and occasional actions are collapsed',()=>{
   assert.match(parent,/id="activity-section"/);
   assert.match(parent,/id="feedback-admin"/);
-  assert.match(parent,/<details class="ui-management-group" id="parent-management">/);
+  assert.match(parent,/<div class="hidden" id="parent-management">/);
   assert.match(parent,/id="bonus-admin"/);
   assert.match(parent,/id="pokemon-release-admin"/);
   assert.match(script,/view==='home'\|\|view==='actions'/);
@@ -57,13 +57,13 @@ test('backup tools clearly distinguish private full export and minimal activity 
   assert.match(parent,/活動実績JSONには氏名・生年月日を含みません/);
 });
 
-test('release and service worker use the same v3.24.0',()=>{
-  assert.match(release,/APP_VERSION = 'v3\.24\.0'/);
-  assert.match(kid,/v3\.24\.0/);
-  assert.match(parent,/v3\.24\.0/);
-  assert.match(sw,/asobu-yasumu-v3-24-0/);
-  assert.match(sw,/style\.css\?v=3\.24\.0/);
-  assert.match(sw,/app\.js\?v=3\.24\.0/);
+test('release and service worker use the same v3.25.0',()=>{
+  assert.match(release,/APP_VERSION = 'v3\.25\.0'/);
+  assert.match(kid,/v3\.25\.0/);
+  assert.match(parent,/v3\.25\.0/);
+  assert.match(sw,/asobu-yasumu-v3-25-0/);
+  assert.match(sw,/style\.css\?v=3\.25\.0/);
+  assert.match(sw,/app\.js\?v=3\.25\.0/);
 });
 
 test('records tab prioritizes play history over release notes',()=>{
@@ -76,7 +76,7 @@ test('records tab prioritizes play history over release notes',()=>{
 test('parent settings are hidden initially and accessible from the right-hand menu',()=>{
   const menu=parent.match(/<details class="parent-settings-menu" id="parent-settings-menu">([\s\S]*?)<\/details>/);
   assert.ok(menu);
-  for(const section of ['family','export','google','manual']){
+  for(const section of ['family','export','google','manual','audit']){
     assert.match(menu[1],new RegExp('data-more-section="'+section+'"'));
     assert.match(parent,new RegExp('class="[^"]*hidden[^"]*"[^>]*data-more-panel="'+section+'"'));
   }
