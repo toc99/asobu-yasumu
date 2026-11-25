@@ -1,4 +1,4 @@
-// Local Windows PC bridge. Uses Firebase client authentication, never Admin SDK.
+// Local Windows/Linux PC bridge. Uses Firebase client authentication, never Admin SDK.
 import {initializeApp} from 'firebase/app';
 import {getAuth,signInWithEmailAndPassword} from 'firebase/auth';
 import {getFirestore,doc,collection,onSnapshot,query,orderBy,limit,getDocFromServer,setDoc,serverTimestamp,deleteDoc} from 'firebase/firestore';
@@ -255,5 +255,5 @@ function pump(){
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge v3.22.0 notification queue; waiting for authorized configuration.');
+log('Google Home bridge v3.23.0 Linux/Windows notification queue; waiting for authorized configuration.');
 void health();void pump();

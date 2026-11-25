@@ -120,3 +120,63 @@ Get-Content .\google-home\.local\bridge.log -Tail 30
 - スピーカー未検出・識別不一致のみ1回再試行。再生開始の有無が不確かなエラーやミュートは再試行しない。全件の再生や厳密な時刻を保証するものではない。
 - 状態更新は変化時の約5秒間隔と通常のハートビート。旧連携PCではキュー表示・新方式の手動依頼を利用できない。
 - 実機確認：PCとスマホで短時間に異なる手動文を各1件依頼し、待機→処理中→履歴を確認。複数スピーカー再生中にゲーム終了時刻を迎えるケース、期限切れ、報酬の集約、停止と再起動、スピーカー未検出を確認。実データの報酬をテストのために作成しない。
+
+## v3.23.0 Linux対応（連携PC側）
+
+Ubuntu Server 24.04 LTS amd64 を対象とします。Windows版の SAPI・PowerShell は従来どおり使えます。Linuxでは Open JTalk を使用し、音声生成はPC内で完結します。通知キュー・Firebaseの専用ユーザー・複数スピーカー設定は変更しません。Web UI・Firestoreルールの更新は不要です。
+
+### Ubuntuでの初回構築
+
+AH56/Dは劣化したバッテリーとメーカーの使用条件を確認し、安全な通電条件が確保できる場合のみ在宅中に検証してください。閉じたままの連続稼働や無人運用を推奨しません。OSのインストール前に必要なデータをバックアップしてください。
+
+管理者の権限を持つ専用の通常ユーザー（例: asobu）で以下を行います。rootでセットアップしないでください。有線LAN、SSH、セキュリティ更新を設定します。
+
+```bash
+sudo apt update
+sudo apt upgrade
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y universe
+sudo add-apt-repository -y multiverse
+sudo apt update
+sudo apt install -y git python3 python3-venv util-linux open-jtalk open-jtalk-mecab-naist-jdic hts-voice-nitech-jp-atr503-m001
+```
+
+Node.js 22 LTS を公式の https://nodejs.org/en/download から導入してください（Ubuntu標準のnodejsパッケージが22未満の場合は使わない）。公式バイナリを選択する場合は公開SHA256と照合し、PATHに設定します。
+
+```bash
+node --version
+npm --version
+git clone https://github.com/toc99/asobu-yasumu.git
+cd asobu-yasumu
+bash google-home/setup.sh
+```
+
+検証ブランチを使う場合は、setup.sh実行前に git switch linux-google-home-v323 を実行（本番マージ後はmainで可）。setup.shは日本語の固定テスト文のWAV・MP3生成まで検証します。既定の男性音声モデルを使います。別モデルはGH_JTALK_VOICEとGH_JTALK_DICTで指定可能ですが、その場合はテスト実行時にも環境変数を設定して確認してください。
+
+### 移管
+
+1. 旧PCを動かしたままUbuntuの依存関係を準備しても構いませんが、連携プログラムはまだ起動しません。
+2. 旧PCで通知キューが空になったことを確認し、手動起動と自動起動タスク（AsobuYasumu-GoogleHome）を停止します。誤って再起動しないよう自動起動を無効化してください。
+3. 旧PCの google-home/.env.local と google-home/.local/delivery.json を安全な方法で同じ相対パスに転送します。GH_EMAIL・GH_PASSWORDは既存値、GH_LAN_IPは削除するか新PCのLAN IPへ変更、GH_CAST_HOSTは必要に応じて更新します。Windows専用GH_PYTHONは削除します。秘密をGitHubに登録しないでください。
+4. chmod 600 google-home/.env.local google-home/.local/delivery.json （delivery.jsonがある場合）、chmod 700 google-home/.local を実行します。
+5. Google Home と同じLANに接続し、UFW等を使用している場合は家庭内LANからTCP 8765とmDNS（UDP 5353）の必要な通信だけを許可。ルーターでポート転送しないでください。
+
+```bash
+google-home/.venv/bin/python -X utf8 google-home/list-speakers.py
+bash google-home/run.sh
+```
+
+保護者画面で接続状態・テスト・任意通知・自動通知・複数機器再生・履歴を確認します。手動起動はCtrl+Cで停止し、子プロセスも停止してから自動起動へ切り替えます。
+
+```bash
+bash google-home/install-service.sh
+sudo systemctl enable --now asobu-google-home.service
+systemctl status asobu-google-home.service
+journalctl -u asobu-google-home.service -n 30 --no-pager
+```
+
+登録は通常ユーザーで実行し、サービスはそのユーザーで起動します。ログイン不要でOS起動時に開始。異常終了時は30秒間隔で再起動します。flockが同じリポジトリ内の手動・自動の二重起動を防ぎます（別PC・別クローン間の同時起動防止ではありません）。既存のbridge.logローテーションも維持します。
+
+更新は稼働停止後、git pull --ff-only、bash google-home/setup.sh、sudo systemctl start asobu-google-home.service の順。更新失敗時は再起動せず原因確認。切り戻し時は先に sudo systemctl disable --now asobu-google-home.service を実行し、プロセス停止を確認してからWindows版を起動します。可能なら停止後のdelivery.jsonも旧PCへ戻します。停電後の本体自動起動はBIOSに依存します。
+
+実機では日本語の発音・生成速度・Google Home再生・再起動後の自動復帰を確認してください。Ubuntu上で音声のサウンドカードやGUIは不要です。追加月額のTTS API料金はありません。

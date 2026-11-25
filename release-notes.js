@@ -5,6 +5,7 @@
 export const APP_VERSION = 'v3.24.0';
 export const RELEASE_NOTES = Object.freeze([
   {version:'v3.24.0',title:'保護者の設定メニューを整理',changes:['家族の設定・データ保存・Google Home連携・テスト手動通知を右上メニューから個別に開く','図鑑と相棒の表示を優先し、設定フォームや通知処理は維持','連携PCの更新やFirestoreルールの変更は不要']},
+  {version:'v3.23.0',title:'Google Home連携端末のLinux対応',changes:['Ubuntu/LinuxでOpen JTalkを利用した日本語音声通知に対応','systemdによる自動起動と多重起動防止、移管手順を追加','既存のWindows連携・通知キュー・Firestore設定を維持']},
   {
     version:'v3.22.0',title:'Google Home通知キューとまとめ通知',
     changes:[
