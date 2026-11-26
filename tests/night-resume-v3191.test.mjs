@@ -18,7 +18,7 @@ test('night resume keeps audit, morning-only and anti-shortening validation',()=
 });
 test('both app entry points are versioned and release notes are updated',()=>{
   for(const path of ['../index.html','../parent.html','../sw.js']){
-    assert.match(read(path),/3\.25\.1/);
+    assert.match(read(path),/3\.26\.0/);
   }
-  assert.match(notes,/APP_VERSION = 'v3\.25\.1'/);
+  assert.match(notes,/APP_VERSION = 'v3\.26\.0'/);
 });

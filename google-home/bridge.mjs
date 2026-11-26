@@ -7,6 +7,7 @@ import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvent
 import {MAX_PENDING,validQueued,liveEvent,sortedQueue,batchFor,safeRetry,queueView,lifetime} from '../google-home-queue.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
 import {spawn} from 'node:child_process';
+import {BRIDGE_VERSION,collectMonitor} from './monitor.mjs';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
@@ -154,7 +155,12 @@ function cast(op,text='',manual=false,target={}){
 async function status(){
  if(!cfg||Date.now()-onlineAt>90000||statusWriting)return;
  statusWriting=true;statusDirty=false;lastStatus=Date.now();
- try{await setDoc(statusRef,{updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())});}catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
+ const base={updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())};
+ try{
+  let monitor=null;try{monitor=collectMonitor(stateDir);}catch{log('Local monitor sample unavailable.');}
+  if(monitor)try{await setDoc(statusRef,{...base,monitor});}catch(e){if(e.code!=='permission-denied')throw e;await setDoc(statusRef,base);log('Monitor not accepted; legacy status published.');}
+  else await setDoc(statusRef,base);
+ }catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
 }
 async function maybeScan(){
  if(!cfg||playing||probing||pending.size||Date.now()-onlineAt>90000)return;
@@ -192,8 +198,9 @@ async function health(){
   const docs=await Promise.all([getDocFromServer(ref('settings','main')),...['older','younger'].map(id=>getDocFromServer(ref('profiles',id)))]);
   settings=docs[0].data()||{};profiles.older=docs[1].data()||null;profiles.younger=docs[2].data()||null;
   freshDocs.add('config');freshDocs.add('settings');freshDocs.add('profile:older');freshDocs.add('profile:younger');
-  await maybeScan();
-  await status();
+  // A slow speaker scan must not delay cloud health refresh or the heartbeat.
+  if(statusDirty||Date.now()-lastStatus>=60000)void status();
+  void maybeScan();
  }catch(e){onlineAt=0;freshDocs.clear();state='error';log('Cloud connection unavailable: '+(e.code||'connection error'));}
  finally{if(!stopped)setTimeout(health,60000);}
 }
@@ -249,11 +256,11 @@ function pump(){
     else if(cfg&&stamp(cfg.scanRequestedAt)>lastScanRequest)void maybeScan();
    }
   }
-  if(statusDirty&&Date.now()-lastStatus>=5000)void status();
+  if((statusDirty&&Date.now()-lastStatus>=5000)||Date.now()-lastStatus>=60000)void status();
  }catch{log('Queue processing failed.');process.exit(2);}
  if(!stopped)setTimeout(pump,1000);
 }
 process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
 process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-log('Google Home bridge v3.23.0 Linux/Windows notification queue; waiting for authorized configuration.');
+log('Google Home bridge '+BRIDGE_VERSION+' Linux/Windows notification queue and monitoring; waiting for authorized configuration.');
 void health();void pump();

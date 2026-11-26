@@ -85,6 +85,15 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:{...q,waiting:101}}));
   await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:{...q,types:['private text']}}));
   await assertFails(setDoc(d(kid,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:q}));
+  const monitor={version:1,bridgeVersion:'v3.26.0',host:'home-server',platform:'linux',observedAt:Date.now(),uptimeSec:2400,cpuTempDeciC:520,memPercent:30,diskPercent:10,watchdog:'active',wifi:'connected',recoveryDay:'2026-11-26',attempts:1,successes:1,failures:0,events:[{at:Date.now(),kind:'success'}]};
+  const monitorStatus={...status,monitor};
+  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),monitorStatus));
+  await assertSucceeds(getDoc(d(parent,'googleHome','status')));
+  await assertFails(getDoc(d(kid,'googleHome','status')));
+  await assertFails(setDoc(d(parent,'googleHome','status'),monitorStatus));
+  await assertFails(setDoc(d(other,'googleHome','status'),monitorStatus));
+  for(const invalid of [{...monitor,ip:'192.168.1.24'},{...monitor,memPercent:101},{...monitor,observedAt:Date.now()+120000},{...monitor,events:[{at:Date.now(),kind:'raw journal'}]},{...monitor,events:Array(6).fill(monitor.events[0])},{...monitor,host:'secret text'}])await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,monitor:invalid}));
+  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),status));
   const cmd=(db,i)=>d(db,'googleHomeCommands',ids[i]);
   const request=()=>({text:'音声通知テスト',at:serverTimestamp()});
   await assertSucceeds(setDoc(cmd(parent,0),request()));

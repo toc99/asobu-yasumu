@@ -180,3 +180,11 @@ journalctl -u asobu-google-home.service -n 30 --no-pager
 更新は稼働停止後、git pull --ff-only、bash google-home/setup.sh、sudo systemctl start asobu-google-home.service の順。更新失敗時は再起動せず原因確認。切り戻し時は先に sudo systemctl disable --now asobu-google-home.service を実行し、プロセス停止を確認してからWindows版を起動します。可能なら停止後のdelivery.jsonも旧PCへ戻します。停電後の本体自動起動はBIOSに依存します。
 
 実機では日本語の発音・生成速度・Google Home再生・再起動後の自動復帰を確認してください。Ubuntu上で音声のサウンドカードやGUIは不要です。追加月額のTTS API料金はありません。
+
+## v3.26.0: 保護者画面の連携監視
+
+既存の状態ドキュメント（約60秒間隔）に連携PCのバージョン、ホスト名、OS稼働時間、CPU温度（対応センサーのみ）、メモリ・ディスク使用率を追加します。通知結果は直近20件の対象機器別結果を利用します。新たな定期Firestore書き込み先は追加しません。旧bridgeも互換です。
+
+AH56/DのLinux版では既存のWi-Fi watchdogのログを読み取り専用collectorで要約します。root所有のスクリプトとsystemd timerをインストールし、/run/asobu-monitor/status.jsonへ列挙値・件数・時刻だけを書きます。bridgeにroot権限やjournal閲覧権限は追加しません。既存のwatchdog・ネットワーク・音声設定は変更しません。復旧履歴は当日（JST）の保存済みjournalの範囲のみです。インターフェース名wlp11s0はAH56/D用です。他機器では未取得となることがあります。
+
+更新は通知キューが空のとき、既存cloneのルートで `git status --short`、`git pull --ff-only`、`bash google-home/install-monitor.sh`、`sudo systemctl restart asobu-google-home.service`。依存関係の変更なし。設定ファイルやdelivery.jsonは消去しない。`systemctl list-timers asobu-monitor.timer`、`sudo systemctl status asobu-monitor.service --no-pager`、`cat /run/asobu-monitor/status.json`、`sudo journalctl -u asobu-google-home -n 20 --no-pager` で確認。保護者画面のGoogle Home連携にv3.26.0が表示されることを確認。監視collectorのみ停止する場合は `sudo systemctl disable --now asobu-monitor.timer`。通知は継続します。
