@@ -42,7 +42,7 @@ test('monitor is written independently and collector only reads bounded local da
  assert.match(ui,/onSnapshot\(monitorRef/);
  assert.match(ui,/includeMetadataChanges:true/);
  for(const id of ['connection','host','version','last','uptime','speakers','rate','wifi','watchdog','recovery','temp','memory','disk','events','delivery','counts','note'])assert.ok(html.includes('id="gh-monitor-'+id+'"'),id);
- assert.match(sw,/google-home-monitor\.js\?v=3\.26\.1/);
+ assert.match(sw,/google-home-monitor\.js\?v=3\.26\.2/);
  assert.match(collector,/os\.replace\(temp,OUT\)/);assert.match(collector,/home-wifi-watchdog\.service/);
  assert.doesNotMatch(collector,/rfkill|networkctl|netplan|systemctl','restart/);
  const python=spawnSync('python3',['-c','import ast,sys; ast.parse(sys.stdin.read())'],{input:collector,encoding:'utf8'});if(!python.error)assert.equal(python.status,0,python.stderr);

@@ -35,6 +35,9 @@ test('matrix and single editor share draft and existing save format; matrix has 
  assert.match(ui,/routes:compactRoutes\(draftRoutes\)/);
  assert.match(ui,/e.target===routeType\|\|matrix.contains\(e.target\)/);
  assert.match(ui,/if\(key===matrixKey\)return/);
+ assert.match(ui,/flag.checked=toggle.checked/);
+ assert.match(ui,/type!=='manual'/);
+ assert.match(css,/table-layout:fixed/);
  assert.match(css,/\.gh-matrix-scroll\{[^}]*max-width:100%[^}]*overflow:auto/);
  assert.match(css,/\.gh-route-matrix thead th\{position:sticky;top:0/);
  assert.match(css,/\.gh-route-matrix \.gh-matrix-name\{position:sticky;left:0/);

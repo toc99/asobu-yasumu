@@ -1,5 +1,5 @@
-import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes,effectiveRouteIds,editRouteCell} from './google-home-policy.js?v=3.26.1';
-import {monitorView,selectMonitor,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.1';
+import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes,effectiveRouteIds,editRouteCell} from './google-home-policy.js?v=3.26.2';
+import {monitorView,selectMonitor,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.2';
 const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更',queue_full:'待機上限に達したためスキップ',interrupted:'再生中に連携PCが停止したため再送なし'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
@@ -56,6 +56,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   head.replaceChildren();body.replaceChildren();
   get('route-matrix-note').textContent=!rows.length?'機器を検出すると一覧が表示されます。上の「スピーカーを再検出」を使ってください。':(!draftIds.length&&legacy?'共通設定は従来のスピーカー名「'+legacy+'」です。名前指定の共通設定は表のチェックには表示されません。':'表内を横・縦にスクロールできます。未検出の登録済み機器も設定できます。');
   matrixScroll.classList.toggle('hidden',!rows.length);
+  matrix.style.setProperty('--gh-matrix-cols',String(rows.length));
   if(!rows.length)return;
   const heading=document.createElement('tr'),first=document.createElement('th');
   first.scope='col';first.textContent='通知種類';first.className='gh-matrix-name';heading.append(first);
@@ -74,6 +75,14 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
    row.dataset.inherited=String(inherited);
    const hint=document.createElement('small');hint.textContent=(inherited?'共通':'個別')+(off?' ／ 通知OFF':'');
    name.append(title,hint);
+   if(type!=='manual'){
+    const flag=switches.querySelector('input[name="'+type+'"]');
+    const control=document.createElement('label'),toggle=document.createElement('input'),caption=document.createElement('span');
+    control.className='gh-matrix-enable';toggle.type='checkbox';toggle.checked=!!flag?.checked;toggle.disabled=!ready||saving;
+    toggle.dataset.matrixFocus=type+':enabled';toggle.setAttribute('aria-label',label+'の通知を有効にする');
+    caption.textContent='通知する';control.append(toggle,caption);name.append(control);
+    toggle.addEventListener('change',()=>{if(!ready||saving||!flag)return;flag.checked=toggle.checked;dirty=true;renderMatrix(speakerRows());setButtons();});
+   }
    if(!inherited){
     const reset=document.createElement('button');reset.type='button';reset.className='gh-matrix-reset';reset.dataset.ghMatrixReset='true';reset.dataset.matrixFocus=type+':reset';reset.textContent='共通に戻す';reset.disabled=!ready||saving;
     reset.addEventListener('click',()=>{if(!ready||saving)return;draftRoutes[type]=[];dirty=true;renderChoices();setButtons();});name.append(reset);
@@ -88,7 +97,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
     input.addEventListener('change',()=>{
      if(!ready||saving){input.checked=selected.includes(d.id);return;}
      const edit=editRouteCell(draftIds,draftRoutes[type],d.id,input.checked);
-     if(!edit.ok){input.checked=selected.includes(d.id);toast(edit.reason==='last'?'最後の1台は解除できません。通知自体をOFFにするか、共通に戻してください。':'通知先は最大5台です。');return;}
+     if(!edit.ok){input.checked=selected.includes(d.id);toast(edit.reason==='last'?'最後の1台は解除できません。共通に戻すか、自動通知の場合は行の「通知する」をOFFにしてください。':'通知先は最大5台です。');return;}
      if(edit.changed){draftRoutes[type]=edit.ids;dirty=true;renderChoices();setButtons();}
     });
     target.append(input);cell.append(target);row.append(cell);
@@ -142,7 +151,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   const labels={loading:'確認中',unconfigured:'未設定',unknown:'確認不可',offline:'オフライン',online:'オンライン'};
   const put=(id,text)=>{get('monitor-'+id).textContent=text;};
   const connection=get('monitor-connection');connection.textContent=labels[v.connection];connection.dataset.connection=v.connection;
-  put('note',v.connection==='unknown'?'この端末からサーバー状態を確認できません。':v.connection==='online'&&!m?'連携PCは稼働中です。詳細監視は未取得です。連携PC v3.26.1と監視情報の送信状態を確認してください。':v.connection==='offline'?'最終取得時点の情報です。連携PCまたは通信経路を確認してください。':!cfg.enabled&&v.connection==='online'?'連携PCは稼働中・音声通知は設定で停止中です。':'');
+  put('note',v.connection==='unknown'?'この端末からサーバー状態を確認できません。':v.connection==='online'&&!m?'連携PCは稼働中です。詳細監視は未取得です。連携PC v3.26.1以降と監視情報の送信状態を確認してください。':v.connection==='offline'?'最終取得時点の情報です。連携PCまたは通信経路を確認してください。':!cfg.enabled&&v.connection==='online'?'連携PCは稼働中・音声通知は設定で停止中です。':'');
   const currentStatus=ready&&statusFromServer&&status?.bridgeUid===cfg.bridgeUid?status:null;
   const history=Array.isArray(currentStatus?.history)?currentStatus.history:[];
   const stats=deliveryStats(history),fmt=t=>new Date(t).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
