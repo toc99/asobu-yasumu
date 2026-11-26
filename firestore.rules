@@ -1482,6 +1482,11 @@ service cloud.firestore {
         && monitorCount(m.attempts) && monitorCount(m.successes) && monitorCount(m.failures)
         && validMonitorEvents(m.events);
     }
+    function validMonitorDocument(d) {
+      return d.keys().hasOnly(['updatedAt','bridgeUid','monitor'])
+        && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
+        && validMonitor(d.monitor);
+    }
     function validSpeakerStatus(d) {
       return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
         && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue','monitor'])
@@ -1512,7 +1517,8 @@ service cloud.firestore {
         allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
         allow list: if false;
         allow create, update: if (docId == 'config' && isParent(h) && validSpeakerConfig(request.resource.data))
-          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data));
+          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data))
+          || (docId == 'monitor' && isSpeaker(h) && validMonitorDocument(request.resource.data));
         allow delete: if docId == 'config' && isParent(h);
       }
 

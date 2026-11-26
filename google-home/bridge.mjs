@@ -37,10 +37,10 @@ try{login=await signInWithEmailAndPassword(auth,email,password);}catch(e){log('F
 const uid=login.user.uid;
 const ref=(name,id)=>doc(db,'households',householdId,name,id);
 const col=name=>collection(db,'households',householdId,name);
-const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status');
+const configRef=ref('googleHome','config'),statusRef=ref('googleHome','status'),monitorRef=ref('googleHome','monitor');
 const profiles={},inventory={};let settings=null,cfg=null,onlineAt=0,state='unavailable',device='',playing=false,probing=false,lastProbe=0,stopped=false;
 const pending=new Map(),freshDocs=new Set();
-let activeBatch=null,lastStatus=0,statusDirty=true,statusWriting=false;const deleting=new Set();
+let activeBatch=null,lastStatus=0,statusDirty=true,statusWriting=false,lastMonitor=0,monitorWriting=false;const deleting=new Set();
 for(const e of saved.owner===uid&&Array.isArray(saved.pending)?saved.pending:[])if(validQueued(e,Date.now())&&!saved.seen[e.key]&&pending.size<MAX_PENDING)pending.set(e.key,e);
 if(saved.owner===uid&&Array.isArray(saved.inFlight?.types)&&saved.inFlight.types.length){saved.history.unshift({at:Date.now(),type:saved.inFlight.types[0],types:saved.inFlight.types.slice(0,4),result:'skipped',reason:'interrupted'});persist();}
 function clearPending(){if(pending.size){for(const e of pending.values())terminal(e,'stale');persist();statusDirty=true;}}
@@ -156,11 +156,14 @@ async function status(){
  if(!cfg||Date.now()-onlineAt>90000||statusWriting)return;
  statusWriting=true;statusDirty=false;lastStatus=Date.now();
  const base={updatedAt:serverTimestamp(),bridgeUid:uid,state:cfg.enabled?state:'disabled',device:device.slice(0,100),history:saved.history.slice(0,20),speakers:discovered,scannedAt,queue:queueView([...pending.values()],activeBatch,Date.now())};
- try{
-  let monitor=null;try{monitor=collectMonitor(stateDir);}catch{log('Local monitor sample unavailable.');}
-  if(monitor)try{await setDoc(statusRef,{...base,monitor});}catch(e){if(e.code!=='permission-denied')throw e;await setDoc(statusRef,base);log('Monitor not accepted; legacy status published.');}
-  else await setDoc(statusRef,base);
- }catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
+ try{await setDoc(statusRef,base);}catch(e){statusDirty=true;log('Status update failed: '+e.code);}finally{statusWriting=false;}
+}
+async function publishMonitor(){
+ if(!cfg||cfg.bridgeUid!==uid||Date.now()-onlineAt>90000||monitorWriting)return;
+ monitorWriting=true;lastMonitor=Date.now();
+ try{await setDoc(monitorRef,{updatedAt:serverTimestamp(),bridgeUid:uid,monitor:collectMonitor(stateDir)});}
+ catch(e){log('Monitor update failed: '+(e.code||'collection error'));}
+ finally{monitorWriting=false;}
 }
 async function maybeScan(){
  if(!cfg||playing||probing||pending.size||Date.now()-onlineAt>90000)return;
@@ -257,6 +260,7 @@ function pump(){
    }
   }
   if((statusDirty&&Date.now()-lastStatus>=5000)||Date.now()-lastStatus>=60000)void status();
+  if(Date.now()-lastMonitor>=60000)void publishMonitor();
  }catch{log('Queue processing failed.');process.exit(2);}
  if(!stopped)setTimeout(pump,1000);
 }

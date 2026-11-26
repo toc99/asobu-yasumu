@@ -188,3 +188,7 @@ journalctl -u asobu-google-home.service -n 30 --no-pager
 AH56/DのLinux版では既存のWi-Fi watchdogのログを読み取り専用collectorで要約します。root所有のスクリプトとsystemd timerをインストールし、/run/asobu-monitor/status.jsonへ列挙値・件数・時刻だけを書きます。bridgeにroot権限やjournal閲覧権限は追加しません。既存のwatchdog・ネットワーク・音声設定は変更しません。復旧履歴は当日（JST）の保存済みjournalの範囲のみです。インターフェース名wlp11s0はAH56/D用です。他機器では未取得となることがあります。
 
 更新は通知キューが空のとき、既存cloneのルートで `git status --short`、`git pull --ff-only`、`bash google-home/install-monitor.sh`、`sudo systemctl restart asobu-google-home.service`。依存関係の変更なし。設定ファイルやdelivery.jsonは消去しない。`systemctl list-timers asobu-monitor.timer`、`sudo systemctl status asobu-monitor.service --no-pager`、`cat /run/asobu-monitor/status.json`、`sudo journalctl -u asobu-google-home -n 20 --no-pager` で確認。保護者画面のGoogle Home連携にv3.26.0が表示されることを確認。監視collectorのみ停止する場合は `sudo systemctl disable --now asobu-monitor.timer`。通知は継続します。
+
+### v3.26.1 監視情報の書き込み分離
+
+監視情報を googleHome/monitor に独立保存します。既存 status の通知キュー・機器情報を保ち、監視が拒否されても通知状態の更新は独立して継続します。追加の書き込みは約1,440件/日、監視画面の接続中は追加読み取りが発生します。v3.26.0のcollectorは変更不要です。更新はmainでgit pull --ff-only後、通知キューが空のときに連携サービスだけ再起動してください。

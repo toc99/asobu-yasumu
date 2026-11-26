@@ -94,6 +94,26 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertFails(setDoc(d(other,'googleHome','status'),monitorStatus));
   for(const invalid of [{...monitor,ip:'192.168.1.24'},{...monitor,memPercent:101},{...monitor,observedAt:Date.now()+120000},{...monitor,events:[{at:Date.now(),kind:'raw journal'}]},{...monitor,events:Array(6).fill(monitor.events[0])},{...monitor,host:'secret text'}])await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,monitor:invalid}));
   await assertSucceeds(setDoc(d(bridge,'googleHome','status'),status));
+  // Production-sized status and monitor payloads are evaluated independently.
+  const fullIds=Array.from({length:12},(_,i)=>i.toString(16).padStart(8,'0')+'-1234-1234-1234-123456789abc');
+  const fullStatus={...status,speakers:fullIds.map(id=>({id,name:'Speaker '+id.slice(0,8),online:true})),scannedAt:Date.now(),queue:{version:1,waiting:10,active:4,types:Array(10).fill('manual'),activeTypes:Array(4).fill('pokemon'),at:Date.now()},history:Array(20).fill({type:'manual',result:'sent',at:Date.now()})};
+  const fullMonitor={...monitor,bridgeVersion:'v3.26.1',observedAt:Date.now(),uptimeSec:2057,cpuTempDeciC:540,memPercent:8,diskPercent:9,events:['success','start','failure','blocked','recovered'].map(kind=>({at:Date.now(),kind}))};
+  const telemetry=(db)=>d(db,'googleHome','monitor');
+  const monitorDoc={bridgeUid:'speaker-user',updatedAt:serverTimestamp(),monitor:fullMonitor};
+  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),fullStatus));
+  await assertSucceeds(setDoc(telemetry(bridge),monitorDoc));
+  await assertSucceeds(getDoc(telemetry(parent)));
+  await assertFails(getDoc(telemetry(kid)));
+  await assertFails(getDoc(telemetry(other)));
+  await assertFails(setDoc(telemetry(parent),monitorDoc));
+  await assertFails(setDoc(telemetry(kid),monitorDoc));
+  await assertFails(setDoc(telemetry(other),monitorDoc));
+  await assertFails(setDoc(telemetry(bridge),{...monitorDoc,bridgeUid:'other-user'}));
+  await assertFails(setDoc(telemetry(bridge),{...monitorDoc,monitor:{...fullMonitor,ip:'192.168.1.24'}}));
+  await assertFails(setDoc(telemetry(bridge),{...monitorDoc,monitor:{...fullMonitor,events:Array(6).fill(fullMonitor.events[0])}}));
+  await assertFails(setDoc(telemetry(bridge),{...monitorDoc,monitor:{...fullMonitor,events:[{at:Date.now(),kind:'raw journal'}]}}));
+  await assertFails(setDoc(telemetry(bridge),{...monitorDoc,extra:true}));
+  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),status));
   const cmd=(db,i)=>d(db,'googleHomeCommands',ids[i]);
   const request=()=>({text:'音声通知テスト',at:serverTimestamp()});
   await assertSucceeds(setDoc(cmd(parent,0),request()));
@@ -118,5 +138,6 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertFails(getDocs(query(commands(bridge),limit(40))));
   await assertFails(getDoc(d(bridge,'profiles','older')));
   await assertFails(setDoc(d(bridge,'googleHome','status'),status));
+  await assertFails(setDoc(telemetry(bridge),monitorDoc));
  });
 }
