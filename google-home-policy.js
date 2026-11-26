@@ -45,6 +45,21 @@ export function normalizeClock(value){
  const m=/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d{1,3})?)?$/.exec(String(value??'').trim());
  return m?m[1]+':'+m[2]:null;
 }
+// Matrix edits the same draft routes as the single-notification editor.
+export function effectiveRouteIds(defaults,override){
+ const own=speakerIds(override);return own.length?own:speakerIds(defaults);
+}
+export function editRouteCell(defaults,override,id,checked){
+ const current=effectiveRouteIds(defaults,override);
+ if(!speakerIds([id]).length)return {ok:false,reason:'invalid'};
+ if(current.includes(id)===checked)return {ok:true,ids:speakerIds(override),changed:false};
+ const next=checked?[...current,id]:current.filter(x=>x!==id);
+ // Empty overrides mean inheritance, not muting. Never silently turn a
+ // requested OFF into the common destination.
+ if(!next.length)return {ok:false,reason:'last'};
+ if(next.length>MAX_SPEAKERS)return {ok:false,reason:'limit'};
+ return {ok:true,ids:next,changed:true};
+}
 export function compactRoutes(routes){
  return Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(routes?.[k]).join(',')]).filter(([,ids])=>ids));
 }
