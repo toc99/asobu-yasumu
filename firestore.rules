@@ -1401,9 +1401,11 @@ service cloud.firestore {
         && (r.size() == 0 || validRouteValues(r.values()));
     }
     function discoveredSpeaker(d) {
-      let name = d.name;
-      return d is map && d.keys().hasOnly(['id','name','online'])
-        && speakerUuid(d.id) && name is string && name.size() > 0 && name.size() <= 100 && d.online is bool;
+      // Required keys are accessed directly. Non-maps or non-string regex
+      // arguments fail closed. Preserve exact field allowlist and UUID format.
+      return d.keys().hasOnly(['id','name','online'])
+        && d.id.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        && d.name.matches('(?s)^.{1,100}$') && d.online is bool;
     }
     function discoveredSpeakers(l) {
       let n = l.size();
@@ -1459,12 +1461,13 @@ service cloud.firestore {
         && e.kind in ['start','success','failure','blocked','recovered'];
     }
     function validMonitorEvents(e) {
-      return e is list && e.size() <= 5
-        && (e.size() <= 0 || validMonitorEvent(e[0]))
-        && (e.size() <= 1 || validMonitorEvent(e[1]))
-        && (e.size() <= 2 || validMonitorEvent(e[2]))
-        && (e.size() <= 3 || validMonitorEvent(e[3]))
-        && (e.size() <= 4 || validMonitorEvent(e[4]));
+      let n = e.size();
+      return e is list && n <= 5
+        && (n <= 0 || validMonitorEvent(e[0]))
+        && (n <= 1 || validMonitorEvent(e[1]))
+        && (n <= 2 || validMonitorEvent(e[2]))
+        && (n <= 3 || validMonitorEvent(e[3]))
+        && (n <= 4 || validMonitorEvent(e[4]));
     }
     function monitorCount(n) { return n is int && n >= 0 && n <= 1440; }
     function monitorPercent(n) { return n == null || (n is int && n >= 0 && n <= 100); }
@@ -1489,13 +1492,16 @@ service cloud.firestore {
         && validMonitor(d.monitor);
     }
     function validSpeakerStatus(d) {
+      let speakers = d.get('speakers',[]);
+      let scannedAt = d.get('scannedAt',0);
       return d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue'])
-        && (!d.keys().hasAny(['queue']) || validSpeakerQueue(d.queue))
-        && discoveredSpeakers(d.get('speakers',[])) && d.get('scannedAt',0) is int && d.get('scannedAt',0) >= 0 && d.get('scannedAt',0) <= request.time.toMillis()+10000
         && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
         && d.state in ['ready','unavailable','disabled','busy','error']
         && d.device is string && d.device.size() <= 100
-        && d.history is list && d.history.size() <= 20;
+        && d.history is list && d.history.size() <= 20
+        && scannedAt is int && scannedAt >= 0 && scannedAt <= request.time.toMillis()+10000
+        && (!d.keys().hasAny(['queue']) || validSpeakerQueue(d.queue))
+        && discoveredSpeakers(speakers);
     }
 
     match /households/{h} {
