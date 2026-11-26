@@ -11,6 +11,11 @@ export function monitorView(status,uid,{now=Date.now(),ready=true,server=true}={
  const fresh=age>=-30000&&age<ONLINE_MS&&(!m||(Number.isFinite(m.observedAt)&&now-m.observedAt>=-30000&&now-m.observedAt<ONLINE_MS));
  return {connection:fresh?'online':'offline',monitor:m,age:Math.max(0,age),fresh};
 }
+export function selectMonitor(doc,uid,now=Date.now()){
+ if(!uid||!doc||doc.bridgeUid!==uid||doc.monitor?.version!==1)return null;
+ const age=now-ms(doc.updatedAt),sampleAge=now-doc.monitor.observedAt;
+ return age>=-30000&&age<ONLINE_MS&&Number.isFinite(sampleAge)&&sampleAge>=-30000&&sampleAge<ONLINE_MS?doc.monitor:null;
+}
 export function deliveryStats(history){
  const out={sent:0,error:0,skipped:0};
  for(const h of (Array.isArray(history)?history:[]).slice(0,20))for(const t of Array.isArray(h?.targets)?h.targets:[])if(t?.result==='sent'||t?.result==='error'||t?.result==='skipped')out[t.result]++;
