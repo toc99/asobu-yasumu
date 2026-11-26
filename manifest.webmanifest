@@ -1,10 +1,24 @@
 {
- "name":"あそぶ・やすむ v3.17.0",
- "short_name":"あそぶ・やすむ",
- "start_url":"./index.html",
- "scope":"./",
- "display":"standalone",
- "background_color":"#f4f9ff",
- "theme_color":"#eaf4ff",
- "icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png"}]
+  "name": "あそぶ・やすむ",
+  "short_name": "あそぶ・やすむ",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f9ff",
+  "theme_color": "#eaf4ff",
+  "icons": [
+    {
+      "src": "icon-kid-v3251-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-kid-v3251-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "id": "./index.html"
 }
