@@ -1,5 +1,5 @@
-import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.26.0';
-import {monitorView,selectMonitor,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.0';
+import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.26.1';
+import {monitorView,selectMonitor,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.1';
 const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更',queue_full:'待機上限に達したためスキップ',interrupted:'再生中に連携PCが停止したため再送なし'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
