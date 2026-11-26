@@ -1,4 +1,4 @@
-import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.26.1';
+import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes,effectiveRouteIds,editRouteCell} from './google-home-policy.js?v=3.26.1';
 import {monitorView,selectMonitor,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.1';
 const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更',queue_full:'待機上限に達したためスキップ',interrupted:'再生中に連携PCが停止したため再送なし'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
@@ -22,7 +22,8 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
  const fieldLabels={volume:'通知音量',gameMinutes:'ゲームのお知らせ時間',warningMinutes:'終了予告',forgottenMinutes:'終了押し忘れの確認',quietStart:'静音開始時刻',quietEnd:'静音終了時刻',bedtime:'就寝準備時刻'};
  function errorMessage(e){const code=String(e?.code||'unknown').replace(/^firestore\//,'');return ({'permission-denied':'保存権限または設定値の検証で拒否されました','unavailable':'通信できません','unauthenticated':'ログイン状態を確認してください','invalid-argument':'設定値が不正です','deadline-exceeded':'通信がタイムアウトしました'})[code]||'通信・保存エラー（'+(/^[a-z-]{1,50}$/.test(code)?code:'unknown')+'）';}
  function saveMessage(text){get('save-result').textContent=text;toast(text);}
- const routeType=get('route-type');
+ const routeType=get('route-type'),matrix=get('route-matrix'),matrixScroll=get('route-matrix-scroll');
+ let matrixKey='',matrixMode=true;
  for(const [type,label] of Object.entries(ROUTE_TYPES)){
   const option=document.createElement('option');option.value=type;option.textContent=label;routeType.append(option);
  }
@@ -30,6 +31,72 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   const list=knownSpeakers(status?.bridgeUid===cfg.bridgeUid?status.speakers:[]),ids=new Set(list.map(x=>x.id));
   for(const id of [...draftIds,...Object.values(draftRoutes).flat()])if(!ids.has(id)){ids.add(id);list.push({id,name:'未検出の機器 ('+id.slice(0,8)+')',online:false});}
   return list;
+ }
+ function setRouteMode(showMatrix){
+  matrixMode=showMatrix;
+  get('route-matrix-mode').setAttribute('aria-pressed',String(showMatrix));
+  get('route-single-mode').setAttribute('aria-pressed',String(!showMatrix));
+  get('route-matrix-panel').classList.toggle('hidden',!showMatrix);
+  get('route-single-panel').classList.toggle('hidden',showMatrix);
+  if(showMatrix)renderMatrix(speakerRows());
+ }
+ get('route-matrix-mode').addEventListener('click',()=>setRouteMode(true));
+ get('route-single-mode').addEventListener('click',()=>setRouteMode(false));
+ function renderMatrix(rows){
+  if(!matrixMode)return;
+  const flags=Object.fromEntries([...switches.querySelectorAll('input')].map(i=>[i.name,i.checked]));
+  const legacy=get('speaker').value.trim();
+  const key=JSON.stringify([rows,draftIds,draftRoutes,flags,ready,saving,legacy]);
+  if(key===matrixKey)return;
+  matrixKey=key;
+  const focus=document.activeElement;
+  const focusKey=matrix.contains(focus)?focus.dataset.matrixFocus:null;
+  const left=matrixScroll.scrollLeft,top=matrixScroll.scrollTop;
+  const head=matrix.querySelector('thead'),body=matrix.querySelector('tbody');
+  head.replaceChildren();body.replaceChildren();
+  get('route-matrix-note').textContent=!rows.length?'機器を検出すると一覧が表示されます。上の「スピーカーを再検出」を使ってください。':(!draftIds.length&&legacy?'共通設定は従来のスピーカー名「'+legacy+'」です。名前指定の共通設定は表のチェックには表示されません。':'表内を横・縦にスクロールできます。未検出の登録済み機器も設定できます。');
+  matrixScroll.classList.toggle('hidden',!rows.length);
+  if(!rows.length)return;
+  const heading=document.createElement('tr'),first=document.createElement('th');
+  first.scope='col';first.textContent='通知種類';first.className='gh-matrix-name';heading.append(first);
+  for(const d of rows){
+   const th=document.createElement('th');th.scope='col';th.textContent=d.name;
+   if(!d.online){const small=document.createElement('small');small.textContent='未検出';th.append(small);}
+   heading.append(th);
+  }
+  head.append(heading);
+  for(const [type,label] of Object.entries(ROUTE_TYPES)){
+   const row=document.createElement('tr'),name=document.createElement('th');
+   name.scope='row';name.className='gh-matrix-name';
+   const title=document.createElement('span');title.textContent=label;
+   const own=speakerIds(draftRoutes[type]),selected=effectiveRouteIds(draftIds,own);
+   const inherited=!own.length,off=type!=='manual'&&!flags[type];
+   row.dataset.inherited=String(inherited);
+   const hint=document.createElement('small');hint.textContent=(inherited?'共通':'個別')+(off?' ／ 通知OFF':'');
+   name.append(title,hint);
+   if(!inherited){
+    const reset=document.createElement('button');reset.type='button';reset.className='gh-matrix-reset';reset.dataset.ghMatrixReset='true';reset.dataset.matrixFocus=type+':reset';reset.textContent='共通に戻す';reset.disabled=!ready||saving;
+    reset.addEventListener('click',()=>{if(!ready||saving)return;draftRoutes[type]=[];dirty=true;renderChoices();setButtons();});name.append(reset);
+   }
+   row.append(name);
+   for(const d of rows){
+    const cell=document.createElement('td'),target=document.createElement('label'),input=document.createElement('input');
+    target.className='gh-matrix-cell';input.type='checkbox';input.checked=selected.includes(d.id);
+    input.disabled=!ready||saving||(!input.checked&&selected.length>=MAX_SPEAKERS);
+    input.dataset.matrixFocus=type+':'+d.id;
+    input.setAttribute('aria-label',label+'：'+d.name+(inherited?'（共通設定）':''));
+    input.addEventListener('change',()=>{
+     if(!ready||saving){input.checked=selected.includes(d.id);return;}
+     const edit=editRouteCell(draftIds,draftRoutes[type],d.id,input.checked);
+     if(!edit.ok){input.checked=selected.includes(d.id);toast(edit.reason==='last'?'最後の1台は解除できません。通知自体をOFFにするか、共通に戻してください。':'通知先は最大5台です。');return;}
+     if(edit.changed){draftRoutes[type]=edit.ids;dirty=true;renderChoices();setButtons();}
+    });
+    target.append(input);cell.append(target);row.append(cell);
+   }
+   body.append(row);
+  }
+  matrixScroll.scrollLeft=left;matrixScroll.scrollTop=top;
+  if(focusKey){const next=[...matrix.querySelectorAll('[data-matrix-focus]')].find(e=>e.dataset.matrixFocus===focusKey);if(next&&!next.disabled)next.focus({preventScroll:true});}
  }
  function renderChoices(){
   const rows=speakerRows();
@@ -50,6 +117,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   const type=routeType.value;
   render(get('speakers'),draftIds,ids=>draftIds=ids);
   render(get('route-speakers'),draftRoutes[type]||[],ids=>draftRoutes[type]=ids);
+  renderMatrix(rows);
   const count=Object.values(draftRoutes).filter(ids=>ids.length).length;
   get('route-summary').textContent=count?count+'種類に個別の通知先を設定中。選択なしは共通設定。':'すべて共通の通知先を使用します。';
   const t=Number(status?.scannedAt)||0;
@@ -67,7 +135,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   for(const input of switches.querySelectorAll('input'))input.checked=c.types?.[input.name]===true;
   draftIds=speakerIds(c.speakerIds);draftRoutes=Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(c.routes?.[k])]));renderChoices();
  }
- function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready||saving);get('send').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('test').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
+ function setButtons(){form.querySelectorAll('button:not([data-gh-matrix-reset]):not(#gh-route-matrix-mode):not(#gh-route-single-mode)').forEach(b=>b.disabled=!ready||saving);renderMatrix(speakerRows());get('send').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('test').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
  function renderMonitor(){
   const now=Date.now(),v=monitorView(status?{...status,monitor:undefined}:null,cfg.bridgeUid,{now,ready,server:statusFromServer});
   const m=v.connection==='online'?(monitorFromServer?selectMonitor(monitorDoc,cfg.bridgeUid,now):null)||selectMonitor(status,cfg.bridgeUid,now):null;
@@ -136,7 +204,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   subs.push(dbApi.onSnapshot(monitorRef,{includeMetadataChanges:true},s=>{if(!active)return;monitorFromServer=!s.metadata.fromCache&&!s.metadata.hasPendingWrites;if(monitorFromServer)monitorDoc=s.exists()?s.data():null;renderStatus();},()=>{monitorFromServer=false;monitorDoc=null;renderStatus();}));
   timer=setInterval(renderStatus,15000);
  }
- form.addEventListener('input',e=>{if(e.target===routeType)return;dirty=true;setButtons();});
+ form.addEventListener('input',e=>{if(e.target===routeType||matrix.contains(e.target))return;dirty=true;setButtons();});
  form.addEventListener('submit',async e=>{
   e.preventDefault();if(!ready||saving)return;
   const data={enabled:get('enabled').checked,types:{},speakerIds:speakerIds(draftIds),routes:compactRoutes(draftRoutes)};

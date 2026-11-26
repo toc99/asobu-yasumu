@@ -917,3 +917,22 @@ body[data-role="parent"] .retro-count{padding:8px}
 #google-home-panel .gh-monitor-grid dd{margin:4px 0 0;font-weight:600;}
 #google-home-panel .gh-monitor details{padding:8px 0;border-top:1px solid #d7e5ee;}
 #google-home-panel .gh-monitor summary{cursor:pointer;}
+
+/* v3.26.2: routing matrix, scoped to its own scrollport. */
+#google-home-panel .gh-matrix-tabs{display:flex;gap:6px;flex-wrap:wrap}
+#google-home-panel .gh-matrix-tabs button{padding:8px 12px;min-height:36px;border:1px solid #c7d9ef;border-radius:8px;background:#fff;color:#446486;font-size:13px;font-weight:700}
+#google-home-panel .gh-matrix-tabs button[aria-pressed="true"]{background:#e4efff;border-color:#4a87ec;color:#244d90}
+#google-home-panel #gh-route-matrix-panel{min-width:0;max-width:100%}
+#google-home-panel .gh-matrix-scroll{min-width:0;max-width:100%;max-height:470px;overflow:auto;overscroll-behavior:contain;border:1px solid #d6e4f3;border-radius:10px;background:#fff}
+#google-home-panel .gh-route-matrix{border-collapse:separate;border-spacing:0;width:100%;min-width:max-content;font-size:12px;text-align:center}
+#google-home-panel .gh-route-matrix th,#google-home-panel .gh-route-matrix td{border-right:1px solid #dce6f1;border-bottom:1px solid #dce6f1;padding:0;vertical-align:middle}
+#google-home-panel .gh-route-matrix thead th{position:sticky;top:0;z-index:2;background:#eaf2ff;padding:8px;min-width:88px;width:88px;max-width:110px;overflow-wrap:anywhere;font-weight:700}
+#google-home-panel .gh-route-matrix .gh-matrix-name{position:sticky;left:0;z-index:1;width:136px;min-width:136px;max-width:136px;text-align:left;padding:7px 8px;background:#fff;overflow-wrap:anywhere;line-height:1.35}
+#google-home-panel .gh-route-matrix thead .gh-matrix-name{z-index:3;background:#eaf2ff}
+#google-home-panel .gh-route-matrix tr[data-inherited="true"] td{background:#f2f7fe}
+#google-home-panel .gh-route-matrix small{display:block;color:#687b94;font-weight:500;font-size:10px;margin-top:3px}
+#google-home-panel .gh-matrix-reset{display:block;margin:3px 0 0;padding:4px 0;background:transparent;color:#3468a6;text-decoration:underline;font-size:11px;font-weight:700;min-height:24px}
+#google-home-panel .gh-matrix-cell{display:flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;cursor:pointer;padding:7px}
+#google-home-panel .gh-matrix-cell input[type="checkbox"]{-webkit-appearance:checkbox;appearance:auto;flex:none;width:16px;height:16px;min-width:16px;max-width:16px;min-height:16px;max-height:16px;margin:0;padding:0;border:0;border-radius:0;background:transparent;accent-color:var(--blue)}
+#google-home-panel .gh-matrix-cell:focus-within{outline:2px solid #4a87ec;outline-offset:-2px}
+@media(max-width:600px){#google-home-panel .gh-route-matrix .gh-matrix-name{width:112px;min-width:112px;max-width:112px}#google-home-panel .gh-route-matrix thead th:not(.gh-matrix-name){width:78px;min-width:78px;max-width:98px}}

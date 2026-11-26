@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {effectiveRouteIds,editRouteCell,compactRoutes,routeTargets,ROUTE_TYPES,MAX_SPEAKERS} from '../google-home-policy.js';
+const ids=Array.from({length:6},(_,i)=>i+'2345678-1234-1234-1234-123456789abc');
+const [a,b,c]=ids;
+test('matrix displays inherited effective targets and edits the same persisted overrides',()=>{
+ assert.deepEqual(effectiveRouteIds([a,b],[]),[a,b]);
+ assert.deepEqual(effectiveRouteIds([a,b],[c]),[c]);
+ const e=editRouteCell([a,b],[],a,false);
+ assert.deepEqual(e,{ok:true,ids:[b],changed:true});
+ const routes=compactRoutes({gameDue:e.ids});
+ assert.deepEqual(routeTargets({speakerIds:[a,b],routes},'gameDue'),[{id:b,name:''}]);
+ assert.deepEqual(routeTargets({speakerIds:[a,b],routes},'restEnd'),[{id:a,name:''},{id:b,name:''}]);
+ assert.deepEqual(compactRoutes({gameDue:[]}),{});
+ assert.deepEqual(editRouteCell([a,b],[],c,true).ids,[a,b,c]);
+ assert.deepEqual(editRouteCell([a,b],[c],b,true).ids,[c,b]);
+ assert.deepEqual(editRouteCell([a,b],[],a,true),{ok:true,ids:[],changed:false});
+});
+test('last speaker cannot become silent inheritance; limits, legacy and invalid IDs are handled',()=>{
+ assert.deepEqual(editRouteCell([a],[],a,false),{ok:false,reason:'last'});
+ assert.deepEqual(editRouteCell([a],[b],b,false),{ok:false,reason:'last'});
+ assert.deepEqual(editRouteCell(ids.slice(0,MAX_SPEAKERS),[],ids[5],true),{ok:false,reason:'limit'});
+ assert.deepEqual(editRouteCell([],[],a,true).ids,[a]);
+ assert.deepEqual(editRouteCell([a],[],'bad',true),{ok:false,reason:'invalid'});
+ assert.ok('manual' in ROUTE_TYPES);
+});
+test('matrix and single editor share draft and existing save format; matrix has bounded scroll and sticky headers',()=>{
+ const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
+ const html=read('parent.html'),ui=read('google-home-ui.js'),css=read('style.css');
+ for(const id of ['route-matrix-mode','route-single-mode','route-matrix-panel','route-single-panel','route-matrix-scroll','route-matrix','route-type','route-speakers'])assert.ok(html.includes('id="gh-'+id+'"'),id);
+ assert.match(ui,/Object.entries\(ROUTE_TYPES\)/);
+ assert.match(ui,/draftRoutes\[type\]=edit.ids/);
+ assert.match(ui,/draftRoutes\[type\]=\[\]/);
+ assert.match(ui,/routes:compactRoutes\(draftRoutes\)/);
+ assert.match(ui,/e.target===routeType\|\|matrix.contains\(e.target\)/);
+ assert.match(ui,/if\(key===matrixKey\)return/);
+ assert.match(css,/\.gh-matrix-scroll\{[^}]*max-width:100%[^}]*overflow:auto/);
+ assert.match(css,/\.gh-route-matrix thead th\{position:sticky;top:0/);
+ assert.match(css,/\.gh-route-matrix \.gh-matrix-name\{position:sticky;left:0/);
+ assert.match(css,/\.gh-matrix-cell input\[type="checkbox"\]\{[^}]*width:16px/);
+});

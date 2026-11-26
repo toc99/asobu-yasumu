@@ -87,10 +87,23 @@
  <div id="gh-speakers" style="display:grid;gap:6px;overflow-wrap:anywhere"></div>
  </fieldset>
  <fieldset class="child-settings" style="min-width:0;grid-column:1/-1"><legend>通知種類ごとの出力先</legend>
- <p class="tiny">個別に選択した種類だけ共通設定を上書きします。未選択なら共通設定を使用します。</p>
+ <p class="tiny">チェックあり＝その機器に出力。行ごとに最大5台。共通設定の行を編集すると、その通知だけ個別指定になります。</p>
+ <p class="tiny">通知自体のON/OFFは下の「通知する内容」で設定します。最後の1台は表で解除できません（0台の個別指定は共通設定に戻る仕様のため）。共通へ戻す場合は行の「共通に戻す」を使います。</p>
+ <div class="gh-matrix-tabs" role="group" aria-label="通知先の入力方法">
+ <button type="button" id="gh-route-matrix-mode" aria-pressed="true">一覧（表）</button><button type="button" id="gh-route-single-mode" aria-pressed="false">通知別</button>
+ </div>
+ <div id="gh-route-matrix-panel">
+ <p class="tiny" id="gh-route-matrix-note" aria-live="polite"></p>
+ <div class="gh-matrix-scroll" id="gh-route-matrix-scroll" role="region" aria-label="通知種類と機器の一覧（スクロール可能）" tabindex="0">
+ <table class="gh-route-matrix" id="gh-route-matrix" aria-label="通知種類ごとの出力先"><thead></thead><tbody></tbody></table>
+ </div>
+ </div>
+ <div id="gh-route-single-panel" class="hidden">
  <label>設定する通知<select id="gh-route-type"></select></label>
+ <p class="tiny">個別に選択した種類だけ共通設定を上書きします。未選択なら共通設定を使用します。</p>
  <div id="gh-route-speakers" style="display:grid;gap:6px;overflow-wrap:anywhere"></div>
- <p class="tiny" id="gh-route-summary"></p>
+ </div>
+ <p class="tiny" id="gh-route-summary" aria-live="polite"></p>
  </fieldset>
  <label>通知音量（%）<input id="gh-volume" type="number" min="5" max="80" required/></label>
  <label>ゲームのお知らせ時間（分）<input id="gh-gameMinutes" type="number" min="1" max="240" required/></label>
