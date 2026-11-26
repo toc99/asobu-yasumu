@@ -1401,23 +1401,25 @@ service cloud.firestore {
         && (r.size() == 0 || validRouteValues(r.values()));
     }
     function discoveredSpeaker(d) {
-      return d is map && d.keys().hasAll(['id','name','online']) && d.keys().hasOnly(['id','name','online'])
-        && speakerUuid(d.id) && d.name is string && d.name.size() > 0 && d.name.size() <= 100 && d.online is bool;
+      let name = d.name;
+      return d is map && d.keys().hasOnly(['id','name','online'])
+        && speakerUuid(d.id) && name is string && name.size() > 0 && name.size() <= 100 && d.online is bool;
     }
     function discoveredSpeakers(l) {
-      return l is list && l.size() <= 12
-        && (l.size() <= 0 || discoveredSpeaker(l[0]))
-        && (l.size() <= 1 || discoveredSpeaker(l[1]))
-        && (l.size() <= 2 || discoveredSpeaker(l[2]))
-        && (l.size() <= 3 || discoveredSpeaker(l[3]))
-        && (l.size() <= 4 || discoveredSpeaker(l[4]))
-        && (l.size() <= 5 || discoveredSpeaker(l[5]))
-        && (l.size() <= 6 || discoveredSpeaker(l[6]))
-        && (l.size() <= 7 || discoveredSpeaker(l[7]))
-        && (l.size() <= 8 || discoveredSpeaker(l[8]))
-        && (l.size() <= 9 || discoveredSpeaker(l[9]))
-        && (l.size() <= 10 || discoveredSpeaker(l[10]))
-        && (l.size() <= 11 || discoveredSpeaker(l[11]));
+      let n = l.size();
+      return l is list && n <= 12
+        && (n <= 0 || discoveredSpeaker(l[0]))
+        && (n <= 1 || discoveredSpeaker(l[1]))
+        && (n <= 2 || discoveredSpeaker(l[2]))
+        && (n <= 3 || discoveredSpeaker(l[3]))
+        && (n <= 4 || discoveredSpeaker(l[4]))
+        && (n <= 5 || discoveredSpeaker(l[5]))
+        && (n <= 6 || discoveredSpeaker(l[6]))
+        && (n <= 7 || discoveredSpeaker(l[7]))
+        && (n <= 8 || discoveredSpeaker(l[8]))
+        && (n <= 9 || discoveredSpeaker(l[9]))
+        && (n <= 10 || discoveredSpeaker(l[10]))
+        && (n <= 11 || discoveredSpeaker(l[11]));
     }
     function validSpeakerConfig(d) {
       return d.keys().hasAll(['enabled','bridgeUid','speaker','volume','gameMinutes','warningMinutes','forgottenMinutes','quietStart','quietEnd','bedtime','types'])
@@ -1444,8 +1446,7 @@ service cloud.firestore {
           && (d.command.at == request.time || (resource != null && d.command == resource.data.get('command',{})))));
     }
     function validSpeakerQueue(q) {
-      return q is map && q.keys().hasAll(['version','waiting','active','types','activeTypes','at'])
-        && q.keys().hasOnly(['version','waiting','active','types','activeTypes','at'])
+      return q is map && q.keys().hasOnly(['version','waiting','active','types','activeTypes','at'])
         && q.version == 1 && q.waiting is int && q.waiting >= 0 && q.waiting <= 100
         && q.active is int && q.active >= 0 && q.active <= 4
         && q.types is list && q.types.size() <= 10 && q.types.size() <= q.waiting && q.types.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
@@ -1453,7 +1454,7 @@ service cloud.firestore {
         && q.at is int && q.at >= 0 && q.at <= request.time.toMillis()+10000;
     }
     function validMonitorEvent(e) {
-      return e is map && e.keys().hasAll(['at','kind']) && e.keys().hasOnly(['at','kind'])
+      return e is map && e.keys().hasOnly(['at','kind'])
         && e.at is int && e.at >= 0 && e.at <= request.time.toMillis()+30000
         && e.kind in ['start','success','failure','blocked','recovered'];
     }
@@ -1469,7 +1470,7 @@ service cloud.firestore {
     function monitorPercent(n) { return n == null || (n is int && n >= 0 && n <= 100); }
     function validMonitor(m) {
       let fields = ['version','bridgeVersion','host','platform','observedAt','uptimeSec','cpuTempDeciC','memPercent','diskPercent','watchdog','wifi','recoveryDay','attempts','successes','failures','events'];
-      return m is map && m.keys().hasAll(fields) && m.keys().hasOnly(fields)
+      return m is map && m.keys().hasOnly(fields)
         && m.version == 1 && m.bridgeVersion is string && m.bridgeVersion.matches('^v[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$')
         && m.host is string && m.host.matches('^[a-zA-Z0-9._-]{1,64}$')
         && m.platform in ['linux','win32','darwin','other']
@@ -1488,9 +1489,7 @@ service cloud.firestore {
         && validMonitor(d.monitor);
     }
     function validSpeakerStatus(d) {
-      return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
-        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue','monitor'])
-        && (!d.keys().hasAny(['monitor']) || validMonitor(d.monitor))
+      return d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue'])
         && (!d.keys().hasAny(['queue']) || validSpeakerQueue(d.queue))
         && discoveredSpeakers(d.get('speakers',[])) && d.get('scannedAt',0) is int && d.get('scannedAt',0) >= 0 && d.get('scannedAt',0) <= request.time.toMillis()+10000
         && d.updatedAt == request.time && d.bridgeUid == request.auth.uid
@@ -1513,13 +1512,21 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if isSpeaker(h) || isParent(h);
       }
+      // Literal paths keep independent evaluations small; parent read access is unchanged.
       match /googleHome/{docId} {
-        allow get: if isParent(h) || (docId in ['config','status'] && isSpeaker(h));
-        allow list: if false;
-        allow create, update: if (docId == 'config' && isParent(h) && validSpeakerConfig(request.resource.data))
-          || (docId == 'status' && isSpeaker(h) && validSpeakerStatus(request.resource.data))
-          || (docId == 'monitor' && isSpeaker(h) && validMonitorDocument(request.resource.data));
-        allow delete: if docId == 'config' && isParent(h);
+        allow get: if isParent(h);
+      }
+      match /googleHome/config {
+        allow get: if isSpeaker(h);
+        allow create, update: if isParent(h) && validSpeakerConfig(request.resource.data);
+        allow delete: if isParent(h);
+      }
+      match /googleHome/status {
+        allow get: if isSpeaker(h);
+        allow create, update: if isSpeaker(h) && validSpeakerStatus(request.resource.data);
+      }
+      match /googleHome/monitor {
+        allow create, update: if isSpeaker(h) && validMonitorDocument(request.resource.data);
       }
 
 

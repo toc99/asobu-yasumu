@@ -87,12 +87,13 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   await assertFails(setDoc(d(kid,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:q}));
   const monitor={version:1,bridgeVersion:'v3.26.0',host:'home-server',platform:'linux',observedAt:Date.now(),uptimeSec:2400,cpuTempDeciC:520,memPercent:30,diskPercent:10,watchdog:'active',wifi:'connected',recoveryDay:'2026-11-26',attempts:1,successes:1,failures:0,events:[{at:Date.now(),kind:'success'}]};
   const monitorStatus={...status,monitor};
-  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),monitorStatus));
+  // Old v3.26.0 falls back to legacy status on permission-denied.
+  await assertFails(setDoc(d(bridge,'googleHome','status'),monitorStatus));
   await assertSucceeds(getDoc(d(parent,'googleHome','status')));
   await assertFails(getDoc(d(kid,'googleHome','status')));
   await assertFails(setDoc(d(parent,'googleHome','status'),monitorStatus));
   await assertFails(setDoc(d(other,'googleHome','status'),monitorStatus));
-  for(const invalid of [{...monitor,ip:'192.168.1.24'},{...monitor,memPercent:101},{...monitor,observedAt:Date.now()+120000},{...monitor,events:[{at:Date.now(),kind:'raw journal'}]},{...monitor,events:Array(6).fill(monitor.events[0])},{...monitor,host:'secret text'}])await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,monitor:invalid}));
+  for(const invalid of [{...monitor,ip:'192.168.1.24'},{...monitor,memPercent:101},{...monitor,observedAt:Date.now()+120000},{...monitor,events:[{at:Date.now(),kind:'raw journal'}]},{...monitor,events:Array(6).fill(monitor.events[0])},{...monitor,host:'secret text'}])await assertFails(setDoc(d(bridge,'googleHome','monitor'),{bridgeUid:'speaker-user',updatedAt:serverTimestamp(),monitor:invalid}));
   await assertSucceeds(setDoc(d(bridge,'googleHome','status'),status));
   // Production-sized status and monitor payloads are evaluated independently.
   const fullIds=Array.from({length:12},(_,i)=>i.toString(16).padStart(8,'0')+'-1234-1234-1234-123456789abc');
@@ -100,7 +101,9 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   const fullMonitor={...monitor,bridgeVersion:'v3.26.1',observedAt:Date.now(),uptimeSec:2057,cpuTempDeciC:540,memPercent:8,diskPercent:9,events:['success','start','failure','blocked','recovered'].map(kind=>({at:Date.now(),kind}))};
   const telemetry=(db)=>d(db,'googleHome','monitor');
   const monitorDoc={bridgeUid:'speaker-user',updatedAt:serverTimestamp(),monitor:fullMonitor};
+  console.log('Testing maximum 12-speaker status');
   await assertSucceeds(setDoc(d(bridge,'googleHome','status'),fullStatus));
+  console.log('Testing maximum 5-event monitor');
   await assertSucceeds(setDoc(telemetry(bridge),monitorDoc));
   await assertSucceeds(getDoc(telemetry(parent)));
   await assertFails(getDoc(telemetry(kid)));
