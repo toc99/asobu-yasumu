@@ -903,3 +903,17 @@ body[data-role="parent"] .approval-buttons .btn{min-height:44px;padding:8px 11px
 body[data-role="parent"] .retro-report-admin .retro-summary{gap:5px;margin-bottom:8px}
 body[data-role="parent"] .retro-count{padding:8px}
 @media(max-width:390px){body[data-role="parent"] .container{padding-inline:10px}body[data-role="parent"] .ui-view-pane .card{padding:11px}body[data-role="parent"] .ui-person-summary{padding:8px}.parent-person-head{align-items:flex-start;flex-direction:column}.parent-action-links .btn{font-size:12px}}
+
+/* v3.26.0: bounded, mobile-friendly bridge monitor */
+#google-home-panel .gh-monitor{border:1px solid #c6dce9;border-radius:14px;padding:12px;margin:0 0 14px;min-width:0;overflow-wrap:anywhere;}
+#google-home-panel .gh-monitor-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+#google-home-panel .gh-monitor-head h3{margin:0;}
+#google-home-panel #gh-monitor-connection{color:#5b6674;}
+#google-home-panel #gh-monitor-connection[data-connection="online"]{color:#16734c;}
+#google-home-panel #gh-monitor-connection[data-connection="offline"]{color:#b42318;}
+#google-home-panel .gh-monitor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0;}
+#google-home-panel .gh-monitor-grid div{border:1px solid #d7e5ee;border-radius:8px;padding:8px;min-width:0;}
+#google-home-panel .gh-monitor-grid dt{font-size:.78rem;color:inherit;opacity:.8;}
+#google-home-panel .gh-monitor-grid dd{margin:4px 0 0;font-weight:600;}
+#google-home-panel .gh-monitor details{padding:8px 0;border-top:1px solid #d7e5ee;}
+#google-home-panel .gh-monitor summary{cursor:pointer;}

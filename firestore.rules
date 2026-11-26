@@ -1452,9 +1452,40 @@ service cloud.firestore {
         && q.activeTypes is list && q.activeTypes.size() == q.active && q.activeTypes.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
         && q.at is int && q.at >= 0 && q.at <= request.time.toMillis()+10000;
     }
+    function validMonitorEvent(e) {
+      return e is map && e.keys().hasAll(['at','kind']) && e.keys().hasOnly(['at','kind'])
+        && e.at is int && e.at >= 0 && e.at <= request.time.toMillis()+30000
+        && e.kind in ['start','success','failure','blocked','recovered'];
+    }
+    function validMonitorEvents(e) {
+      return e is list && e.size() <= 5
+        && (e.size() <= 0 || validMonitorEvent(e[0]))
+        && (e.size() <= 1 || validMonitorEvent(e[1]))
+        && (e.size() <= 2 || validMonitorEvent(e[2]))
+        && (e.size() <= 3 || validMonitorEvent(e[3]))
+        && (e.size() <= 4 || validMonitorEvent(e[4]));
+    }
+    function monitorCount(n) { return n is int && n >= 0 && n <= 1440; }
+    function monitorPercent(n) { return n == null || (n is int && n >= 0 && n <= 100); }
+    function validMonitor(m) {
+      let fields = ['version','bridgeVersion','host','platform','observedAt','uptimeSec','cpuTempDeciC','memPercent','diskPercent','watchdog','wifi','recoveryDay','attempts','successes','failures','events'];
+      return m is map && m.keys().hasAll(fields) && m.keys().hasOnly(fields)
+        && m.version == 1 && m.bridgeVersion is string && m.bridgeVersion.matches('^v[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$')
+        && m.host is string && m.host.matches('^[a-zA-Z0-9._-]{1,64}$')
+        && m.platform in ['linux','win32','darwin','other']
+        && m.observedAt is int && m.observedAt >= 0 && m.observedAt <= request.time.toMillis()+30000
+        && m.uptimeSec is int && m.uptimeSec >= 0 && m.uptimeSec <= 315360000
+        && (m.cpuTempDeciC == null || (m.cpuTempDeciC is int && m.cpuTempDeciC >= -100 && m.cpuTempDeciC <= 1500))
+        && monitorPercent(m.memPercent) && monitorPercent(m.diskPercent)
+        && m.watchdog in ['active','inactive','unknown'] && m.wifi in ['connected','disconnected','unknown']
+        && m.recoveryDay is string && (m.recoveryDay == '' || m.recoveryDay.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'))
+        && monitorCount(m.attempts) && monitorCount(m.successes) && monitorCount(m.failures)
+        && validMonitorEvents(m.events);
+    }
     function validSpeakerStatus(d) {
       return d.keys().hasAll(['updatedAt','bridgeUid','state','device','history'])
-        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue'])
+        && d.keys().hasOnly(['updatedAt','bridgeUid','state','device','history','speakers','scannedAt','queue','monitor'])
+        && (!d.keys().hasAny(['monitor']) || validMonitor(d.monitor))
         && (!d.keys().hasAny(['queue']) || validSpeakerQueue(d.queue))
         && discoveredSpeakers(d.get('speakers',[])) && d.get('scannedAt',0) is int && d.get('scannedAt',0) >= 0 && d.get('scannedAt',0) <= request.time.toMillis()+10000
         && d.updatedAt == request.time && d.bridgeUid == request.auth.uid

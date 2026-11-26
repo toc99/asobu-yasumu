@@ -1,4 +1,5 @@
 import {defaultConfig,TYPES,stamp,ROUTE_TYPES,speakerIds,knownSpeakers,MAX_SPEAKERS,normalizeClock,compactRoutes} from './google-home-policy.js?v=3.25.1';
+import {monitorView,deliveryStats,duration,jstDay} from './google-home-monitor.js?v=3.26.0';
 const reasons={muted:'スピーカーがミュート中',media_busy:'音楽・動画の再生または一時停止中',other_app:'別のCastアプリが使用中（状態を確認できない）',status_unavailable:'スピーカーの状態を取得できない',speaker_not_unique:'指定したスピーカーが見つからない、または同名の機器が複数ある',tts_failed:'日本語音声生成に失敗',tts_duration:'音声の長さが範囲外',receiver_no_start:'スピーカーで音声再生が開始されない',receiver_no_finish:'音声再生完了を確認できない',cast_error:'Cast通信または音声配信エラー',timeout:'処理タイムアウト',process_error:'Pythonの実行または応答エラー',stale:'通知の有効時間切れ・設定変更',queue_full:'待機上限に達したためスキップ',interrupted:'再生中に連携PCが停止したため再送なし'};
 export function setupGoogleHome({dbApi,db,householdId,toast}){
  const root=document.getElementById('google-home-panel');if(!root)return {start(){},stop(){}};
@@ -12,7 +13,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
    const caption=document.createElement('span');caption.textContent=label;line.append(input,caption);switches.append(line);
  }
  let cfg=defaultConfig(),status=null,subs=[],dirty=false,ready=false,active=false,timer=null;
- let draftIds=[],draftRoutes={},saving=false,sending=false;
+ let draftIds=[],draftRoutes={},saving=false,sending=false,statusFromServer=false;
  const queueReady=()=>status?.bridgeUid===cfg.bridgeUid&&status?.queue?.version===1&&Date.now()-stamp(status.updatedAt)>=-30000&&Date.now()-stamp(status.updatedAt)<150000;
  const typeLabel=t=>ROUTE_TYPES[t]||'通知';
  const times=new Set(['quietStart','quietEnd','bedtime']);
@@ -66,7 +67,42 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   draftIds=speakerIds(c.speakerIds);draftRoutes=Object.fromEntries(Object.keys(ROUTE_TYPES).map(k=>[k,speakerIds(c.routes?.[k])]));renderChoices();
  }
  function setButtons(){form.querySelectorAll('button').forEach(b=>b.disabled=!ready||saving);get('send').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('test').disabled=!ready||dirty||saving||sending||!cfg.enabled||!queueReady();get('scan').disabled=!ready||saving||!cfg.bridgeUid;}
+ function renderMonitor(){
+  const now=Date.now(),v=monitorView(status,cfg.bridgeUid,{now,ready,server:statusFromServer}),m=v.monitor;
+  const labels={loading:'確認中',unconfigured:'未設定',unknown:'確認不可',offline:'オフライン',online:'オンライン'};
+  const put=(id,text)=>{get('monitor-'+id).textContent=text;};
+  const connection=get('monitor-connection');connection.textContent=labels[v.connection];connection.dataset.connection=v.connection;
+  put('note',v.connection==='unknown'?'この端末からサーバー状態を確認できません。':v.connection==='online'&&!m?'連携PCは稼働中です。詳細監視には連携PC v3.26.0への更新が必要です。':v.connection==='offline'?'最終取得時点の情報です。連携PCまたは通信経路を確認してください。':!cfg.enabled&&v.connection==='online'?'連携PCは稼働中・音声通知は設定で停止中です。':'');
+  const currentStatus=ready&&statusFromServer&&status?.bridgeUid===cfg.bridgeUid?status:null;
+  const history=Array.isArray(currentStatus?.history)?currentStatus.history:[];
+  const stats=deliveryStats(history),fmt=t=>new Date(t).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'});
+  put('last',v.age===null?'—':Math.floor(v.age/1000)+'秒前');
+  put('host',m?m.host+' ('+m.platform+')':'—');put('version',m?.bridgeVersion||'—');
+  put('uptime',m?duration(m.uptimeSec):'—');
+  const detected=knownSpeakers(currentStatus?.speakers||[]).filter(d=>d.online).length;
+  put('speakers',currentStatus?.scannedAt?detected+'台（'+fmt(currentStatus.scannedAt)+'）':'—');
+  put('rate',stats.rate===null?'—':stats.rate+'%（'+stats.sent+'/'+(stats.sent+stats.error)+'台分）');
+  put('wifi',({connected:'接続',disconnected:'切断',unknown:'未取得'})[m?.wifi]||'—');
+  put('watchdog',({active:'有効',inactive:'停止',unknown:'未取得'})[m?.watchdog]||'—');
+  const today=m?.recoveryDay===jstDay(now);
+  put('recovery',today?m.successes+'回':'—');put('counts',today?'試行 '+m.attempts+'回 ／ 成功 '+m.successes+'回 ／ 失敗 '+m.failures+'回':'当日分のログ未取得（Linux側の監視連携を確認）');
+  put('temp',Number.isInteger(m?.cpuTempDeciC)?(m.cpuTempDeciC/10).toFixed(1)+' ℃':'—');
+  put('memory',Number.isInteger(m?.memPercent)?m.memPercent+'%':'—');put('disk',Number.isInteger(m?.diskPercent)?m.diskPercent+'%':'—');
+  const events=get('monitor-events');events.replaceChildren();
+  const add=(list,label)=>{const li=document.createElement('li');li.textContent=label;list.append(li);};
+  const names={start:'復旧開始',success:'復旧成功',failure:'復旧失敗',blocked:'ハードウェアブロック',recovered:'通信回復'};
+  for(const e of today&&Array.isArray(m.events)?m.events:[])add(events,fmt(e.at)+' '+(names[e.kind]||'不明'));
+  if(!events.children.length)add(events,today?'記録なし':'未取得');
+  const delivery=get('monitor-delivery');delivery.replaceChildren();
+  for(const h of history.slice(0,5)){
+   if(!h||typeof h!=='object')continue;
+   const target=Array.isArray(h.targets)?h.targets.filter(t=>t&&typeof t==='object').map(t=>t.name+'：'+({sent:'成功',error:'失敗',skipped:'スキップ'}[t.result]||'不明')+(reasons[t.reason]?'（'+reasons[t.reason]+'）':'')).join(' ／ '):'';
+   add(delivery,fmt(Number(h.at)||0)+' '+typeLabel(h.type)+'：'+({sent:'成功',partial:'一部成功',error:'失敗',skipped:'スキップ'}[h.result]||'不明')+(target?' ／ '+target:''));
+  }
+  if(!delivery.children.length)add(delivery,'通知履歴なし');
+ }
  function renderStatus(){
+  renderMonitor();
   const age=Date.now()-stamp(status?.updatedAt);
   const fresh=!!status&&status.bridgeUid===cfg.bridgeUid&&age>=-30000&&age<150000;
   const labels={ready:'通知先検出済み',unavailable:'スピーカー未検出',busy:'再生中',disabled:'通知停止中',error:'エラー'};
@@ -86,7 +122,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
   renderChoices();
   if(!list.childElementCount){const li=document.createElement('li');li.textContent='通知履歴なし';list.append(li);}
  }
- function stop(){active=false;ready=false;dirty=false;saving=false;get('save-result').textContent='';subs.forEach(fn=>fn());subs=[];clearInterval(timer);timer=null;cfg=defaultConfig();status=null;fill(cfg);renderStatus();setButtons();}
+ function stop(){active=false;ready=false;dirty=false;saving=false;get('save-result').textContent='';subs.forEach(fn=>fn());subs=[];clearInterval(timer);timer=null;cfg=defaultConfig();status=null;statusFromServer=false;fill(cfg);renderStatus();setButtons();}
  function start(){
   if(active)return;active=true;
   subs.push(dbApi.onSnapshot(configRef,{includeMetadataChanges:true},s=>{
@@ -94,7 +130,7 @@ export function setupGoogleHome({dbApi,db,householdId,toast}){
     const base=defaultConfig(),data=s.exists()?s.data():{};cfg={...base,...data,types:{...base.types,...data.types}};
     ready=true;if(!dirty)fill(cfg);setButtons();renderStatus();
   },()=>{ready=false;get('state').textContent='設定を取得できません。Firestoreルールを確認してください。';setButtons();}));
-  subs.push(dbApi.onSnapshot(statusRef,s=>{if(active&&!s.metadata.fromCache){status=s.exists()?s.data():null;renderStatus();}},()=>{status=null;renderStatus();}));
+  subs.push(dbApi.onSnapshot(statusRef,{includeMetadataChanges:true},s=>{if(!active)return;statusFromServer=!s.metadata.fromCache&&!s.metadata.hasPendingWrites;if(statusFromServer)status=s.exists()?s.data():null;renderStatus();},()=>{statusFromServer=false;status=null;renderStatus();}));
   timer=setInterval(renderStatus,15000);
  }
  form.addEventListener('input',e=>{if(e.target===routeType)return;dirty=true;setButtons();});

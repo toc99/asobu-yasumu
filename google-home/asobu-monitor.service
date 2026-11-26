@@ -1,0 +1,15 @@
+[Unit]
+Description=Asobu read-only host monitoring collector
+After=systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/asobu-collect-monitor.py
+RuntimeDirectory=asobu-monitor
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=40
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
