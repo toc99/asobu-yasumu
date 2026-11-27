@@ -24,6 +24,15 @@ test('approval, feedback and audit render the verified actor UID without changin
   const read=p=>readFileSync(new URL('../'+p,import.meta.url),'utf8');
   assert.match(read('app.js'),/parentName\(r.reviewedBy,stampMillis\(r.reviewedAt\)\)/);
   assert.match(read('app.js'),/parentName\(a.actorUid,created\)/);
-  assert.match(read('feedback.js'),/parentName\(m.authorUid,Number\(m.postedAtMs\)\)/);
-  assert.match(read('sw.js'),/parent-identities\.js\?v=3\.27\.0/);
+  assert.match(read('feedback.js'),/parentName\(m.authorUid\)/);
+  assert.match(read('app.js'),/parentName:actorUid=>parentDisplayName\(parentIdentities,actorUid\)/);
+  assert.doesNotMatch(read('feedback.js'),/parentName\(m.authorUid,/);
+  assert.match(read('sw.js'),/parent-identities\.js\?v=3\.27\.1/);
+});
+
+test('feedback account labels are independent of activation date or message timestamp',()=>{
+  for(const [uid,label] of [['father','お父さん'],['mother','お母さん'],['unknown','保護者'],['','保護者']]){
+    assert.equal(parentDisplayName(d,uid),label);
+  }
+  assert.equal(parentDisplayName(null,'father'),'保護者');
 });
