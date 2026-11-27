@@ -39,10 +39,11 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
     if(r.parentReply)items.push('<div class="feedback-bubble parent"><span>保護者・これまでの返事</span><p>'+safe(r.parentReply)+'</p></div>');
     const msgs=Array.isArray(r.messages)?r.messages:[];
     for(const m of msgs){
+      // A verified author UID identifies the account independently of the client timestamp.
       const fromParent=m.authorRole==='parent';
       const when=Number(m.postedAtMs)>0?displayDate(Number(m.postedAtMs)):'日時確認中';
       items.push('<div class="feedback-bubble '+(fromParent?'parent':'kid')+'"><span>'+
-        (fromParent?safe(parentName(m.authorUid,Number(m.postedAtMs))):safe(playerLabel(r.childId)))+' ・ '+safe(when)+'</span><p>'+safe(m.text)+'</p></div>');
+        (fromParent?safe(parentName(m.authorUid)):safe(playerLabel(r.childId)))+' ・ '+safe(when)+'</span><p>'+safe(m.text)+'</p></div>');
     }
     return items.join('');
   }
