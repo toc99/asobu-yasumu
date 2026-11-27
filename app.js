@@ -1,15 +1,17 @@
 import {firebaseConfig, householdId} from './firebase-config.js';
 import {POKEMON_NAMES,POKEDEX_TOTAL,officialPokedexUrl,pokemonNoFromClaim,pokemonName,loadExtendedPokemonNames} from './pokedex-data.js';
 import {EVOLUTION_TARGETS,evolutionStage} from './evolution-data.js';
-import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.26.2';
-import {effectivePausedMillis} from './pause-timing.js?v=3.26.2';
-import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.26.2';
-import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.26.2';
-import {canResumeInMorning} from './early-resume-policy.js?v=3.26.2';
-import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.26.2';
-import {setupFeedback} from './feedback.js?v=3.26.2';
-import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.26.2';
-import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.26.2';
+import {APP_VERSION,RELEASE_NOTES} from './release-notes.js?v=3.27.0';
+import {effectivePausedMillis} from './pause-timing.js?v=3.27.0';
+import {totalCycleUseMs,restEndWithDebt,projectNextPlayableTime} from './cycle-policy.js?v=3.27.0';
+import {recordedVideoMillis,remainingVideoMs,nextVideoUseMs} from './video-cycle-policy.js?v=3.27.0';
+import {canResumeInMorning} from './early-resume-policy.js?v=3.27.0';
+import {legacyEvolutionRecoveryCandidates} from './evolution-recovery.js?v=3.27.0';
+import {setupFeedback} from './feedback.js?v=3.27.0';
+import {loadAuthorizedPokemonInventories} from './backup-data.js?v=3.27.0';
+import {sameRetroSession,unresolvedNotices,availablePenalty,RETRO_PENALTY_THRESHOLD} from './retro-policy.js?v=3.27.0';
+
+import {parseParentIdentities,parentNameFor,parentDisplayName,isParentIdentity} from './parent-identities.js?v=3.27.0';
 
 const $ = id => document.getElementById(id);
 const rolePage = document.body.dataset.role;
@@ -38,6 +40,15 @@ let selectedDay=dayStart(Date.now()), historyTab='home', toastHandle=null, famil
 let focusChild='older', parentFocusChild='older', kidView='time', parentView='home';
 let playerRenderSignature='', playerRenderedAt=0, dashboardRenderedAt=0;
 let lastActivityDayIndex=-1,feedbackUi=null,googleHomeUi=null;
+let parentIdentities=null;
+const parentName=(actorUid,at)=>parentNameFor(parentIdentities,actorUid,at);
+function renderParentIdentity(){
+  const node=$('parent-identity');if(!node)return;
+  const name=parentDisplayName(parentIdentities,uid);
+  node.textContent='ログイン中：'+name;
+  node.dataset.identity=name;
+  node.title=name==='保護者'?'個別保護者の設定を確認してください。':'現在ログインしている保護者';
+}
 let pendingCorrection=null, reconnecting=null, retryAfterError=false, authCheckBusy=false, refreshing=false;
 
 function toast(message){const box=$('toast');box.textContent=message;box.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>box.classList.remove('show'),4200);}
@@ -199,9 +210,9 @@ function renderAudit(){const node=$('audit-list');if(!node)return;
   const entries=model.auditLogs;
   node.innerHTML=entries.length?entries.map(a=>{
     const created=stampMillis(a.createdAt);
-    const who=a.actorRole==='parent'?'保護者':'子ども用iPad';
+    const who=a.actorRole==='parent'?parentName(a.actorUid,created):a.actorRole==='kid'?'子ども用iPad':'不明';
     const target=ids.includes(a.childId)?playerLabel(a.childId):'家族全体';
-    return `<div class="audit-entry"><div class="audit-head"><strong>${safe(AUDIT_ACTIONS[a.action]||a.action)} · ${safe(target)}</strong><span>${created?safe(new Date(created).toLocaleString('ja-JP')):'日時確認中'} · ${who}</span></div><div class="audit-values"><span>変更前：${safe(a.before||'—')}</span><span>変更後：${safe(a.after||'—')}</span></div></div>`;
+    return `<div class="audit-entry"><div class="audit-head"><strong>${safe(AUDIT_ACTIONS[a.action]||a.action)} · ${safe(target)}</strong><span>${created?safe(new Date(created).toLocaleString('ja-JP')):'日時確認中'} · ${safe(who)}</span></div><div class="audit-values"><span>変更前：${safe(a.before||'—')}</span><span>変更後：${safe(a.after||'—')}</span></div></div>`;
   }).join(''):'<p class="empty">v3.4導入後の操作履歴はまだありません。</p>';
 }
 function restEnd(p){return Math.max(normalRestEnd(p),p?.manualRestUntil||0);}
@@ -365,7 +376,7 @@ function reportStats(id) {
   }
   // sessions.createdBy は当該アプリの子ども/保護者アカウントのUID。
   // 旧版データ移行時に保護者が作成した履歴は「子ども自身の終了」に数えない。
-  const selfEnded=completed.filter(s=>s.activityType!=='video' && typeof s.createdBy==='string' && s.createdBy.length>0 && (isParentPage ? s.createdBy!==uid : s.createdBy===uid)).length;
+  const selfEnded=completed.filter(s=>s.activityType!=='video' && typeof s.createdBy==='string' && s.createdBy.length>0 && (isParentPage ? s.createdBy!==uid&&!isParentIdentity(parentIdentities,s.createdBy) : s.createdBy===uid)).length;
   const badges=[
     {icon:'🌟',title:'じぶんでおしまい',description:'子ども画面から1回終了',earned:selfEnded>=1},
     {icon:'🏅',title:'おしまい上手',description:'子ども画面から3回終了',earned:selfEnded>=3},
@@ -1519,7 +1530,7 @@ function renderEffortCalendar(){
         pokemon=r.status==='approved'?`<a href="${officialPokedexUrl(no)}" target="_blank" rel="noopener noreferrer">${name}を公式ずかんで見る</a>`:`<span>仮ゲット：${name}</span>`;
       }
       if(activityIsXpOnly(r)&&r.status!=='rejected')pokemon='<span>🌱 相棒 +'+activityXpAmount(r)+' XP（くじなし）</span>';
-      return `<div class="effort-detail-row"><span><strong>${safe(activityKindLabel(r.activityKind))}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}</span></div>`;
+      return `<div class="effort-detail-row"><span><strong>${safe(activityKindLabel(r.activityKind))}</strong>${pokemon?`<small>${pokemon}</small>`:''}</span><span class="effort-status ${statusClass}">${label}${r.status!=='pending'?' · '+safe(parentName(r.reviewedBy,stampMillis(r.reviewedAt))):''}</span></div>`;
     }).join('')}</div>`:'<p class="tiny">この日の活動申請はありません。</p>');
 }
 
@@ -1555,7 +1566,7 @@ function renderActivities(){
           :retry?'見送り・もういちどできたら再申請可能':req?'保護者の確認待ち'
           :xpOnly?`承認で相棒 +${ACTIVITY_EXTRA_XP} XP`:'申請するとポケモンを仮ゲット');
       const detail=req?.status==='pending'&&label?`<span class="provisional-label">⏳ ${safe(label)}を仮ゲット！</span>`
-        :req?.status==='pending'&&activityIsXpOnly(req)?`<span class="provisional-label">🌱 承認後に相棒へ +${ACTIVITY_EXTRA_XP} XP</span>`:'';
+        :req?.status==='pending'&&activityIsXpOnly(req)?`<span class="provisional-label">🌱 承認後に相棒へ +${ACTIVITY_EXTRA_XP} XP</span>`:req&&['approved','rejected'].includes(req.status)?`<small class="parent-actor">${safe(parentName(req.reviewedBy,stampMillis(req.reviewedAt)))}${req.status==='approved'?'が承認':'が見送り'}</small>`:'';
       const unavailable=alreadyDone||remaining===0||suspended||!inventoryReady(id)||!canOperate()||!model.activityServerConfirmed||!model.rewardsServerConfirmed||busy;
       const buttonLabel=junior
         ?(alreadyDone?'もう おくったよ':suspended?'いまは おやすみ':remaining===0?'きょうは おわり':retry?'もういちど できた！':'できた！ おくる')
@@ -1598,7 +1609,7 @@ function renderApprovals(){
     const overdue=r.status==='pending'&&stampMillis(r.requestedAt)>0&&Date.now()-stampMillis(r.requestedAt)>=DAY;
     const no=Number(r.candidateNo);
     const pokemon=r.status==='pending'&&Number.isInteger(no)&&no>0?`<small class="provisional-label">⏳ 仮ゲット：${safe(pokemonName(no))}（No.${String(no).padStart(4,'0')}）</small>`:r.status==='pending'&&activityIsXpOnly(r)?`<small>🌱 承認すると相棒へ +${ACTIVITY_EXTRA_XP} XP（くじなし）</small>`:'';
-    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>${activityIsXpOnly(r)?'経験値を承認':'正式にゲット'}</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
+    return `<div class="approval-item ${overdue?'approval-overdue':''}"><div class="approval-copy"><strong>${safe(playerLabel(r.childId))}：${safe(kind)}</strong><small>${safe(when)} 申請・${r.status==='pending'?'確認待ち':r.status==='approved'?'承認済み':'見送り'}${r.status!=='pending'?' · '+safe(parentName(r.reviewedBy,stampMillis(r.reviewedAt))):''}</small>${overdue?'<span class="approval-overdue-label">24時間以上確認待ち</span>':''}${pokemon}</div>${r.status==='pending'?`<div class="approval-buttons"><button class="btn primary" data-activity-review="${safe(r.requestId)}:approve" ${busy||rewardSuspended(model.profiles[r.childId])?'disabled':''}>${activityIsXpOnly(r)?'経験値を承認':'正式にゲット'}</button><button class="btn outline" data-activity-review="${safe(r.requestId)}:reject" ${busy?'disabled':''}>見送る</button></div>`:''}</div>`;
   };
   root.innerHTML=requests.length?requests.map(approvalHtml).join(''):'<p class="empty">この条件に該当する承認待ちはありません。</p>';
   const reviewed=$('activity-reviewed');if(reviewed)reviewed.innerHTML=recent.length?recent.map(approvalHtml).join(''):'<p class="empty">対応済みの活動はありません。</p>';
@@ -2481,7 +2492,7 @@ function listenerError(e){
   toast('クラウドの接続が切れました。再接続して最新状態を確認してください。');render();
 }
 function unsubscribeListeners(){cleanups.forEach(fn=>{try{fn();}catch{}});cleanups=[];}
-function disconnect(){unsubscribeListeners();feedbackUi?.stop();googleHomeUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.retroReports=[];model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
+function disconnect(){parentIdentities=null;renderParentIdentity();unsubscribeListeners();feedbackUi?.stop();googleHomeUi?.stop();model.profiles={};model.sessions=[];model.presence=null;model.ready=false;model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;model.auditLogs=[];model.retroReports=[];model.retroReportsLoaded=false;model.retroReportsServerConfirmed=false;renderRetroAdmin();model.reportSessions=[];model.reportLoaded=false;model.reportFromCache=true;model.reportTruncated=false;model.rewards=[];model.rewardsLoaded=false;model.rewardsServerConfirmed=false;model.activityRequests=[];model.activityLoaded=false;model.activityServerConfirmed=false;model.bonusGrants=[];model.bonusLoaded=false;model.bonusServerConfirmed=false;model.pokemonReleaseEvents=[];model.pokemonReleaseLoaded=false;model.pokemonReleaseServerConfirmed=false;pokemonReleasePending=null;model.pokemonInventories={older:null,younger:null};model.inventoryLoaded={older:false,younger:false};model.inventoryError={older:'',younger:''};previousRest.clear();if($('team-picker')?.open)$('team-picker').close();editingTeamSlot=null;renderFavoriteTeam();renderBonuses();retryAfterError=false;renderReport();}
 async function recheckConnection(){
   if(!navigator.onLine){model.profilesServerConfirmed=false;model.settingsServerConfirmed=false;render();return;}
   if(reconnecting)return reconnecting;
@@ -2532,6 +2543,20 @@ function subscribeReport(){
   },e=>{console.warn('report listener',e);model.reportLoaded=false;renderReport();});
 }
 function listen(){
+ const expectedUid=uid;
+ // This directory contains only two UIDs and an effective timestamp, never email or credentials.
+ const refreshParentIdentity=()=>{
+   renderParentIdentity();renderAudit();renderActivities();renderApprovals();renderEffortCalendar();renderReport();feedbackUi?.refresh();
+ };
+ cleanups.push(dbApi.onSnapshot(dbApi.doc(db,'households',householdId,'settings','parentIdentities'),snap=>{
+   if(uid!==expectedUid)return;
+   parentIdentities=parseParentIdentities(snap.exists()?snap.data():null);
+   refreshParentIdentity();
+ },err=>{
+   if(uid!==expectedUid)return;
+   console.warn('parent identity directory',err);parentIdentities=null;
+   refreshParentIdentity();
+ }));
  for(const id of ids){
    cleanups.push(dbApi.onSnapshot(pokemonInventoryRef(id),{includeMetadataChanges:true},snap=>{
      model.pokemonInventories[id]=snap.exists()?snap.data():null;
@@ -3035,7 +3060,7 @@ async function exportAuditCsv(){
   const esc=v=>{let s=String(v??'');if(/^[=+@\\-]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
   const rows=[['日時','操作','対象','操作アカウント','UID','変更前','変更後','履歴ID'],
    ...docs.docs.map(doc=>{const a=doc.data();return [stampMillis(a.createdAt)?new Date(stampMillis(a.createdAt)).toLocaleString('ja-JP'):'',
-    AUDIT_ACTIONS[a.action]||a.action,ids.includes(a.childId)?playerLabel(a.childId):'家族全体',a.actorRole,a.actorUid,a.before,a.after,a.sessionId];})];
+    AUDIT_ACTIONS[a.action]||a.action,ids.includes(a.childId)?playerLabel(a.childId):'家族全体',a.actorRole==='parent'?parentName(a.actorUid,stampMillis(a.createdAt)):a.actorRole,a.actorUid,a.before,a.after,a.sessionId];})];
   download(`asobu-yasumu-audit-${dateKey(Date.now())}.csv`,new Blob(['\ufeff'+rows.map(row=>row.map(esc).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
   toast('操作履歴CSVを保存しました（最新50件）');
  }catch(e){console.error(e);toast(errorText(e));}
@@ -3044,9 +3069,9 @@ async function heartbeat(){if(isParentPage||!uid||!document.visibilityState||doc
  try{await dbApi.setDoc(dbApi.doc(db,'households',householdId,'presence','ipad'),{lastSeenAt:dbApi.serverTimestamp(),device:'ipad'}, {merge:true});}catch(e){console.warn('heartbeat',e);}
 }
 function initUiEvents(){
-  feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast});
+  feedbackUi=setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast,parentName});
   // Optional integration is isolated from the existing application.
-  if(isParentPage)import('./google-home-ui.js?v=3.26.2').then(({setupGoogleHome})=>{
+  if(isParentPage)import('./google-home-ui.js?v=3.27.0').then(({setupGoogleHome})=>{
     googleHomeUi=setupGoogleHome({dbApi,db,householdId,toast});
     if(uid&&role==='parent')googleHomeUi.start();
   }).catch(()=>{const el=$('gh-state');if(el)el.textContent='Google Home設定画面を読み込めませんでした。';});
@@ -3167,7 +3192,7 @@ async function authorizeCurrentUser(){
     if(!['parent','kid'].includes(memberRole))throw Error('役割の設定が正しくありません。');
     if(isParentPage&&memberRole!=='parent')throw Error('この画面は保護者アカウント専用です。');
     if(!isParentPage&&memberRole!=='kid')throw Error('この画面はiPad専用アカウントでログインしてください。');
-    role=memberRole;uid=user.uid;
+    role=memberRole;uid=user.uid;renderParentIdentity();
     $('login-error').textContent='';$('retry-login')?.classList.add('hidden');showApp();
     if(!cleanups.length)listen();
     feedbackUi?.start(uid,role);

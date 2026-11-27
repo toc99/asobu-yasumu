@@ -939,3 +939,9 @@ body[data-role="parent"] .retro-count{padding:8px}
 
 #google-home-panel .gh-matrix-enable{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;min-height:28px;margin-top:2px;cursor:pointer}
 #google-home-panel .gh-matrix-enable input[type="checkbox"]{-webkit-appearance:checkbox;appearance:auto;width:16px;min-width:16px;max-width:16px;height:16px;min-height:16px;max-height:16px;padding:0;margin:0;border:0;border-radius:0;accent-color:var(--blue);background:transparent}
+
+/* v3.27.0: 名前を色だけに依存せず表示。 */
+.parent-identity{display:inline-block;font-size:.8rem;font-weight:700;border:1px solid #cbd5e1;border-radius:999px;padding:3px 8px;max-width:100%;overflow-wrap:anywhere;}
+.parent-identity[data-identity="お父さん"]{color:#1d4ed8;background:#eff6ff;}
+.parent-identity[data-identity="お母さん"]{color:#9d174d;background:#fdf2f8;}
+.parent-actor{display:block;font-weight:600;overflow-wrap:anywhere;}
