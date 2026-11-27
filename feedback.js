@@ -1,7 +1,7 @@
 // v3.15.0 — 家族のいけんばこ：双方向チケット、子ども了承でアーカイブ、保護者限定の物理削除。
 // Existing feedbackReports documents (v3.13.4) remain readable without data migration.
 // Conversation messages live in the same document so removing a ticket removes its conversation.
-export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast}){
+export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast,parentName=()=> '保護者'}){
   const $=id=>document.getElementById(id);
   const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const types={feature:'ほしいきのう',bug:'こまったこと'};
@@ -42,7 +42,7 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
       const fromParent=m.authorRole==='parent';
       const when=Number(m.postedAtMs)>0?displayDate(Number(m.postedAtMs)):'日時確認中';
       items.push('<div class="feedback-bubble '+(fromParent?'parent':'kid')+'"><span>'+
-        (fromParent?'保護者':safe(playerLabel(r.childId)))+' ・ '+safe(when)+'</span><p>'+safe(m.text)+'</p></div>');
+        (fromParent?safe(parentName(m.authorUid,Number(m.postedAtMs))):safe(playerLabel(r.childId)))+' ・ '+safe(when)+'</span><p>'+safe(m.text)+'</p></div>');
     }
     return items.join('');
   }
@@ -256,5 +256,5 @@ export function setupFeedback({dbApi,db,householdId,canOperate,playerLabel,toast
       });
   }
   function setChild(id){if(['older','younger'].includes(id)){child=id;render();}}
-  return {start,stop,setChild};
+  return {start,stop,setChild,refresh:render};
 }
