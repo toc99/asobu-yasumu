@@ -27,7 +27,7 @@ test('approval, feedback and audit render the verified actor UID without changin
   assert.match(read('feedback.js'),/parentName\(m.authorUid\)/);
   assert.match(read('app.js'),/parentName:actorUid=>parentDisplayName\(parentIdentities,actorUid\)/);
   assert.doesNotMatch(read('feedback.js'),/parentName\(m.authorUid,/);
-  assert.match(read('sw.js'),/parent-identities\.js\?v=3\.27\.1/);
+  assert.match(read('sw.js'),/parent-identities\.js\?v=3\.28\.0/);
 });
 
 test('feedback account labels are independent of activation date or message timestamp',()=>{

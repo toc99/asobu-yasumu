@@ -1,8 +1,8 @@
 // Notification queue policy. No network or game-data writes.
 import {eligibleNotice,routeTargets,timedEvents} from './google-home-policy.js';
 export const MAX_PENDING=100;
-const limits={manual:120000,gameStart:30000,videoStart:30000,gameWarning:45000,videoWarning:45000,gameDue:120000,videoDue:120000,forgotten:90000,restStart:45000,restEnd:180000,bedtime:120000};
-const ranks={manual:0,gameDue:1,videoDue:1,forgotten:1,bedtime:1,gameWarning:2,videoWarning:2,restEnd:2,gameStart:3,videoStart:3,restStart:3};
+const limits={manual:120000,gameStart:30000,videoStart:30000,gameWarning:45000,videoWarning:45000,gameDue:120000,videoDue:120000,gameElapsed:120000,videoElapsed:120000,forgotten:90000,restStart:45000,restEnd:180000,bedtime:120000};
+const ranks={manual:0,gameDue:1,videoDue:1,forgotten:1,bedtime:1,gameWarning:2,videoWarning:2,gameElapsed:2,videoElapsed:2,restEnd:2,gameStart:3,videoStart:3,restStart:3};
 const rewardTypes=new Set(['pokemon','activity','xp','level','evolveReady','allDone','generation']);
 export const lifetime=e=>limits[e.type]??180000;
 export const priority=e=>ranks[e.type]??4;

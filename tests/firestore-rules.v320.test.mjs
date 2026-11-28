@@ -82,6 +82,9 @@ if(!process.env.FIRESTORE_EMULATOR_HOST){
   assert.ok(afterClear.scanRequestedAt);
   const q={version:1,waiting:2,active:1,types:['manual','gameDue'],activeTypes:['pokemon'],at:Date.now()};
   await assertSucceeds(setDoc(d(bridge,'googleHome','status'),{...multiStatus,updatedAt:serverTimestamp(),queue:q}));
+  await assertSucceeds(updateDoc(config(parent),{types:{...setup.types,gameElapsed:true,videoElapsed:true},routes:{gameElapsed:ids[0],videoElapsed:ids[1]}}));
+  await assertFails(updateDoc(config(parent),{types:{...setup.types,gameElapsed:'yes'}}));
+  await assertSucceeds(setDoc(d(bridge,'googleHome','status'),{...multiStatus,updatedAt:serverTimestamp(),queue:{...q,types:['gameElapsed','videoElapsed'],activeTypes:['gameElapsed']}}));
   await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:{...q,waiting:101}}));
   await assertFails(setDoc(d(bridge,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:{...q,types:['private text']}}));
   await assertFails(setDoc(d(kid,'googleHome','status'),{...status,updatedAt:serverTimestamp(),queue:q}));

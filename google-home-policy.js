@@ -7,6 +7,7 @@ export const MIN=60000, DAY=86400000, JST=32400000;
 export const TYPES=Object.freeze({
  gameStart:'ゲーム開始',gameWarning:'ゲーム終了予告',gameDue:'ゲームのお知らせ時間',videoStart:'動画開始',
  videoWarning:'動画終了予告',videoDue:'動画のお知らせ時間',forgotten:'終了ボタンの確認',
+ gameElapsed:'ゲーム経過時間（60分ごと）',videoElapsed:'動画経過時間（60分ごと）',
  restStart:'休憩開始',restEnd:'休憩終了',bedtime:'就寝準備',pokemon:'ポケモン獲得・進化',
  activity:'チャレンジ承認',xp:'経験値獲得',level:'レベルアップ',evolveReady:'進化条件達成',
  allDone:'全11チャレンジ達成',generation:'新世代解放'
@@ -104,9 +105,16 @@ export function timedEvents(profiles,settings,c,now=Date.now(),validationWindow=
    const v=Number(p.videoDurationMinutes),limit=Number.isInteger(v)&&v>=1&&v<=240?v:30;
    const gm=Math.min(Number(c.gameMinutes)||60,p.restException?.state==='active'?(Number(p.restException.maxMinutes)||60):240);
    const duration=game?gm*MIN:remainingVideoMs(limit,recordedVideoMillis(p));
-   const due=start+duration+effectivePausedMillis(p,now);
+   const pausedMs=effectivePausedMillis(p,now);
+   const due=start+duration+pausedMs;
    add(mode+'Start',session,game?(stamp(p.startedAt)||start):start,name+'、'+word+'を開始したよ。',30000);
    if(!paused){
+    // Only the latest completed whole hour is eligible; never replay an old backlog.
+    const hours=Math.floor((now-start-pausedMs)/(60*MIN));
+    if(hours>=1){
+     const milestone=start+pausedMs+hours*60*MIN;
+     add(mode+'Elapsed',session+':'+hours,milestone,name+'、'+word+'を始めてから'+hours+'時間が経ったよ。',120000);
+    }
     const warn=Number(c.warningMinutes)*MIN;
     if(duration>warn)add(mode+'Warning',session,due-warn,name+'、'+word+'のお知らせ時間まであと'+c.warningMinutes+'分だよ。');
     add(mode+'Due',session,due,name+'、'+word+'のお知らせ時間だよ。終わる準備をしよう。');

@@ -1393,11 +1393,11 @@ service cloud.firestore {
     }
     function validRouteValues(values) {
       let joined = values.join('|');
-      return joined.matches('^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?([|]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?){0,17}$')
+      return joined.matches('^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?([|]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(,[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}){0,4})?){0,19}$')
         && joined.split('[|]') == values;
     }
     function speakerRoutes(r) {
-      return r is map && r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+      return r is map && r.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','gameElapsed','videoElapsed','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
         && (r.size() == 0 || validRouteValues(r.values()));
     }
     function discoveredSpeaker(d) {
@@ -1437,7 +1437,7 @@ service cloud.firestore {
         && d.forgottenMinutes is int && d.forgottenMinutes >= 1 && d.forgottenMinutes <= 30
         && speakerTime(d.quietStart) && speakerTime(d.quietEnd) && speakerTime(d.bedtime)
         && d.types is map
-        && d.types.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation'])
+        && d.types.keys().hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','gameElapsed','videoElapsed','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation'])
         && d.types.values().hasOnly([true,false])
         && (!d.keys().hasAny(['command']) || (d.command is map
           && d.command.keys().hasAll(['id','text','at'])
@@ -1451,8 +1451,8 @@ service cloud.firestore {
       return q is map && q.keys().hasOnly(['version','waiting','active','types','activeTypes','at'])
         && q.version == 1 && q.waiting is int && q.waiting >= 0 && q.waiting <= 100
         && q.active is int && q.active >= 0 && q.active <= 4
-        && q.types is list && q.types.size() <= 10 && q.types.size() <= q.waiting && q.types.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
-        && q.activeTypes is list && q.activeTypes.size() == q.active && q.activeTypes.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+        && q.types is list && q.types.size() <= 10 && q.types.size() <= q.waiting && q.types.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','gameElapsed','videoElapsed','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
+        && q.activeTypes is list && q.activeTypes.size() == q.active && q.activeTypes.hasOnly(['gameStart','gameWarning','gameDue','videoStart','videoWarning','videoDue','gameElapsed','videoElapsed','forgotten','restStart','restEnd','bedtime','pokemon','activity','xp','level','evolveReady','allDone','generation','manual'])
         && q.at is int && q.at >= 0 && q.at <= request.time.toMillis()+10000;
     }
     function validMonitorEvent(e) {
