@@ -1,7 +1,7 @@
 // Local telemetry only; no credentials, IP addresses, SSIDs or raw journal.
 import os from 'node:os';
 import {readFileSync,readdirSync,statfsSync} from 'node:fs';
-export const BRIDGE_VERSION='v3.26.1';
+export const BRIDGE_VERSION='v3.28.0';
 const read=p=>readFileSync(p,'utf8').trim();
 const bounded=(v,min,max)=>Number.isInteger(v)&&v>=min&&v<=max;
 const jstDay=ms=>new Date(ms+9*3600000).toISOString().slice(0,10);
