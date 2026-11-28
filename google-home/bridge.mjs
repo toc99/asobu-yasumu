@@ -267,7 +267,7 @@ function pump(){
  if(!stopped)setTimeout(pump,1000);
 }
 // Optional local transport; only this running bridge owns Cast.
-let familySocket;
+let familySocket,familyScanAt=0,familyScanIds=new Set();
 if(process.platform==='linux'&&process.env.GH_FAMILY_OS_IPC==='1'){
  familySocket=startFamilySocket(path.join(stateDir,'family-os.sock'),async req=>{
   if(stopped||!current())return {result:'skipped',reason:'bridge_unavailable'};
@@ -275,10 +275,10 @@ if(process.platform==='linux'&&process.env.GH_FAMILY_OS_IPC==='1'){
   if(req.expiresAt<=Date.now())return {result:'skipped',reason:'expired'};
   if(req.op==='scan'){
    probing=true;
-   try{return await cast('scan');}finally{probing=false;}
+   try{const r=await cast('scan');if(r.result==='ready'){familyScanAt=Date.now();familyScanIds=new Set((r.speakers||[]).map(s=>s.id));}return r;}finally{probing=false;}
   }
   if(quiet(cfg,Date.now()))return {result:'skipped',reason:'quiet'};
-  if(!discovered.some(s=>s.id===req.speakerId&&s.online))return {result:'skipped',reason:'speaker_not_unique'};
+  if(!discovered.some(s=>s.id===req.speakerId&&s.online)&&!(Date.now()-familyScanAt<300000&&familyScanIds.has(req.speakerId)))return {result:'skipped',reason:'speaker_not_unique'};
   playing=true;
   try{return await cast('speak',req.text,false,{id:req.speakerId,volume:req.volume});}
   finally{playing=false;statusDirty=true;}

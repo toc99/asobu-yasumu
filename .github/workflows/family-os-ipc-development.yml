@@ -1,0 +1,18 @@
+name: Family OS IPC development tests
+on:
+  push:
+    branches: [feature/family-os-cast-ipc]
+permissions:
+  contents: read
+jobs:
+  ipc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/family-os-ipc.test.mjs
+      - run: node --check google-home/bridge.mjs
+      - run: node --check google-home/family-os-ipc.mjs
