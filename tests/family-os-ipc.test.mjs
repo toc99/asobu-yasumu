@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createConnection} from 'node:net';
+import {once} from 'node:events';
+import {validRequest,startFamilySocket} from '../google-home/family-os-ipc.mjs';
+test('valid requests, expired and invalid volume rejected',()=>{const now=Date.now(),r={op:'speak',expiresAt:now+60000,speakerId:'12345678-1234-1234-1234-123456789abc',volume:50,text:'test'};assert.ok(validRequest(r,now));assert.equal(validRequest({...r,volume:99},now),false);assert.equal(validRequest({...r,expiresAt:now},now),false);});
+test('IPC dispatch, safe result and busy response',{skip:process.platform!=='linux'},async()=>{const dir=mkdtempSync(join(tmpdir(),'fos-ipc-')),p=join(dir,'s.sock');let calls=0;const s=startFamilySocket(p,async()=>{calls++;return {result:'skipped',reason:'bridge_busy',secret:'not exposed'};});try{await once(s,'listening');const client=createConnection(p);await once(client,'connect');client.write(JSON.stringify({op:'scan',expiresAt:Date.now()+1000})+'\n');let raw='';for await(const b of client)raw+=b;assert.deepEqual(JSON.parse(raw),{result:'skipped',reason:'bridge_busy'});assert.equal(calls,1);}finally{await new Promise(r=>s.close(r));rmSync(dir,{recursive:true,force:true});}});

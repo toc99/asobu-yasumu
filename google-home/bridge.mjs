@@ -6,6 +6,7 @@ import {firebaseConfig,householdId} from '../firebase-config.js';
 import {defaultConfig,quiet,timedEvents,approvalEvents,rewardEvents,allDoneEvents,eligibleNotice,inventoryEvents,stamp,DAY,routeTargets,knownSpeakers,deliverySummary} from '../google-home-policy.js';
 import {MAX_PENDING,validQueued,liveEvent,sortedQueue,batchFor,safeRetry,queueView,lifetime} from '../google-home-queue.js';
 import {loadExtendedPokemonNames} from '../pokedex-data.js';
+import {startFamilySocket} from './family-os-ipc.mjs';
 import {spawn} from 'node:child_process';
 import {BRIDGE_VERSION,collectMonitor} from './monitor.mjs';
 import {mkdirSync,readFileSync,writeFileSync,renameSync,appendFileSync,statSync,existsSync,rmSync} from 'node:fs';
@@ -124,12 +125,13 @@ const safeReason=value=>castReasons.has(value)?value:'cast_error';
 function cast(op,text='',manual=false,target={}){
  return new Promise((resolve,reject)=>{
   const child=spawn(process.env.GH_PYTHON||'python',['-X','utf8',path.join(here,'cast.py')],{cwd:here,stdio:['pipe','pipe','pipe'],windowsHide:true});
-  let out='',err='',done=false;
-  const timeout=setTimeout(()=>{child.kill();if(!done){done=true;resolve({result:'error',reason:'timeout'});}},180000);
+  let out='',err='',done=false,timedOut=false;
+  const timeout=setTimeout(()=>{timedOut=true;child.kill('SIGKILL');},180000);
   child.stdout.on('data',d=>{out+=d;if(out.length>16000)child.kill();});
   child.stderr.on('data',d=>{err+=d;if(err.length>16000)child.kill();});
   child.on('error',e=>{clearTimeout(timeout);if(!done){done=true;resolve({result:'error',reason:'process_error'});}});
   child.on('close',code=>{clearTimeout(timeout);if(done)return;done=true;
+   if(timedOut){resolve({result:'error',reason:'timeout'});return;}
    try{const result=JSON.parse(out);
     // Only numeric / enumerated diagnostic fields, never URLs, message text or credentials.
     if(op==='speak'&&result.diagnostics){
@@ -149,7 +151,7 @@ function cast(op,text='',manual=false,target={}){
    catch(e){resolve({result:'error',reason:'process_error'});}
   });
   child.stdin.on('error',()=>{});
-  child.stdin.end(JSON.stringify({op,speaker:target.name||cfg.speaker,speakerId:target.id||'',volume:cfg.volume,text,manual,hosts:[...new Set([hosts[target.id],process.env.GH_CAST_HOST,...Object.values(hosts)].filter(Boolean))].slice(0,20),lanIp:process.env.GH_LAN_IP||''}));
+  child.stdin.end(JSON.stringify({op,speaker:target.name||cfg.speaker,speakerId:target.id||'',volume:target.volume??cfg.volume,text,manual,hosts:[...new Set([hosts[target.id],process.env.GH_CAST_HOST,...Object.values(hosts)].filter(Boolean))].slice(0,20),lanIp:process.env.GH_LAN_IP||''}));
  });
 }
 async function status(){
@@ -264,7 +266,25 @@ function pump(){
  }catch{log('Queue processing failed.');process.exit(2);}
  if(!stopped)setTimeout(pump,1000);
 }
-process.on('SIGINT',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
-process.on('SIGTERM',()=>{stopped=true;unsub.forEach(f=>f());process.exit(0);});
+// Optional local transport; only this running bridge owns Cast.
+let familySocket;
+if(process.platform==='linux'&&process.env.GH_FAMILY_OS_IPC==='1'){
+ familySocket=startFamilySocket(path.join(stateDir,'family-os.sock'),async req=>{
+  if(stopped||!current())return {result:'skipped',reason:'bridge_unavailable'};
+  if(playing||probing||pending.size)return {result:'skipped',reason:'bridge_busy'};
+  if(req.expiresAt<=Date.now())return {result:'skipped',reason:'expired'};
+  if(req.op==='scan'){
+   probing=true;
+   try{return await cast('scan');}finally{probing=false;}
+  }
+  if(quiet(cfg,Date.now()))return {result:'skipped',reason:'quiet'};
+  if(!discovered.some(s=>s.id===req.speakerId&&s.online))return {result:'skipped',reason:'speaker_not_unique'};
+  playing=true;
+  try{return await cast('speak',req.text,false,{id:req.speakerId,volume:req.volume});}
+  finally{playing=false;statusDirty=true;}
+ },()=>log('Family OS IPC unavailable'));
+}
+process.on('SIGINT',()=>{stopped=true;familySocket?.close();unsub.forEach(f=>f());process.exit(0);});
+process.on('SIGTERM',()=>{stopped=true;familySocket?.close();unsub.forEach(f=>f());process.exit(0);});
 log('Google Home bridge '+BRIDGE_VERSION+' Linux/Windows notification queue and monitoring; waiting for authorized configuration.');
 void health();void pump();
